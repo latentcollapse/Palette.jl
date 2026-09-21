@@ -1,15 +1,15 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { spawn } from "child_process";
 import { type Static, Type } from "typebox";
-import { getShellEnv, killProcessTree, trackDetachedChildPid, untrackDetachedChildPid } from "../../utils/shell.js";
 import { waitForChildProcess } from "../../utils/child-process.js";
+import { getShellEnv, killProcessTree, trackDetachedChildPid, untrackDetachedChildPid } from "../../utils/shell.js";
 import type { ToolDefinition } from "../extensions/types.js";
 import { OutputAccumulator } from "./output-accumulator.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 
 /**
  * NIRA-Prime integration point: exposes NeuraBash (Project-LIRA-NeuraBash) as a
@@ -75,7 +75,7 @@ function defaultStateDir(): string {
 	return join(homedir(), ".prime-agent", "neurabash");
 }
 
-function resolveEnv(cwd: string, options: NeurabashToolOptions | undefined): NodeJS.ProcessEnv {
+function resolveEnv(options: NeurabashToolOptions | undefined): NodeJS.ProcessEnv {
 	const depotDir = options?.depotDir ?? join(defaultStateDir(), "depot");
 	const runtimeDir = options?.runtimeDir ?? join(defaultStateDir(), "runtime");
 	for (const dir of [depotDir, runtimeDir]) {
@@ -110,18 +110,12 @@ export function createNeurabashToolDefinition(
 		execute: async (_toolCallId, params, signal) => {
 			const binPath = resolveBinPath(options);
 			if (!binPath || !existsSync(binPath)) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: `neurabash binary not found (checked NEURABASH_BIN / options.binPath: ${binPath ?? "(unset)"}). NeuraBash must be built (scripts/build.sh in the NeuraBash repo) and NEURABASH_BIN pointed at build/bin/neurabash before this tool can run.`,
-						},
-					],
-					isError: true,
-				};
+				throw new Error(
+					`neurabash binary not found (checked NEURABASH_BIN / options.binPath: ${binPath ?? "(unset)"}). NeuraBash must be built (scripts/build.sh in the NeuraBash repo) and NEURABASH_BIN pointed at build/bin/neurabash before this tool can run.`,
+				);
 			}
 
-			const env = resolveEnv(cwd, options);
+			const env = resolveEnv(options);
 			const started = Date.now();
 			const output = new OutputAccumulator({ tempFilePrefix: "prime-agent-neurabash" });
 
@@ -176,7 +170,7 @@ export function createNeurabashToolDefinition(
 					});
 			}).catch((err: unknown) => {
 				output.finish();
-				const snapshot = output.snapshot({ persistIfTruncated: true });
+				const snapshot = output.snapshot();
 				const text = snapshot.content || "";
 				if (err instanceof Error && err.message === "aborted") {
 					throw new Error(`${text ? `${text}\n\n` : ""}NeuraBash execution aborted`);
@@ -188,7 +182,7 @@ export function createNeurabashToolDefinition(
 			});
 
 			output.finish();
-			const snapshot = output.snapshot({ persistIfTruncated: true });
+			const snapshot = output.snapshot();
 			await output.closeTempFile();
 			let text = snapshot.content || "(no output)";
 			if (snapshot.truncation.truncated) {
