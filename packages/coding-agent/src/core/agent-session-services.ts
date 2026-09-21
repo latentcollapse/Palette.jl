@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { AgentTool, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model, ServiceTier } from "@earendil-works/pi-ai";
 import { getAgentDir } from "../config.js";
 import type { AgentSessionMessageController } from "./agent-messages.js";
@@ -62,6 +62,12 @@ export interface AgentSessionCreationOptions {
 	customTools?: ToolDefinition[];
 	initialActiveToolNames?: string[];
 	allowedToolNames?: string[];
+	/**
+	 * Replace the built-in base tool set entirely (bypasses ipython kernel
+	 * construction). See `AgentSessionConfig.baseToolsOverride` in
+	 * agent-session.ts for the full contract.
+	 */
+	baseToolsOverride?: Record<string, AgentTool>;
 	includeGoals?: boolean;
 	includeCompactSkill?: boolean;
 	agentMessageController?: AgentSessionMessageController;
@@ -274,6 +280,7 @@ export async function createAgentSessionFromServices(
 		customTools: options.customTools,
 		initialActiveToolNames: options.initialActiveToolNames,
 		allowedToolNames: options.allowedToolNames,
+		baseToolsOverride: options.baseToolsOverride,
 		includeGoals: options.includeGoals,
 		includeCompactSkill: options.includeCompactSkill,
 		agentMessageController: options.agentMessageController,
