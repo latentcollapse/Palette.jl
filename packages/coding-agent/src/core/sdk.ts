@@ -24,7 +24,7 @@ import { DefaultResourceLoader } from "./resource-loader.js";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { time } from "./timings.js";
-import { createBashTool, createEditTool, createIpythonTool, withFileMutationQueue } from "./tools/index.js";
+import { createBashTool, createEditTool, createIpythonTool, createNeurabashTool, withFileMutationQueue } from "./tools/index.js";
 
 export interface CreateAgentSessionOptions extends AgentSessionCreationOptions {
 	/** Working directory for project-local discovery. Default: process.cwd() */
@@ -107,7 +107,9 @@ export type { CreateRlmSubagentRuntimeOptions, RlmSubagentRuntime, SubagentRunti
 export type { Skill } from "./skills.js";
 export type { Tool } from "./tools/index.js";
 
-export { createBashTool, createEditTool, createIpythonTool, withFileMutationQueue };
+export { createBashTool, createEditTool, createIpythonTool, createNeurabashTool, withFileMutationQueue };
+
+// Helper Functions
 
 function getDefaultAgentDir(): string {
 	return getAgentDir();
