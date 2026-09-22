@@ -351,6 +351,8 @@ import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.js";
 import { THINKING_LEVELS } from "./thinking-levels.js";
 import { acpMcpToolNames, createAcpMcpToolDefinitions } from "./tools/acp-mcp.js";
+import { createAgentMessageToolDefinition } from "./tools/agent-message.js";
+import { createAgentObserveToolDefinition } from "./tools/agent-observe.js";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.js";
 import { createAllToolDefinitions } from "./tools/index.js";
 import { IpythonKernelProvisioner, type UnavailablePythonSkills } from "./tools/ipython.js";
@@ -10837,6 +10839,25 @@ export class AgentSession {
 		this._baseToolDefinitions = new Map(
 			Object.entries(configuredBaseToolDefinitions).map(([name, tool]) => [name, tool as ToolDefinition]),
 		);
+		// Host services, available regardless of which execution substrate
+		// (ipython, neurabash, none) is active — see agent-observe.ts /
+		// agent-message.ts. Reuses the already-standalone
+		// AgentObserveController/AgentSessionMessageController the kernel
+		// bridge's agent_observe.*/agent_message.* handlers already wrap;
+		// this only adds a second way to reach the same controllers that
+		// doesn't require an ipython kernel to exist as the transport.
+		if (this._agentObserveController) {
+			this._baseToolDefinitions.set(
+				"agent_observe",
+				createAgentObserveToolDefinition(this._agentObserveController) as ToolDefinition,
+			);
+		}
+		if (this._agentMessageController) {
+			this._baseToolDefinitions.set(
+				"agent_message",
+				createAgentMessageToolDefinition(this._agentMessageController) as ToolDefinition,
+			);
+		}
 
 		const extensionsResult = this._resourceLoader.getExtensions();
 		if (options.flagValues) {

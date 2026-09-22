@@ -15,8 +15,11 @@
  * disappear on its own once ipython is absent from the active tool list.
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
+import type { AgentSessionMessageController } from "../../src/core/agent-messages.js";
+import type { AgentObserveController } from "../../src/core/agent-observe.js";
 import { createAgentSession } from "../../src/core/sdk.js";
 import { SessionManager } from "../../src/core/session-manager.js";
 import { createTestResourceLoader } from "../utilities.js";
@@ -113,5 +116,105 @@ describe("NIRA Stage 0: substrate modes (via createAgentSession)", () => {
 				initialGoal: { objective: "test objective" },
 			}),
 		).rejects.toThrow(/active goal requires the ipython tool/i);
+	});
+
+	it("IPython breakout: a NEURA session cannot execute an ipython tool call even if the model attempts one", async () => {
+		// Goal section 10/16.L — the boundary must hold against an actual attempt,
+		// not just against the tool being unselected. The faux model here tries
+		// to call "ipython" directly, the same way a real model attempting a
+		// breakout would: a raw tool_use block naming a tool the session never
+		// registered.
+		const session = await buildSession({
+			baseToolsOverride: { neurabash: stubTool("neurabash") },
+			initialActiveToolNames: ["neurabash"],
+			includeGoals: false,
+		});
+		harness?.setResponses([
+			fauxAssistantMessage(fauxToolCall("ipython", { code: "1 + 1" }), { stopReason: "toolUse" }),
+			fauxAssistantMessage("acknowledged"),
+		]);
+
+		await session.prompt("try to use ipython");
+
+		const toolResultMessages = session.messages.filter((m) => m.role === "toolResult");
+		expect(toolResultMessages.length).toBeGreaterThan(0);
+		const [result] = toolResultMessages;
+		// The exact wording is the agent loop's, not this test's to assert — the
+		// load-bearing fact is that it is an error/rejection, not a real
+		// execution, and it never invoked the real ipython tool logic (there is
+		// none registered to invoke).
+		expect(result.isError).toBe(true);
+	});
+
+	it("host service — agent_observe works in NEURA mode with no ipython kernel", async () => {
+		// Goal section 6/16.G: observation is host state (AgentObserveController
+		// was already standalone, zero AgentSession coupling per the dependency
+		// map). This proves it's reachable as an ordinary tool call, not just
+		// theoretically substrate-neutral.
+		const controller: AgentObserveController = {
+			listAgents: async () => ({ agents: [{ name: "sibling-1", relationship: "sibling" }] }) as any,
+			getAgent: async (target) => ({ name: target, status: "running" }) as any,
+			recentMessages: async () => ({ messages: [] }) as any,
+		};
+		const session = await buildSession({
+			baseToolsOverride: { neurabash: stubTool("neurabash") },
+			initialActiveToolNames: ["neurabash", "agent_observe"],
+			includeGoals: false,
+			agentObserveController: controller,
+		});
+
+		expect(session.getToolDefinition("ipython")).toBeUndefined();
+		const tool = session.getToolDefinition("agent_observe");
+		expect(tool).toBeDefined();
+		const result = await tool!.execute("t1", { action: "list" }, undefined, undefined, undefined as any);
+		expect(JSON.parse((result.content[0] as { text: string }).text)).toEqual({
+			agents: [{ name: "sibling-1", relationship: "sibling" }],
+		});
+	});
+
+	it("host service — agent_message works in NEURA mode with no ipython kernel", async () => {
+		// Goal section 6/16.F.
+		let sentTo: string | undefined;
+		const controller: AgentSessionMessageController = {
+			listAgents: async () => ({ agents: [] }) as any,
+			sendAgentMessage: async (input) => {
+				sentTo = input.target;
+				return { id: "msg-1", deliveryStatus: "delivered" } as any;
+			},
+		};
+		const session = await buildSession({
+			baseToolsOverride: { neurabash: stubTool("neurabash") },
+			initialActiveToolNames: ["neurabash", "agent_message"],
+			includeGoals: false,
+			agentMessageController: controller,
+		});
+
+		expect(session.getToolDefinition("ipython")).toBeUndefined();
+		const tool = session.getToolDefinition("agent_message");
+		expect(tool).toBeDefined();
+		const result = await tool!.execute(
+			"t1",
+			{ action: "send", target: "parent-1", message: "done" },
+			undefined,
+			undefined,
+			undefined as any,
+		);
+		expect(sentTo).toBe("parent-1");
+		expect(JSON.parse((result.content[0] as { text: string }).text)).toEqual({
+			id: "msg-1",
+			deliveryStatus: "delivered",
+		});
+	});
+
+	it("host service — agent_observe/agent_message are absent when no controller is configured", async () => {
+		// No behavior change for a session that never had these controllers —
+		// the host services are additive, not a new default surface.
+		const session = await buildSession({
+			baseToolsOverride: { neurabash: stubTool("neurabash") },
+			initialActiveToolNames: ["neurabash"],
+			includeGoals: false,
+		});
+		expect(session.getToolDefinition("agent_observe")).toBeUndefined();
+		expect(session.getToolDefinition("agent_message")).toBeUndefined();
 	});
 });

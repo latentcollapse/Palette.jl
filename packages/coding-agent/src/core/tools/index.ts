@@ -1,5 +1,17 @@
 export { acpMcpToolNames, createAcpMcpToolDefinitions } from "./acp-mcp.js";
 export {
+	type AgentMessageToolDetails,
+	type AgentMessageToolInput,
+	createAgentMessageTool,
+	createAgentMessageToolDefinition,
+} from "./agent-message.js";
+export {
+	type AgentObserveToolDetails,
+	type AgentObserveToolInput,
+	createAgentObserveTool,
+	createAgentObserveToolDefinition,
+} from "./agent-observe.js";
+export {
 	type BashOperations,
 	type BashSpawnContext,
 	type BashSpawnHook,
