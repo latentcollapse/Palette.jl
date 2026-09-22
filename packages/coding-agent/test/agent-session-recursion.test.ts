@@ -550,6 +550,140 @@ describe("AgentSession rlm recursion", () => {
 		expect(child.getActiveToolNames()).toEqual(["custom-substrate-stub"]);
 	});
 
+	// RLM reachability spike: reuses createSession above. Every test here calls
+	// it exactly once for the root; a spawned child is reached via
+	// root.getRlmChildSession(...), not a second createSession call, so the
+	// outer beforeEach/afterEach's single `session` tracking is sufficient —
+	// no separate disposal bookkeeping needed here.
+	function neuraStub(name = "neura-stub"): AgentTool {
+		return {
+			name,
+			label: name,
+			description: "stub compute tool for structural testing, not a real built-in",
+			parameters: Type.Object({ code: Type.String() }),
+			execute: async () => ({ content: [{ type: "text", text: "" }], details: undefined }),
+		};
+	}
+
+	function rlmTool(session: AgentSession) {
+		const tool = session.getToolDefinition("rlm");
+		if (!tool) throw new Error("Missing 'rlm' host tool");
+		return tool;
+	}
+
+	async function execRlm(session: AgentSession, params: Record<string, unknown>): Promise<any> {
+		const tool = rlmTool(session);
+		const result = await tool.execute(
+			`t-${Math.random().toString(36).slice(2)}`,
+			params as any,
+			undefined,
+			undefined,
+			undefined as any,
+		);
+		return JSON.parse((result.content[0] as { text: string }).text);
+	}
+
+	it("A/F: NEURA parent sees the rlm tool registered with no ipython kernel", () => {
+		const root = createSession({ baseToolsOverride: { "neura-stub": neuraStub() } });
+		expect(root.getToolDefinition("rlm")).toBeDefined();
+		expect(root.getToolDefinition("ipython")).toBeUndefined();
+	});
+
+	it("K/L: LEGACY and a real-kernel-bearing session also register the rlm tool (additive, not NEURA-only)", () => {
+		const root = createSession();
+		expect(root.getToolDefinition("rlm")).toBeDefined();
+		expect(root.getToolDefinition("ipython")).toBeDefined();
+	});
+
+	it("B/C/D/E/G: 'spawn' through the host tool constructs a child with no ipython kernel anywhere in the path", async () => {
+		const root = createSession({ baseToolsOverride: { "neura-stub": neuraStub() } });
+		const handle = await execRlm(root, { action: "spawn", prompt: "work a task" });
+		expect(handle.rlm_child_id).toMatch(/^sub-/);
+
+		const child = root.getRlmChildSession(handle.rlm_child_id);
+		if (!child) throw new Error("Missing spawned child session");
+		expect(child.getActiveToolNames()).toEqual(["neura-stub"]);
+		expect(child.getToolDefinition("ipython")).toBeUndefined();
+		expect(root.getToolDefinition("ipython")).toBeUndefined();
+	});
+
+	it("H: 'collect' through the host tool returns the child's settled result", async () => {
+		const root = createSession({ baseToolsOverride: { "neura-stub": neuraStub() } });
+		const handle = await execRlm(root, { action: "spawn", prompt: "summarize X" });
+		await waitFor(() => root.getRlmChildSession(handle.rlm_child_id)?.getLastAssistantText() !== undefined);
+
+		const collected = await execRlm(root, { action: "collect", targets: [handle.rlm_child_id], timeout_ms: 2000 });
+		expect(collected.results).toHaveLength(1);
+		expect(collected.results[0].rlm_child_id).toBe(handle.rlm_child_id);
+		expect(collected.results[0].settled).toBe(true);
+		expect(collected.results[0].answer_preview).toContain("summarize X");
+	});
+
+	it("I: 'delete' through the host tool removes the child from the roster", async () => {
+		const root = createSession({ baseToolsOverride: { "neura-stub": neuraStub() } });
+		const handle = await execRlm(root, { action: "spawn", prompt: "throwaway task" });
+		await waitFor(() => root.getRlmChildSession(handle.rlm_child_id)?.getLastAssistantText() !== undefined);
+
+		const deleted = await execRlm(root, { action: "delete", target: handle.rlm_child_id });
+		expect(deleted.subagent.rlm_child_id).toBe(handle.rlm_child_id);
+
+		const listed = await execRlm(root, { action: "list" });
+		expect(listed.subagents.find((s: any) => s.rlm_child_id === handle.rlm_child_id)).toBeUndefined();
+	});
+
+	it("M: invalid input fails explicitly instead of silently no-op'ing", async () => {
+		const root = createSession({ baseToolsOverride: { "neura-stub": neuraStub() } });
+		await expect(
+			rlmTool(root).execute("t1", { action: "spawn" } as any, undefined, undefined, undefined as any),
+		).rejects.toThrow(/'spawn' requires 'prompt'/);
+		await expect(
+			rlmTool(root).execute("t1", { action: "delete" } as any, undefined, undefined, undefined as any),
+		).rejects.toThrow(/'delete' requires 'target'/);
+		await expect(
+			rlmTool(root).execute("t1", { action: "find_models" } as any, undefined, undefined, undefined as any),
+		).rejects.toThrow(/'find_models' requires 'query'/);
+		await expect(
+			rlmTool(root).execute(
+				"t1",
+				{ action: "collect", timeout_ms: -1 } as any,
+				undefined,
+				undefined,
+				undefined as any,
+			),
+		).rejects.toThrow(/timeout_ms must be a non-negative integer/);
+	});
+
+	it("N/Q: spawning and collecting a child does not silently restore ipython on the NEURA parent", async () => {
+		const root = createSession({ baseToolsOverride: { "neura-stub": neuraStub() } });
+		const handle = await execRlm(root, { action: "spawn", prompt: "task" });
+		await waitFor(() => root.getRlmChildSession(handle.rlm_child_id)?.getLastAssistantText() !== undefined);
+		await execRlm(root, { action: "collect", targets: [handle.rlm_child_id], timeout_ms: 2000 });
+
+		expect(root.getActiveToolNames()).toEqual(["neura-stub"]);
+		expect(root.getToolDefinition("ipython")).toBeUndefined();
+	});
+
+	it("O/P: nested spawn (NEURA child spawns its own child) preserves the substrate rule one generation deeper", async () => {
+		const root = createSession({
+			baseToolsOverride: { "neura-stub": neuraStub() },
+			maxDepth: 4,
+		});
+		const handleA = await execRlm(root, { action: "spawn", prompt: "spawn a grandchild" });
+		const childA = root.getRlmChildSession(handleA.rlm_child_id);
+		if (!childA) throw new Error("Missing child A");
+		expect(childA.getToolDefinition("ipython")).toBeUndefined();
+		expect(childA.getActiveToolNames()).toEqual(["neura-stub"]);
+
+		const handleB = await execRlm(childA, { action: "spawn", prompt: "grandchild task" });
+		const childB = childA.getRlmChildSession(handleB.rlm_child_id);
+		if (!childB) throw new Error("Missing child B (grandchild)");
+
+		// Not a zero-tool child (the pre-fix failure mode) and not a silent
+		// ipython reappearance two generations deep.
+		expect(childB.getActiveToolNames()).toEqual(["neura-stub"]);
+		expect(childB.getToolDefinition("ipython")).toBeUndefined();
+	});
+
 	it("lets the orchestrator choose a unique subagent session name", async () => {
 		const root = createSession();
 		const result = await root.runRlmChild("inspect the API", { name: "  api-reviewer  " });

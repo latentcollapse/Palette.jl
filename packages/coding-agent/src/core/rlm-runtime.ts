@@ -512,3 +512,23 @@ export interface SubagentRuntimeHost {
 	deleteRlmSubagentRuntime(childId: string, session?: AgentSession): Promise<void>;
 	disposeRlmSubagentRuntimes?(): Promise<void>;
 }
+
+/**
+ * The RLM subagent lifecycle surface a session exposes to itself — the exact
+ * operation set `_createKernelHostHandlers` already wires to the kernel comm
+ * channel (`rlm.run`, `rlm.create_session`, `rlm.list_subagents`,
+ * `rlm.collect`, `rlm.delete_subagent`, `rlm.find_models`,
+ * `rlm.progress.note`), named here only so a substrate-neutral tool can
+ * depend on the interface instead of the concrete `AgentSession` class.
+ * `AgentSession` satisfies this structurally already; no change to its
+ * implementation is required.
+ */
+export interface RlmLifecycleHost {
+	runRlmChild(prompt: string, kwargs?: Record<string, unknown>, cellSourceCode?: string): Promise<RlmSpawnHandle>;
+	createRlmSession(prompt: string, kwargs?: Record<string, unknown>): Promise<RlmCreateSessionResult>;
+	listRlmSubagents(): Promise<RlmListSubagentsResult>;
+	collectRlmChildren(targets: string[], timeoutMs: number): Promise<RlmCollectResult>;
+	deleteRlmSubagent(target: string): Promise<RlmDeleteSubagentResult>;
+	findRlmModels(query: string, limit: number): Promise<RlmFindModelsResult>;
+	noteRlmProgress(message: string): RlmProgressNoteResult;
+}

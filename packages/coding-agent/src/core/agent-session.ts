@@ -356,6 +356,7 @@ import { createAgentObserveToolDefinition } from "./tools/agent-observe.js";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.js";
 import { createAllToolDefinitions } from "./tools/index.js";
 import { IpythonKernelProvisioner, type UnavailablePythonSkills } from "./tools/ipython.js";
+import { createRlmToolDefinition } from "./tools/rlm.js";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.js";
 import {
 	addAssistantUsage,
@@ -10858,6 +10859,12 @@ export class AgentSession {
 				createAgentMessageToolDefinition(this._agentMessageController) as ToolDefinition,
 			);
 		}
+		// RLM subagent lifecycle (spawn/list/collect/delete/find_models/
+		// progress_note/create_session) as a host service — see tools/rlm.ts.
+		// Unconditional, matching _createKernelHostHandlers's own rlm.* handlers,
+		// which are likewise never gated on a controller: `this` (AgentSession)
+		// structurally satisfies RlmLifecycleHost already, no new state needed.
+		this._baseToolDefinitions.set("rlm", createRlmToolDefinition(this) as ToolDefinition);
 
 		const extensionsResult = this._resourceLoader.getExtensions();
 		if (options.flagValues) {
