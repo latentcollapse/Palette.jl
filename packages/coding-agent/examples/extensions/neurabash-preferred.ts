@@ -17,13 +17,13 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 const SUBSTRATE_PREFERENCE_NOTE = [
 	"## Substrate preference (this session)",
 	"",
-	"Both `neurabash` and `ipython` are available. Neither is categorically better — this is a task-fit choice, not a language preference:",
+	"Both `neurabash` and `ipython` are available. Neither is categorically better — this is a task-fit choice, not a language preference. Two different situations call for two different defaults; do not collapse them into one blanket rule:",
 	"",
-	"- Reach for `neurabash` first for exact computation: arithmetic, linear algebra, symbolic manipulation, anything where a wrong-but-plausible answer is worse than a slower correct one. It executes under a real security kernel, and its typed `|!>` stages don't round-trip through text between steps.",
-	"- Reach for `ipython` when the job is genuinely Python-shaped: an existing Python/data-science library is the right tool, you need a rich persistent namespace across many turns, or you're driving another system through its own Python interface.",
+	"- **Exact computation** — arithmetic, linear algebra, symbolic manipulation, anything where a wrong-but-plausible answer is worse than a slower correct one — reach for `neurabash` first. It executes under a real security kernel, and its typed `|!>` stages don't round-trip through text between steps.",
+	"- **Capabilities `neurabash` cannot do yet** — spawning a sub-agent, writing a file diff, attaching an image, compacting your own context, self-refining a repeated pattern, an existing Python/data-science library being the right tool, or driving another system through its own Python interface — use `ipython` normally, without hesitation. These are not edge cases or a fallback of last resort; today they are the only path to that capability, full stop. Avoiding `ipython` for these would make the session worse, not more disciplined.",
 	"- Before building anything new in either substrate, check whether an existing operation or a previously built tool already does the job.",
 	"",
-	"This note exists so a comparison between substrate choices is possible. It is not an instruction to avoid Python.",
+	"This note exists so a comparison between substrate choices is possible. It is not an instruction to avoid Python, and it is not a 'legacy, last resort' framing for `ipython` — everything in the second bullet is first-class, current functionality.",
 ].join("\n");
 
 export default function neurabashPreferred(pi: ExtensionAPI) {
