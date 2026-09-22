@@ -33,3 +33,7 @@ coverage/
 
 # Julia
 Manifest.toml
+
+# Python
+__pycache__/
+*.pyc

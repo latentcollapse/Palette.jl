@@ -23,6 +23,8 @@ module Neura
 
 using Dates
 using UUIDs
+using Sockets
+using JSON
 
 #==============================================================================
 PHASE 2: Operator Types & Vocabulary (leaf types first)
@@ -749,6 +751,53 @@ function safe_execute(op, guard::SafetyGuard)
 end
 
 #==============================================================================
+EXPERIMENT 002: broker-mediated capability requests
+==============================================================================#
+
+"""
+    request_capability(category::String, params::Dict=Dict(); timeout_s::Real=10.0) -> Dict
+
+Request a broker-mediated (Effect Class C) capability -- see
+docs/CAPABILITY_MODEL.md and docs/EXPERIMENT_002_AUTHORITY.md.
+
+This is the ONLY code path in this package that can reach outside the
+sandbox's own bounded filesystem/network envelope. It does not perform any
+external effect itself: it connects to the host capability broker over the
+Unix socket named by the `NEURAJL_BROKER_SOCKET` environment variable (set
+by `security/launch_worker.py`, reachable only because that one socket path
+was explicitly bind-mounted into this sandbox), sends one JSON request, and
+returns the broker's JSON response. The broker -- a separate process
+running outside this sandbox's OS namespace entirely -- decides whether to
+approve the request against this session's fixed capability ceiling, and if
+approved, performs the actual effect itself, with host privilege this
+process never has.
+
+This function is a convenience for well-behaved callers. It is not, and is
+not meant to be, an enforcement mechanism: a caller that wants to skip it
+and try the effect directly (raw `write`, raw `Sockets.connect`, `ccall`,
+`run`) is exactly the adversarial case Experiment 002's tests exercise --
+and what stops that is the OS-level sandbox boundary this process runs
+inside, not this function's cooperation.
+
+Throws if `NEURAJL_BROKER_SOCKET` is unset (no broker configured for this
+session -- e.g. running unsandboxed) or if the connection fails.
+"""
+function request_capability(category::String, params::Dict=Dict{String,Any}(); timeout_s::Real=10.0)
+    sock_path = get(ENV, "NEURAJL_BROKER_SOCKET", "")
+    isempty(sock_path) && error("NEURAJL_BROKER_SOCKET is not set -- no capability broker is available in this session")
+    req = Dict("id" => string(uuid4()), "category" => category, "params" => params)
+    conn = connect(sock_path)
+    try
+        write(conn, JSON.json(req) * "\n")
+        line = readline(conn)
+        isempty(line) && error("broker closed the connection without a response")
+        return JSON.parse(line)
+    finally
+        close(conn)
+    end
+end
+
+#==============================================================================
 PHASE 10: Integration Demo Helpers
 ==============================================================================#
 
@@ -826,5 +875,6 @@ export OperationReceipt, ReceiptLog, get_receipts
 export ErrorHandler, SafetyGuard, validate, check_patterns, safe_execute
 export demo_setup, run_demo
 export execute, mean
+export request_capability
 
 end # module
