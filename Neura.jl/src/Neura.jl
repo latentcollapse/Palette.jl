@@ -1,5 +1,5 @@
 """
-OperatorSurface — Experiment 001: IJulia Operator Surface
+Neura — Experiment 001: NeuraJL operator surface, built on IJulia
 
 This module implements a persistent Julia/IJulia kernel operator surface that:
 - Maintains state across executions (Phase 1)
@@ -19,7 +19,7 @@ comments for navigation.
 
 See the repository README for the full brief.
 """
-module OperatorSurface
+module Neura
 
 using Dates
 using UUIDs
@@ -772,7 +772,7 @@ real eval-based execution, real state query, real discovery, and (if `sh`
 is available) a real shell escape.
 """
 function run_demo()
-    println("=== OperatorSurface Demo ===\n")
+    println("=== Neura Demo ===\n")
 
     state = demo_setup()
     println("1. Kernel initialized with ID: $(state.id)\n")

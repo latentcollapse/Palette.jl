@@ -1,5 +1,5 @@
 using Test
-using OperatorSurface
+using Neura
 
 @testset "KernelState" begin
     reset_kernel_state()

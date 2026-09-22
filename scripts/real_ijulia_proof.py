@@ -5,7 +5,7 @@ actual IJulia kernel process via ZMQ execute_request messages -- not a
 direct in-process function call. Verified working 2026-09-22: a real
 IJulia kernel process, real ZMQ connection, two separate execute_request
 messages (x = 41, then x + 1), correct 42 back over the wire, plus
-OperatorSurface itself loading and persisting state correctly when run
+Neura itself loading and persisting state correctly when run
 inside a real kernel (not just a plain `julia` process).
 
 Setup (one-time):
@@ -13,14 +13,14 @@ Setup (one-time):
   1. A Julia environment with both this package and IJulia:
        julia --project=<env-dir> -e '
          using Pkg
-         Pkg.develop(path="/path/to/OperatorSurface.jl")
+         Pkg.develop(path="/path/to/Neura.jl")
          Pkg.add("IJulia")'
 
   2. A kernelspec pointing at that environment, installed into an isolated
      Jupyter data dir (so this doesn't touch any real Jupyter install):
        JUPYTER_DATA_DIR=<jdata-dir> julia --project=<env-dir> -e '
          using IJulia
-         IJulia.installkernel("OperatorSurfaceTest", "--project=<env-dir>")'
+         IJulia.installkernel("NeuraJLTest", "--project=<env-dir>")'
 
   3. A Python venv with jupyter_client (this script needs nothing else):
        python3 -m venv <venv-dir>
@@ -30,15 +30,15 @@ Run:
   JUPYTER_DATA_DIR=<jdata-dir> JUPYTER_PATH=<jdata-dir> \\
     <venv-dir>/bin/python scripts/real_ijulia_proof.py
 
-If the kernelspec's display name differs from "OperatorSurfaceTest 1.12",
+If the kernelspec's display name differs from "NeuraJLTest 1.12",
 update KERNEL_NAME below to match the actual installed kernel directory
 name (check `<jdata-dir>/kernels/`) -- IJulia.installkernel appends the
-Julia minor version, e.g. "operatorsurfacetest-1.12".
+Julia minor version, e.g. "neurajltest-1.12".
 """
 import sys
 from jupyter_client.manager import KernelManager
 
-KERNEL_NAME = "operatorsurfacetest-1.12"
+KERNEL_NAME = "neurajltest-1.12"
 
 def run_cell(kc, code, timeout=60):
     msg_id = kc.execute(code)
@@ -83,14 +83,14 @@ def main():
     results["req2_is_42"] = got_42
     print(f"  Phase 1 core claim (x=41 then x+1==42, over the real wire protocol): {'PASS' if got_42 else 'FAIL'}")
 
-    ok, out = run_cell(kc, 'using OperatorSurface; OperatorSurface.reset_kernel_state(); OperatorSurface.execute(OperatorSurface.ExecuteCode("y = 10"))')
-    print(f"[req 3] load OperatorSurface, execute via it -> ok={ok}")
+    ok, out = run_cell(kc, 'using Neura; Neura.reset_kernel_state(); Neura.execute(Neura.ExecuteCode("y = 10"))')
+    print(f"[req 3] load Neura, execute via it -> ok={ok}")
     results["req3_package_loads_in_real_kernel"] = ok
 
-    ok, out = run_cell(kc, 'OperatorSurface.execute(OperatorSurface.ExecuteCode("y + 5")).result.data')
+    ok, out = run_cell(kc, 'Neura.execute(Neura.ExecuteCode("y + 5")).result.data')
     got_15 = any(v == "15" for (t, v) in out if t == "execute_result")
-    print(f"[req 4] OperatorSurface's own persistence, inside a real kernel -> {out} -> {'PASS' if got_15 else 'FAIL'}")
-    results["req4_operatorsurface_persistence_in_real_kernel"] = got_15
+    print(f"[req 4] Neura's own persistence, inside a real kernel -> {out} -> {'PASS' if got_15 else 'FAIL'}")
+    results["req4_neura_persistence_in_real_kernel"] = got_15
 
     kc.stop_channels()
     km.shutdown_kernel(now=True)

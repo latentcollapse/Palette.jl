@@ -3,7 +3,7 @@
 This file previously claimed to be an "IJulia Integration Test Harness"
 that "launches an IJulia kernel, connects via the Jupyter protocol." It did
 not do that: it never called `using IJulia`, `using ZMQ`, or spawned any
-kernel process at all -- it called `OperatorSurface.execute(...)` directly,
+kernel process at all -- it called `Neura.execute(...)` directly,
 in-process, in the same Julia session, then printed "VERIFIED" for things
 it never actually verified. It also would have errored immediately on its
 own `SafetyGuard(allowed_types=..., timeout_ms=...)` call, since that is
@@ -12,7 +12,7 @@ this file had never been run.
 
 The real things that file was gesturing at now live in two places:
 
-  - `OperatorSurface.jl/test/runtests.jl`, testset "Phase 1: real
+  - `Neura.jl/test/runtests.jl`, testset "Phase 1: real
     cross-request state persistence" -- exercises real `Core.eval`-based
     execution, real function-definition persistence, real mutable-object
     persistence, and real exception containment, all verified by
@@ -32,5 +32,5 @@ old (fake) name doesn't go looking for a script that no longer claims what
 it never did.
 """
 
-println("See OperatorSurface.jl/test/runtests.jl and scripts/real_ijulia_proof.py")
+println("See Neura.jl/test/runtests.jl and scripts/real_ijulia_proof.py")
 println("This file intentionally does nothing else -- read its docstring.")

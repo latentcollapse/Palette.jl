@@ -1,6 +1,9 @@
-# IJulia Operator Surface — Experiment 001 Lab
+# NeuraJL Operator Surface — Experiment 001 Lab
 
-**Status:** Lab scaffold only. Experiment 001 is **not** implemented here yet.
+**Status:** Experiment 001 is implemented and runtime-verified (Rev 2) -- see
+`docs/EXPERIMENT_001_RESULTS.md` for what's actually proven, including a real
+Jupyter-wire-protocol run against a live IJulia kernel. The sections below are
+kept as the original assignment brief for reference.
 
 This repository is a clean workspace for Qwen (or any implementer) to complete
 **Experiment 001**. It is deliberately **outside** Project Neura, NeuraBash,
@@ -25,7 +28,7 @@ Suggested layout to grow into (already stubbed):
 
 | Path | Intent |
 |------|--------|
-| `OperatorSurface.jl/` | Julia package for types, ops, discovery, receipts |
+| `Neura.jl/` | Julia package for types, ops, discovery, receipts |
 | `src/` | Thin entry / clients if needed |
 | `tests/` | Persistence, ops, discovery, receipts, failures |
 | `demo/` | One-command integration demo (Phase 10) |
