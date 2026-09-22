@@ -32,6 +32,19 @@ Suggested layout to grow into (already stubbed):
 | `docs/` | Audit + results (you write these) |
 | `scripts/` | Helpers to start kernel / run demo |
 
+## Substrate clarification (read this)
+
+**Phase 1’s “kernel” means an IJulia / Jupyter kernel** — a persistent Julia REPL
+process driven over the Jupyter messaging protocol (execute requests, results,
+state that survives across requests).
+
+It does **not** mean GPU/CPU *compute* kernels or the separate private R&D track
+documented as *Native Julia Kernel Autotuning* (`KernelAbstractions.jl`, CUDA backends,
+autotuning control planes, `KernelTuner.jl` companions). That work is out of scope
+for Experiment 001 and must not be pulled in as a dependency or Phase 1 substrate.
+
+If a document says “kernel” without qualification in this lab, assume **IJulia**.
+
 ---
 
 # EXPERIMENT 001 — Assignment (implement this)
