@@ -45,6 +45,35 @@ for Experiment 001 and must not be pulled in as a dependency or Phase 1 substrat
 
 If a document says “kernel” without qualification in this lab, assume **IJulia**.
 
+## Security warning (read this too)
+
+A persistent Julia kernel with `find` / `grep` / `exec` / `bash` / `kill` is a
+**high-power surface**. It can read the filesystem, launch processes, and keep
+mutable state across turns. That is the point of the experiment. It is also why
+you must not treat a successful Experiment 001 demo as a finished product.
+
+**Experiment 001 does not implement privilege or security enforcement** (see
+NON-GOALS). That is intentional: prove the operator surface first.
+
+Do **not** forget the authority problem just because it is out of scope here:
+
+- Open-ended cognition and closed-ended authority are separate layers.
+- Model competence is not authorization. Structured ops and receipts are not a fence.
+- Ambient Julia (`eval`, `ccall`, `run`, `Pkg`, `include`, raw `bash`) is a
+  capability grant until something explicit says otherwise.
+- NeuraBash already did the hard R&D on this thesis (closed effect vocabulary,
+  `C_child ⊆ C_caller`, fail-closed launch, sealed profiles). Porting that
+  *doctrine* to an IJulia operator surface is future work — likely a later
+  experiment — and it will need a real attachment point (contained workers
+  and/or authorize-before-effect), not vibes.
+
+In `docs/EXPERIMENT_001_RESULTS.md`, call out ambient authority and what a
+follow-on fence would have to wrap. Do not ship the narrative that “typed ops
+made it safe.”
+
+If you give something this much power and skip that note, you are the idiot
+the title of this section is for.
+
 ---
 
 # EXPERIMENT 001 — Assignment (implement this)

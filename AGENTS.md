@@ -24,6 +24,8 @@ AI-agent operator surface. Produce `docs/EXPERIMENT_001_RESULTS.md` when done.
 - Add tests that drive the real shipped entry points
 - Record exact commands and failures in `docs/EXPERIMENT_001_RESULTS.md`
 - Keep commits small and reversible
+- In results, document ambient Julia authority; do not imply Experiment 001 is a security boundary
+- Leave privilege/security enforcement to a later experiment (do not invent a fake fence here)
 
 ## Environment notes
 
