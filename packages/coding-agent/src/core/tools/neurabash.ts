@@ -103,7 +103,7 @@ export function createNeurabashToolDefinition(
 		name: "neurabash",
 		label: "neurabash",
 		description:
-			"Execute code through NeuraBash: ordinary Bash, or Bash extended with the native `|!>` typed trapdoor into Julia for exact math, matrix/vector operations, and (as the standard library grows) broader symbolic computation. Runs sandboxed under NeuraBash's Security Kernel V1. Prefer this over guessing at arithmetic or symbolic manipulation in-context; prefer `ipython` for RLM sub-agent spawning, Python skills, and anything needing session state to persist across calls.",
+			"Execute code through NeuraBash: ordinary Bash, or Bash extended with the native `|!>` typed trapdoor into Julia for exact math, matrix/vector operations, and (as the standard library grows) broader symbolic computation. Runs sandboxed under NeuraBash's Security Kernel V1. Prefer this over guessing at arithmetic or symbolic manipulation in-context. Each call is an independent, ephemeral invocation: variables and bindings do not persist between calls yet. Does not support spawning sub-agents, file diffs, or image attachments.",
 		promptSnippet: "neurabash - sandboxed Bash + typed Julia (|!>) for exact computation",
 		executionMode: "sequential",
 		parameters: neurabashSchema,

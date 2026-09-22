@@ -10889,6 +10889,15 @@ export class AgentSession {
 		const defaultActiveToolNames = this._baseToolsOverride ? Object.keys(this._baseToolsOverride) : ["ipython"];
 		const baseActiveToolNames = [...(options.activeToolNames ?? defaultActiveToolNames)];
 		if (this._goalState.status === "active" && this._includeGoals) {
+			if (!this._ipythonKernelProvisioner) {
+				// baseToolsOverride sessions have no kernel to push ipython back into.
+				// Pushing the name anyway would be silently dropped by
+				// setActiveToolsByName (unknown tool names are skipped, not errored),
+				// leaving the goal believing it has ipython access when it does not.
+				throw new Error(
+					"An active goal requires the ipython tool, which is not available in this session (baseToolsOverride is set). Complete or clear the goal before building a session without ipython.",
+				);
+			}
 			// An active goal needs ipython so the model can reach the goal skill.
 			baseActiveToolNames.push("ipython");
 		}
