@@ -10,10 +10,11 @@ inside a real kernel (not just a plain `julia` process).
 
 Setup (one-time):
 
-  1. A Julia environment with both this package and IJulia:
+  1. A Julia environment with both this package and IJulia (repo root is
+     the package root -- Project.toml/src/test live there directly):
        julia --project=<env-dir> -e '
          using Pkg
-         Pkg.develop(path="/path/to/Neura.jl")
+         Pkg.develop(path="/path/to/this/repo")
          Pkg.add("IJulia")'
 
   2. A kernelspec pointing at that environment, installed into an isolated

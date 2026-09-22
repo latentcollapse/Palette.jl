@@ -1,5 +1,13 @@
 # Operator-surface lab — agent rules
 
+**Historical: these were Experiment 001's rules for its implementer (Qwen).**
+Experiment 001 is done (`docs/EXPERIMENT_001_RESULTS.md`, Rev 2, runtime-
+verified). Experiment 002 (authority/security) is explicitly authorized and
+in progress -- see `docs/EXPERIMENT_002_AUTHORITY.md`. The "Begin Experiment
+002" prohibition below no longer applies; everything else here (no fake
+verification, no invented passing output, real tests against real shipped
+entry points, small reversible commits) still does.
+
 ## Authorized scope
 
 **Experiment 001 only.**

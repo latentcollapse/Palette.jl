@@ -7,7 +7,6 @@ docs/build/
 
 # Dependencies
 deps/
-test/
 *.tar.gz
 
 # Environment
@@ -34,4 +33,3 @@ coverage/
 
 # Julia
 Manifest.toml
-/Neura.jl/Manifest.toml

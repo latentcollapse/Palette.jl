@@ -9,50 +9,42 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Setup Julia
       uses: julia-actions/setup-julia@v2
       with:
         version: '1.12'
-    
+
     - name: Instantiate project
-      run: |
-        cd Neura.jl
-        julia --project=@. -e 'using Pkg; Pkg.instantiate()'
-    
+      run: julia --project=@. -e 'using Pkg; Pkg.instantiate()'
+
     - name: Run static analysis preflight
-      run: |
-        python3 julia_analyzer.py Neura.jl/src/Neura.jl --verbose
-    
+      run: python3 julia_analyzer.py src/Neura.jl --verbose
+
     - name: Build package
-      run: |
-        cd Neura.jl
-        julia --project=@. -e 'using Pkg; Pkg.build()'
-    
+      run: julia --project=@. -e 'using Pkg; Pkg.build()'
+
     - name: Run tests
-      run: |
-        cd Neura.jl
-        julia --project=@. -e 'using Pkg; Pkg.test()'
-    
+      run: julia --project=@. -e 'using Pkg; Pkg.test()'
+
     - name: Run Aqua.jl quality checks
       run: |
         julia -e '
           using Pkg
           Pkg.activate(temp=true)
-          Pkg.develop(path="Neura.jl")
+          Pkg.develop(path=".")
           Pkg.add("Aqua")
           using Aqua
           using Neura
           Aqua.test_all(Neura)
         '
-    
+
     - name: Run JET.jl type checking (optional)
       continue-on-error: true
       run: |
-        cd Neura.jl
         julia --project=@. -e '
           using Pkg
           Pkg.add("JET")
@@ -82,7 +74,7 @@ jobs:
         julia -e '
           using Pkg
           Pkg.activate("ijulia-env")
-          Pkg.develop(path="Neura.jl")
+          Pkg.develop(path=".")
           Pkg.add("IJulia")
         '
 
