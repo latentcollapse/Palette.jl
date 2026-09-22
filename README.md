@@ -45,34 +45,43 @@ for Experiment 001 and must not be pulled in as a dependency or Phase 1 substrat
 
 If a document says “kernel” without qualification in this lab, assume **IJulia**.
 
-## Security warning (read this too)
+## Authority philosophy (same as NeuraBash)
 
-A persistent Julia kernel with `find` / `grep` / `exec` / `bash` / `kill` is a
-**high-power surface**. It can read the filesystem, launch processes, and keep
-mutable state across turns. That is the point of the experiment. It is also why
-you must not treat a successful Experiment 001 demo as a finished product.
+**Unbounded power. Extremely bounded authority.**
 
-**Experiment 001 does not implement privilege or security enforcement** (see
-NON-GOALS). That is intentional: prove the operator surface first.
+Same thesis as NeuraBash:
 
-Do **not** forget the authority problem just because it is out of scope here:
+- open-ended cognition  
+- closed-ended authority  
+- competence ≠ authorization  
+- model-created machinery may increase capability; it must not increase rights  
+- `C_child ⊆ C_caller` when principals or effect scopes nest  
 
-- Open-ended cognition and closed-ended authority are separate layers.
-- Model competence is not authorization. Structured ops and receipts are not a fence.
-- Ambient Julia (`eval`, `ccall`, `run`, `Pkg`, `include`, raw `bash`) is a
-  capability grant until something explicit says otherwise.
-- NeuraBash already did the hard R&D on this thesis (closed effect vocabulary,
-  `C_child ⊆ C_caller`, fail-closed launch, sealed profiles). Porting that
-  *doctrine* to an IJulia operator surface is future work — likely a later
-  experiment — and it will need a real attachment point (contained workers
-  and/or authorize-before-effect), not vibes.
+A persistent Julia operator surface is meant to be *powerful* — invent, compose,
+retain, discover, verify. That power is the point. Authority is the separate
+layer: what effects may actually run, under whose grant, inside which envelope.
 
-In `docs/EXPERIMENT_001_RESULTS.md`, call out ambient authority and what a
-follow-on fence would have to wrap. Do not ship the narrative that “typed ops
-made it safe.”
+**Experiment 001 does not implement privilege/security enforcement** (see
+NON-GOALS). That is intentional: prove the operator surface and typed ops first.
+It is **not** permission to ship the story that “structured Julia made it safe.”
 
-If you give something this much power and skip that note, you are the idiot
-the title of this section is for.
+Do not forget the authority half just because this experiment stops at the
+surface:
+
+- Ambient Julia (`eval`, `ccall`, `run`, `Pkg`, `include`, raw `bash`) is
+  ambient *power*. Until a fence exists, it is also ambient *authority* — and
+  that mismatch is a known incomplete state, not the endgame.
+- Structured ops and receipts are cognitive/audit machinery. They are not a
+  capability grant and not a substitute for one.
+- NeuraBash already did the hard R&D on closed effect vocabularies, fail-closed
+  launch, sealed profiles, and child-subset rules. Porting that *doctrine* onto
+  an IJulia surface is future work (attachment via contained workers and/or
+  authorize-before-effect). Do not reinvent a weaker collaborative AST cage.
+
+In `docs/EXPERIMENT_001_RESULTS.md`, state explicitly: Experiment 001
+demonstrates unbounded operator power; authority bounding is deferred and must
+not be papered over. If you build this much power and shrug at authority, you
+are the idiot this section is for.
 
 ---
 
