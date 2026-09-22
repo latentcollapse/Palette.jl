@@ -38,7 +38,7 @@ External Client (Python, via jupyter_client / any Jupyter frontend)
    IJulia kernel process (real, launched by jupyter_client.KernelManager)
         │
         ▼
-   Neura.jl package, loaded inside that kernel
+   Neura package (repo root = package root), loaded inside that kernel
         │
    ┌────┴─────────────────────────────────────────────┐
    │ KernelState (mutable)                             │
@@ -60,7 +60,7 @@ Real persistence is the `eval_module` binding, not the `variables::Dict` index. 
 ## Tests Run (all real, all reproducible)
 
 ```
-$ julia --project=Neura.jl -e 'using Pkg; Pkg.test()'
+$ julia --project=. -e 'using Pkg; Pkg.test()'
 Test Summary: | Pass  Total
 KernelState   |    5      5
 ExecuteCode Operation |    4      4
@@ -78,7 +78,7 @@ Demo Functions |    2      2
 ```
 
 ```
-$ julia --project=Neura.jl -e 'using Neura; Neura.run_demo()'
+$ julia --project=. -e 'using Neura; Neura.run_demo()'
 === Neura Demo ===
 1. Kernel initialized with ID: <uuid>
 2. Executed code operation

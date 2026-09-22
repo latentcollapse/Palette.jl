@@ -1,39 +1,35 @@
-# NeuraJL Operator Surface — Experiment 001 Lab
+# NeuraJL Operator Surface
 
 **Status:** Experiment 001 is implemented and runtime-verified (Rev 2) -- see
 `docs/EXPERIMENT_001_RESULTS.md` for what's actually proven, including a real
-Jupyter-wire-protocol run against a live IJulia kernel. The sections below are
-kept as the original assignment brief for reference.
+Jupyter-wire-protocol run against a live IJulia kernel. Experiment 002
+(authority/security) is tracked in `docs/EXPERIMENT_002_AUTHORITY.md`. The
+assignment-brief sections below are kept for history, not as current status.
 
-This repository is a clean workspace for Qwen (or any implementer) to complete
-**Experiment 001**. It is deliberately **outside** Project Neura, NeuraBash,
-Prime Agent, and EnigmaOS.
+## Naming (read this first, it's been a source of confusion once already)
 
----
+| Name | What it is |
+|---|---|
+| **NeuraJL** | The product/runtime name. What you'd call the whole thing. |
+| **`Neura`** (package `Neura`, repo root as its package root) | The Julia package implementing the operator surface -- types, ops, discovery, receipts. This repo. |
+| **IJulia** | NOT ours. A real, independent, decades-old package maintained by the Julia language team (`JuliaLang/IJulia.jl`). It is the current *transport* NeuraJL runs on -- a persistent Julia REPL process driven over the Jupyter wire protocol. NeuraJL is built **on** IJulia, the same way Prime Agent's Python tooling runs **on** IPython/`ipykernel` without having invented either. Do not name anything in this project "IJulia" -- besides being confusing, Julia's package registry will not allow a second package with that name. |
+| **NeuraBash** | The reference/legacy operator implementation -- the original Bash-hosted `\|!>` JUL trapdoor this project's security doctrine (unbounded power, extremely bounded authority) was first proven on. NeuraJL is the same thesis on a different, more capable substrate (a real persistent language runtime instead of Bash), not a replacement built from a blank page. |
 
-## How to start
+This repository was originally scaffolded as an isolated Experiment 001 lab,
+deliberately outside Project Neura, NeuraBash, Prime Agent, and EnigmaOS, for
+an implementer (Qwen) to complete without cross-contamination. That isolation
+served its purpose; the code is now real and graduating toward product use.
 
-```bash
-git clone git@github.com:latentcollapse/ijulia-operator-lab.git
-cd ijulia-operator-lab
-# Read AGENTS.md, then this README in full.
-# Implement Experiment 001 in-tree; do not integrate with Neura/Prime/NeuraBash.
-```
+## Layout
 
-Host environment at scaffold time: Julia was available (`julia --version` —
-see `VERSIONS.lock`). You may need `IJulia` / Jupyter client packages; install
-them inside this project’s Julia environment as you implement Phase 1.
-
-Suggested layout to grow into (already stubbed):
+Conventional Julia package layout -- repo root is the package root:
 
 | Path | Intent |
 |------|--------|
-| `Neura.jl/` | Julia package for types, ops, discovery, receipts |
-| `src/` | Thin entry / clients if needed |
-| `tests/` | Persistence, ops, discovery, receipts, failures |
-| `demo/` | One-command integration demo (Phase 10) |
-| `docs/` | Audit + results (you write these) |
-| `scripts/` | Helpers to start kernel / run demo |
+| `Project.toml`, `src/`, `test/` | The `Neura` package itself |
+| `demo/` | Empty by design -- see `demo/README.md` for where the real demos live |
+| `docs/` | Experiment reports (results, authority model, threat model, capability model) |
+| `scripts/` | The real IJulia integration proof, plus a retired pointer stub |
 
 ## Substrate clarification (read this)
 

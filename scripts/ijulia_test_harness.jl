@@ -12,7 +12,7 @@ this file had never been run.
 
 The real things that file was gesturing at now live in two places:
 
-  - `Neura.jl/test/runtests.jl`, testset "Phase 1: real
+  - `test/runtests.jl`, testset "Phase 1: real
     cross-request state persistence" -- exercises real `Core.eval`-based
     execution, real function-definition persistence, real mutable-object
     persistence, and real exception containment, all verified by
@@ -32,5 +32,5 @@ old (fake) name doesn't go looking for a script that no longer claims what
 it never did.
 """
 
-println("See Neura.jl/test/runtests.jl and scripts/real_ijulia_proof.py")
+println("See test/runtests.jl and scripts/real_ijulia_proof.py")
 println("This file intentionally does nothing else -- read its docstring.")
