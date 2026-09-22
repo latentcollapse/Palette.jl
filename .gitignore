@@ -1,32 +1,35 @@
-# Julia
-Manifest.toml
-**/Manifest.toml
+```
+# Julia-specific ignores
 .julia/
+*.ji
 *.jl.cov
-*.jl.*.cov
 *.jl.mem
+docs/build/
 
-# Jupyter / IJulia
-.ipynb_checkpoints/
-*.ipynb
-kernel-*.json
-connection-*.json
+# Dependencies
+deps/
+test/
+*.tar.gz
 
-# Generated / local
-.cache/
-artifacts/
-logs/
-demo/out/
-*.log
+# Environment
+.env
+.env.local
+*.env.*
 
-# Editor / OS
-*~
-*.swp
-.DS_Store
-.idea/
+# Editors
 .vscode/
-.cursor/
+.idea/
+*.swp
+*.swo
 
-# Python (if any client helpers appear later)
-__pycache__/
-.venv/
+# System
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+*.tmp
+
+# Coverage
+coverage/
+```

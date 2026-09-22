@@ -1,0 +1,85 @@
+name: Julia CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Julia
+      uses: julia-actions/setup-julia@v2
+      with:
+        version: '1.12'
+    
+    - name: Instantiate project
+      run: |
+        cd OperatorSurface.jl
+        julia --project=@. -e 'using Pkg; Pkg.instantiate()'
+    
+    - name: Run static analysis preflight
+      run: |
+        python3 julia_analyzer.py OperatorSurface.jl/src/OperatorSurface.jl --verbose
+    
+    - name: Build package
+      run: |
+        cd OperatorSurface.jl
+        julia --project=@. -e 'using Pkg; Pkg.build()'
+    
+    - name: Run tests
+      run: |
+        cd OperatorSurface.jl
+        julia --project=@. -e 'using Pkg; Pkg.test()'
+    
+    - name: Run Aqua.jl quality checks
+      run: |
+        cd OperatorSurface.jl
+        julia --project=@. -e '
+          using Pkg
+          Pkg.add("Aqua")
+          using Aqua
+          using OperatorSurface
+          Aqua.testall(OperatorSurface)
+        '
+    
+    - name: Run JET.jl type checking (optional)
+      continue-on-error: true
+      run: |
+        cd OperatorSurface.jl
+        julia --project=@. -e '
+          using Pkg
+          Pkg.add("JET")
+          using JET
+          using OperatorSurface
+          JET.test_package(OperatorSurface)
+        '
+
+  ijulia-integration:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Julia
+      uses: julia-actions/setup-julia@v2
+      with:
+        version: '1.12'
+    
+    - name: Install IJulia and dependencies
+      run: |
+        julia -e '
+          using Pkg
+          Pkg.add("IJulia")
+          Pkg.add("ZMQ")
+          Pkg.add("JSON")
+        '
+    
+    - name: Run IJulia integration tests
+      run: |
+        julia --color=yes scripts/ijulia_test_harness.jl
