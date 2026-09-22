@@ -33,3 +33,6 @@ Thumbs.db
 # Coverage
 coverage/
 ```
+# Julia
+Manifest.toml
+/OperatorSurface.jl/Manifest.toml
