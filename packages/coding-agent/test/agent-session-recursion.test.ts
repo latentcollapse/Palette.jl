@@ -2,7 +2,7 @@ import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { Agent, type AgentMessage, type StreamFn } from "@earendil-works/pi-agent-core";
+import { Agent, type AgentMessage, type AgentTool, type StreamFn } from "@earendil-works/pi-agent-core";
 import {
 	type AssistantMessage,
 	type Context,
@@ -223,6 +223,7 @@ describe("AgentSession rlm recursion", () => {
 			sessionManager?: SessionManager;
 			settingsManager?: SettingsManager;
 			extensionsResult?: LoadExtensionsResult;
+			baseToolsOverride?: ConstructorParameters<typeof AgentSession>[0]["baseToolsOverride"];
 		} = {},
 	): AgentSession {
 		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
@@ -272,6 +273,7 @@ describe("AgentSession rlm recursion", () => {
 			agentMessageController: options.agentMessageController,
 			subagentRuntimeHost: options.subagentRuntimeHost,
 			customTools: options.customTools,
+			baseToolsOverride: options.baseToolsOverride,
 			rlmDepth: options.depth,
 			rlmMaxDepth: options.maxDepth,
 			rlmSessionDir: options.rlmSessionDir,
@@ -519,6 +521,33 @@ describe("AgentSession rlm recursion", () => {
 		const header = JSON.parse(readFileSync(child.sessionFile, "utf8").split("\n")[0] ?? "{}");
 		expect(header).toMatchObject({ parentSession: root.sessionFile, rlmDepth: 3 });
 		expect(child.rlmDepth).toBe(3);
+	});
+
+	it("propagates the parent's baseToolsOverride to a spawned child instead of silently dropping its tools", async () => {
+		// Deliberately not a real built-in tool name (unlike e.g. "neurabash",
+		// which createAllToolDefinitions already registers additively): this
+		// name only resolves at all if the child's tool registry was itself
+		// built from baseToolsOverride, not the real ipython-based default set.
+		const customStub: AgentTool = {
+			name: "custom-substrate-stub",
+			label: "custom-substrate-stub",
+			description: "stub tool for structural testing, not a real built-in",
+			parameters: Type.Object({ code: Type.String() }),
+			execute: async () => ({ content: [{ type: "text", text: "" }], details: undefined }),
+		};
+		const root = createSession({ baseToolsOverride: { "custom-substrate-stub": customStub } });
+		expect(root.getActiveToolNames()).toEqual(["custom-substrate-stub"]);
+
+		const result = await root.runRlmChild("spawn from a kernel-less parent");
+		if (!result.session_dir) throw new Error("Missing child session directory");
+		const child = root.getRlmChildSession(basename(result.session_dir));
+		if (!child) throw new Error("Missing spawned child session");
+
+		// Without propagation, the child builds the real ipython-based tool
+		// registry, "custom-substrate-stub" doesn't resolve against it, and
+		// setActiveToolsByName silently drops the unknown name -- the child
+		// ends up with zero callable tools, not a fallback to ipython.
+		expect(child.getActiveToolNames()).toEqual(["custom-substrate-stub"]);
 	});
 
 	it("lets the orchestrator choose a unique subagent session name", async () => {

@@ -2962,6 +2962,7 @@ export class AgentDaemon {
 					initialActiveToolNames: options.activeToolNames,
 					allowedToolNames: options.allowedToolNames,
 					customTools: options.customTools,
+					baseToolsOverride: options.baseToolsOverride,
 					includeGoals: options.includeGoals,
 					includeCompactSkill: options.includeCompactSkill,
 					agentMessageController: this.createAgentMessageController(() => stateRef),

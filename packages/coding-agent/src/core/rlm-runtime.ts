@@ -1,4 +1,4 @@
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { AgentTool, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model, ServiceTier } from "@earendil-works/pi-ai";
 import type { AgentSession, RlmChildAgentStatus } from "./agent-session.js";
 import type { ToolDefinition } from "./extensions/index.js";
@@ -463,6 +463,12 @@ export interface CreateRlmSubagentRuntimeOptions {
 	activeToolNames: string[];
 	allowedToolNames?: string[];
 	customTools: ToolDefinition[];
+	/**
+	 * The parent's base tool set override, if any (see `AgentSessionConfig.baseToolsOverride`
+	 * in agent-session.ts). Propagated so a child spawned from a kernel-less parent doesn't
+	 * silently construct an ipython kernel of its own.
+	 */
+	baseToolsOverride?: Record<string, AgentTool>;
 	includeGoals: boolean;
 	includeCompactSkill: boolean;
 	rlmDepth: number;
