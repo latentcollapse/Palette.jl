@@ -1,4 +1,4 @@
-# Experiment 001 Results — IJulia Operator Surface
+# Experiment 001 Results — NeuraJL Operator Surface
 
 **Revision 2** (2026-09-22). Rev 1 (Qwen, static-analysis only) claimed "all 10 phases complete" based on a Python tree-sitter analyzer reporting "Errors: 0." That analyzer never caught: an unterminated block comment that made the package fail to parse; a struct-field forward-reference ordering bug that made `KernelState` (Phase 1's own core struct) uncompilable; six `Dict{String,String}`/`Dict{String,String}` literals passed where `Dict{String,Any}` was required; a `[target]`/`[targets]` TOML typo that broke `Pkg.test()`; and a test file that would have errored on its first `SafetyGuard(...)` call. None of Rev 1's code had ever actually been run. This revision fixes all of that, replaces the stubbed operation semantics (`ExecuteCode` never called `eval`; `ShellEscape` was hardcoded to fail; the "IJulia Integration Test Harness" never touched IJulia or ZMQ despite its docstring) with real implementations, and verifies the central claim against a real, live IJulia kernel over the real Jupyter wire protocol — not simulated.
 
@@ -7,15 +7,15 @@
 A persistent Julia/IJulia kernel **can** function as a structured AI-agent operator surface. This is now verified at three independent levels, all real:
 
 1. **Unit tests** (`Pkg.test()`, in-process, fast): 55 assertions across 12 testsets, all passing, exercising real `eval`, real subprocess execution, real exception containment.
-2. **Direct demonstration** (`OperatorSurface.run_demo()`): real end-to-end run showing real computed values, not placeholders.
-3. **Real Jupyter-wire-protocol proof** (`scripts/real_ijulia_proof.py`): a live IJulia kernel process, launched via `jupyter_client.KernelManager`, driven with real ZMQ `execute_request` messages. `x = 41` in one request, `x + 1` in a separate request, returns `42` over the wire. `OperatorSurface` itself loads and persists state correctly running inside that real kernel, across two separate requests through it.
+2. **Direct demonstration** (`Neura.run_demo()`): real end-to-end run showing real computed values, not placeholders.
+3. **Real Jupyter-wire-protocol proof** (`scripts/real_ijulia_proof.py`): a live IJulia kernel process, launched via `jupyter_client.KernelManager`, driven with real ZMQ `execute_request` messages. `x = 41` in one request, `x + 1` in a separate request, returns `42` over the wire. `Neura` itself loads and persists state correctly running inside that real kernel, across two separate requests through it.
 
 ## What Was Fake in Rev 1 (named plainly, not glossed over)
 
 - `execute(op::ExecuteCode)` never called `eval`. It regex-matched for `name =` and stored the *string* `"<assigned>"` as the value, regardless of what the code actually computed. Running the README's own proof (`x = 41` then `x + 1`) against Rev 1's code could not have produced `42` — there was no code path that could.
 - `execute(op::ShellEscape)` was hardcoded to return `"Shell execution not available in static analysis"`. The real subprocess call was commented out as a sketch.
 - `execute(op::InvokeOperator)` never invoked anything; it only checked whether a name existed in a registry nothing ever populated with real callables.
-- `scripts/ijulia_test_harness.jl`, despite a docstring claiming it "launches an IJulia kernel, connects via the Jupyter protocol," never called `using IJulia` or `using ZMQ` (both were `Pkg.add`-ed and never referenced again) and never spawned a kernel process. It called `OperatorSurface.execute(...)` directly, in the same process, then printed `"VERIFIED"` next to things it had not verified. It also would have crashed immediately on its own malformed `SafetyGuard(allowed_types=..., timeout_ms=...)` call — not a valid call against the real constructor.
+- `scripts/ijulia_test_harness.jl`, despite a docstring claiming it "launches an IJulia kernel, connects via the Jupyter protocol," never called `using IJulia` or `using ZMQ` (both were `Pkg.add`-ed and never referenced again) and never spawned a kernel process. It called `Neura.execute(...)` directly, in the same process, then printed `"VERIFIED"` next to things it had not verified. It also would have crashed immediately on its own malformed `SafetyGuard(allowed_types=..., timeout_ms=...)` call — not a valid call against the real constructor.
 
 To be fair to Qwen: the code's own inline comments were honest about this (`# For static analysis, we just record the intent`), and the results doc's "Cannot Test Without Julia Runtime" section named the right list of untested claims. The gap was between that honest code-level admission and the doc's headline framing ("Phase 1: Persistent Kernel State ✓"), which read as more settled than the underlying code supported — and the fake IJulia harness's docstring, which claimed something the file's own body never did.
 
@@ -27,7 +27,7 @@ To be fair to Qwen: the code's own inline comments were honest about this (`# Fo
 4. **`Meta.parse` vs. `Meta.parseall`**: `Meta.parse` only parses one top-level statement and throws `ParseError("extra token after end of expression")` on anything after it. Real code blocks are usually multi-statement. Switched to `Meta.parseall`, which returns a `:toplevel` expression evaluated statement-by-statement with REPL semantics (yields the last statement's value).
 5. **World-age**: `Core.eval` called from inside an already-compiled function (`execute`) creates new global bindings in a *new* world age that the currently-running function cannot see via plain `isdefined`/`getfield` — confirmed by direct, isolated reproduction, not assumed. Fixed with `Base.invokelatest`.
 6. **`Project.toml`: `[target]` should be `[targets]`** — a one-character TOML section-name typo that made `Pkg.test()` unable to find the `Test` dependency at all.
-7. **`test/runtests.jl`**: wrapped in an unnecessary `module TestOperatorSurface` with `using ..OperatorSurface` (a relative-module reference to a module that was never `using`'d into `Main` first — `UndefVarError`). Simplified to the standard top-level test-file pattern. Also fixed a `SafetyGuard(allowed_types=..., blocked_patterns=..., timeout_ms=...)` call using keyword arguments that don't exist on the real (positional) constructor, and a receipt-count assertion that assumed `GetState` appends a receipt when by design (a pure query, not an effect) it doesn't.
+7. **`test/runtests.jl`**: wrapped in an unnecessary `module TestNeura` with `using ..Neura` (a relative-module reference to a module that was never `using`'d into `Main` first — `UndefVarError`). Simplified to the standard top-level test-file pattern. Also fixed a `SafetyGuard(allowed_types=..., blocked_patterns=..., timeout_ms=...)` call using keyword arguments that don't exist on the real (positional) constructor, and a receipt-count assertion that assumed `GetState` appends a receipt when by design (a pure query, not an effect) it doesn't.
 
 ## Architecture (as actually implemented, not as diagrammed)
 
@@ -38,7 +38,7 @@ External Client (Python, via jupyter_client / any Jupyter frontend)
    IJulia kernel process (real, launched by jupyter_client.KernelManager)
         │
         ▼
-   OperatorSurface.jl package, loaded inside that kernel
+   Neura.jl package, loaded inside that kernel
         │
    ┌────┴─────────────────────────────────────────────┐
    │ KernelState (mutable)                             │
@@ -60,7 +60,7 @@ Real persistence is the `eval_module` binding, not the `variables::Dict` index. 
 ## Tests Run (all real, all reproducible)
 
 ```
-$ julia --project=OperatorSurface.jl -e 'using Pkg; Pkg.test()'
+$ julia --project=Neura.jl -e 'using Pkg; Pkg.test()'
 Test Summary: | Pass  Total
 KernelState   |    5      5
 ExecuteCode Operation |    4      4
@@ -74,12 +74,12 @@ OperationReceipts |    4      4
 SafetyGuard   |    9      9
 ErrorHandler  |    2      2
 Demo Functions |    2      2
-     Testing OperatorSurface tests passed
+     Testing Neura tests passed
 ```
 
 ```
-$ julia --project=OperatorSurface.jl -e 'using OperatorSurface; OperatorSurface.run_demo()'
-=== OperatorSurface Demo ===
+$ julia --project=Neura.jl -e 'using Neura; Neura.run_demo()'
+=== Neura Demo ===
 1. Kernel initialized with ID: <uuid>
 2. Executed code operation
    Real result of last expression (y): 84      # x=42, y=x*2, actually evaluated
@@ -95,13 +95,13 @@ $ julia --project=OperatorSurface.jl -e 'using OperatorSurface; OperatorSurface.
 
 ```
 $ JUPYTER_DATA_DIR=<jdata> JUPYTER_PATH=<jdata> <venv>/bin/python scripts/real_ijulia_proof.py
-[real-ijulia-proof] starting real IJulia kernel (operatorsurfacetest-1.12)...
+[real-ijulia-proof] starting real IJulia kernel (neurajltest-1.12)...
 [real-ijulia-proof] kernel ready, connection over real ZMQ/Jupyter wire protocol
 [req 1] x = 41  -> ok=True out=[('execute_result', '41')]
 [req 2] x + 1   -> ok=True out=[('execute_result', '42')]
   Phase 1 core claim (x=41 then x+1==42, over the real wire protocol): PASS
-[req 3] load OperatorSurface, execute via it -> ok=True
-[req 4] OperatorSurface's own persistence, inside a real kernel -> [('execute_result', '15')] -> PASS
+[req 3] load Neura, execute via it -> ok=True
+[req 4] Neura's own persistence, inside a real kernel -> [('execute_result', '15')] -> PASS
 === SUMMARY ===
 req1: PASS
 req2_is_42: PASS

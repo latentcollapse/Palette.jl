@@ -20,21 +20,21 @@ jobs:
     
     - name: Instantiate project
       run: |
-        cd OperatorSurface.jl
+        cd Neura.jl
         julia --project=@. -e 'using Pkg; Pkg.instantiate()'
     
     - name: Run static analysis preflight
       run: |
-        python3 julia_analyzer.py OperatorSurface.jl/src/OperatorSurface.jl --verbose
+        python3 julia_analyzer.py Neura.jl/src/Neura.jl --verbose
     
     - name: Build package
       run: |
-        cd OperatorSurface.jl
+        cd Neura.jl
         julia --project=@. -e 'using Pkg; Pkg.build()'
     
     - name: Run tests
       run: |
-        cd OperatorSurface.jl
+        cd Neura.jl
         julia --project=@. -e 'using Pkg; Pkg.test()'
     
     - name: Run Aqua.jl quality checks
@@ -42,23 +42,23 @@ jobs:
         julia -e '
           using Pkg
           Pkg.activate(temp=true)
-          Pkg.develop(path="OperatorSurface.jl")
+          Pkg.develop(path="Neura.jl")
           Pkg.add("Aqua")
           using Aqua
-          using OperatorSurface
-          Aqua.test_all(OperatorSurface)
+          using Neura
+          Aqua.test_all(Neura)
         '
     
     - name: Run JET.jl type checking (optional)
       continue-on-error: true
       run: |
-        cd OperatorSurface.jl
+        cd Neura.jl
         julia --project=@. -e '
           using Pkg
           Pkg.add("JET")
           using JET
-          using OperatorSurface
-          JET.test_package(OperatorSurface)
+          using Neura
+          JET.test_package(Neura)
         '
 
   ijulia-integration:
@@ -77,12 +77,12 @@ jobs:
       with:
         python-version: '3.12'
 
-    - name: Build a Julia environment with OperatorSurface + IJulia
+    - name: Build a Julia environment with Neura + IJulia
       run: |
         julia -e '
           using Pkg
           Pkg.activate("ijulia-env")
-          Pkg.develop(path="OperatorSurface.jl")
+          Pkg.develop(path="Neura.jl")
           Pkg.add("IJulia")
         '
 
@@ -91,7 +91,7 @@ jobs:
         mkdir -p "$GITHUB_WORKSPACE/jupyter-data"
         JUPYTER_DATA_DIR="$GITHUB_WORKSPACE/jupyter-data" julia --project=ijulia-env -e '
           using IJulia
-          IJulia.installkernel("OperatorSurfaceTest", "--project=$(abspath("ijulia-env"))")
+          IJulia.installkernel("NeuraJLTest", "--project=$(abspath("ijulia-env"))")
         '
 
     - name: Install jupyter_client
