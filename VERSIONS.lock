@@ -1,0 +1,15 @@
+# Lab scaffold probe — 2026-09-22
+# Not an Experiment 001 completion record.
+
+[host]
+os_probe = "see uname on implementer machine"
+note = "Lab is independent of NeuraBash / Prime Agent / EnigmaOS"
+
+[julia]
+version = "1.12.6"
+path = "/home/mattc/.juliaup/bin/julia"
+ijulia = "not installed in this lab yet (Experiment 001 Phase 1)"
+
+[scope]
+experiment = "001 — persistent IJulia operator surface"
+implemented_here = "false — scaffold + README assignment only"

@@ -1,0 +1,32 @@
+# Julia
+Manifest.toml
+**/Manifest.toml
+.julia/
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+
+# Jupyter / IJulia
+.ipynb_checkpoints/
+*.ipynb
+kernel-*.json
+connection-*.json
+
+# Generated / local
+.cache/
+artifacts/
+logs/
+demo/out/
+*.log
+
+# Editor / OS
+*~
+*.swp
+.DS_Store
+.idea/
+.vscode/
+.cursor/
+
+# Python (if any client helpers appear later)
+__pycache__/
+.venv/
