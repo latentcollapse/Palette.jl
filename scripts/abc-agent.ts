@@ -20,7 +20,9 @@ const configuredBaseUrl = process.env.ABC_BASE_URL;
 const localBaseUrl = configuredBaseUrl && !configuredBaseUrl.includes("openrouter.ai") ? configuredBaseUrl : undefined;
 const requestBaseUrl = configuredBaseUrl ?? "https://openrouter.ai/api/v1";
 const modelId = process.env.ABC_MODEL ?? "cohere/north-mini-code:free";
+const contextWindow = Number(process.env.ABC_CONTEXT_WINDOW ?? (localBaseUrl ? 16_384 : 256_000));
 if (!localBaseUrl && modelId !== "cohere/north-mini-code:free") throw new Error("OpenRouter condition requires the pinned model");
+if (!Number.isSafeInteger(contextWindow) || contextWindow <= 2048) throw new Error("Invalid A/B/C context window");
 const model: Model<"openai-completions"> = {
 	id: modelId,
 	name: modelId,
@@ -30,7 +32,7 @@ const model: Model<"openai-completions"> = {
 	reasoning: false,
 	input: ["text"],
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-	contextWindow: localBaseUrl ? 10240 : 256000,
+	contextWindow,
 	maxTokens: 2048,
 	compat: {
 		supportsDeveloperRole: false,
