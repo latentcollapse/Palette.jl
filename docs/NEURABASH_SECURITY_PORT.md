@@ -62,7 +62,7 @@ Julia.
   choice for this pass -- whether it's the right choice long-term is an
   open question, not settled by this experiment.
 
-## Where the port did not transfer cleanly -- the depot
+## Where the port did not transfer cleanly -- the depot (now solved, differently)
 
 NeuraBash's own runtime-continuity work (`docs/RUNTIME_CONTINUITY_ARCHITECTURE_NOTE.md`
 in its repo, and the `neurabash-runtime-depot.json` attestation mechanism)
@@ -70,30 +70,49 @@ solved the "every sandboxed launch recompiles from scratch" problem with a
 read-only, attested, prewarmed depot layered under a writable ephemeral
 overlay (`JULIA_DEPOT_PATH = writable:readonly_base`).
 
-This pass copied that exact layering pattern -- and it did not eliminate
-the cold-start tax here. A sandboxed NeuraJL worker still pays a real ~40
-second precompilation cost (`JSON`'s dependency tree, mainly `Parsers`) on
-every launch, even after an explicit attempt to pre-warm the real, shared,
-read-only-bound `~/.julia` depot ahead of time. The precompiled cache that
-attempt produced was not found valid inside the sandbox's two-entry
-`JULIA_DEPOT_PATH`, and a second attempt -- precompiling *under* that exact
-two-entry depot structure from the start -- triggered recompilation of
-nearly the entire dependency tree including `Pkg` itself (72 seconds for
-`Pkg` alone), strongly suggesting Julia's precompile-cache validity is
-sensitive to the depot path structure/order in a way this pass did not
-fully characterize or solve.
+This pass initially copied that exact layering pattern, and it did not
+eliminate the cold-start tax here -- a sandboxed NeuraJL worker paid a real
+~40 second precompilation cost (`JSON`'s dependency tree, mainly `Parsers`)
+on every launch regardless of how thoroughly the read-only base depot was
+prewarmed. That was reported as an open, unsolved gap for one session.
 
-**This is recorded as a real, open engineering gap, not glossed over as
-solved by analogy to NeuraBash.** The goal that authorized this pass said
-explicitly not to assume NeuraBash's implementation is automatically
-correct for Julia -- this is the concrete instance where that caution was
-warranted. It did not block this pass's actual claim (authority containment
-is correct regardless of cold-start time, verified in every test in
-`docs/THREAT_MODEL.md`), but it is a real cost that would need solving
-before NeuraJL workers are practical to launch repeatedly, the same way
-NeuraBash's own depot problem was a real, still-being-worked-on cost before
-this session found and reported evidence it's likely improved (see
-`/mnt/d/Code Projects/Project NIRA/NIRA_PRIME_GATE2_PROVIDER_REPORT.md`
-section 6, a separate, unrelated project's finding on the same underlying
-Julia/NeuraBash depot mechanism, for context on how deep that rabbit hole
-already goes).
+**Root cause, found later by direct reproduction (`JULIA_DEBUG=loading`,
+outside any sandbox, no bwrap involved):** a `JULIA_DEPOT_PATH` whose
+*first* entry is a fresh, empty, writable directory changes the "desired
+build_id" Julia computes for stdlib dependencies (observed concretely on
+`TOML`). That mismatch is not cosmetic -- it cascades and invalidates every
+downstream cache that recorded the old build_id, forcing `Parsers`/`JSON`/
+etc. to recompile from scratch on every single launch, independent of how
+good the read-only base depot is. This reproduces with a plain two-entry
+`JULIA_DEPOT_PATH` and a completely unsandboxed `julia` process -- it was
+never a bubblewrap-specific interaction, and NeuraBash's own layering
+pattern was never going to solve it on Julia's substrate no matter how
+carefully ported, because the problem is upstream of the sandbox entirely.
+
+**The fix that actually works: don't layer -- clone.** Each worker gets a
+real, independent copy of the depot (`cp -a --reflink=auto`, near-free on a
+copy-on-write filesystem like btrfs -- confirmed via a canary-file test
+that a write inside one worker's clone never appears in the shared source
+depot) bound as the *single* `JULIA_DEPOT_PATH` entry, at the depot's own
+real path inside the sandbox (package source paths are embedded as
+absolutes in the precompiled cache, so the guest path has to match, not
+just the clone's content). One entry means no build_id-mismatch cascade;
+a real independent clone means no shared-depot corruption risk. Measured
+end to end through the real `security/launch_worker.py` code path (not a
+synthetic benchmark): ~41s -> ~4.4s for a cold `using Neura` launch, all 19
+of `security/test_authority.py`'s adversarial tests still passing (they
+launch real sandboxes; the whole suite dropped from what would have been a
+~13-minute floor to 78s), and Julia's own 55-assertion `Pkg.test()` suite
+unaffected (this change never touches `src/Neura.jl`). See
+`security/launch_worker.py`'s `_clone_depot` docstring for the full
+mechanism.
+
+**Still open, honestly:** the reflink path is only proven fast on btrfs.
+`cp --reflink=auto` falls back to a real byte-for-byte copy on a
+filesystem without CoW support, which is still correct but would reintroduce
+a real (if bounded and one-time-per-launch, not per-package) cost --
+not yet measured on such a filesystem because this project's actual disks
+are btrfs. This pass did not need NeuraBash's depot-attestation mechanism
+at all; whether a future package-management capability (see
+`CAPABILITY_MODEL.md`'s NOT YET PROVEN row) needs anything like it is a
+separate, still-open question.

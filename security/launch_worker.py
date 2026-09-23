@@ -10,11 +10,16 @@ outside it (namespace isolation, not a language-level blacklist).
 This reuses the same doctrine NeuraBash's security_launcher.py already
 proved: bind only what's needed, read-only unless a path genuinely needs to
 be writable, no ambient credentials (--clearenv), no network unless
-explicitly enabled, a private writable depot layered on top of a read-only
-precompiled base depot so the worker doesn't recompile packages from
-scratch. It is a new implementation for a different substrate (Julia, not
-Bash), not a copy -- see docs/NEURABASH_SECURITY_PORT.md for exactly what
-was reused vs. redesigned.
+explicitly enabled. It is a new implementation for a different substrate
+(Julia, not Bash), not a copy -- see docs/NEURABASH_SECURITY_PORT.md for
+exactly what was reused vs. redesigned.
+
+Depot handling is NOT a layered writable-over-readonly overlay (that was
+tried and, on this substrate, actively caused the cold-start problem it
+was meant to solve -- see _clone_depot's docstring for the root cause,
+found by direct reproduction). Each worker gets its own real, cheap
+(reflink) clone of the depot, bound writable as the depot's one and only
+`JULIA_DEPOT_PATH` entry.
 
 Paths are bound at IDENTICAL guest paths to their host paths (no
 remapping). Julia's own package manifests and precompile cache embed
@@ -27,9 +32,46 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+
+def _clone_depot(real_depot: str, clone_root: str) -> str:
+    """Make a real, independent, cheap copy of the depot for one worker's
+    exclusive writable use.
+
+    Root cause this works around (found by direct reproduction outside any
+    sandbox, not assumed by analogy to NeuraBash -- see
+    docs/NEURABASH_SECURITY_PORT.md's update): a split `JULIA_DEPOT_PATH`
+    ("writable:readonly") makes Julia recompute a different "desired
+    build_id" for stdlib packages (observed via JULIA_DEBUG=loading) the
+    moment the first entry is a fresh/empty writable directory. That
+    mismatch cascades and invalidates the entire precompiled dependency
+    chain (JSON, Parsers, ...) on every single launch -- a ~40s tax
+    regardless of how thoroughly the read-only base depot was prewarmed.
+    A *single*-entry, writable depot has no such mismatch, but must be a
+    real, independent copy (not the live shared depot bound writable --
+    that would let one worker's script corrupt every other session's
+    cache) at the SAME absolute path Julia's existing compiled caches
+    already reference (package source paths are embedded as absolutes),
+    which is why the guest bind target below is `real_depot`, not
+    `clone_root`.
+
+    `cp --reflink=auto` on a CoW filesystem (btrfs here) makes this
+    near-free: no data is actually duplicated, and a write inside the
+    sandbox diverges only the touched blocks. On a non-CoW filesystem it
+    falls back to a real byte copy, still correct, just slower (fails
+    closed -- correctness first, worth revisiting if that path matters
+    later, but not yet proven to be slow enough here to justify a
+    filesystem-specific special case).
+    """
+    dest = tempfile.mkdtemp(dir=clone_root, prefix="depot-")
+    shutil.rmtree(dest)  # cp needs the destination to not exist yet
+    subprocess.run(["cp", "-a", "--reflink=auto", real_depot, dest], check=True)
+    return dest
 
 
 def _real_julia_binary() -> str:
@@ -50,6 +92,7 @@ def build_bwrap_argv(
     julia_bin: str,
     julia_depot: str,
     network_enabled: bool,
+    depot_clone_dir: str | None = None,
     extra_ro_binds: list[str] | None = None,
 ) -> list[str]:
     julia_toolchain_dir = str(Path(julia_bin).parent.parent)  # .../julia-1.12.6+0.x64.linux.gnu
@@ -68,7 +111,6 @@ def build_bwrap_argv(
         "--tmpfs", "/tmp",
         "--dir", "/run/neurajl",
         "--tmpfs", "/run/neurajl",
-        "--dir", "/run/neurajl/depot",
         "--dir", "/run/neurajl/home",
         "--clearenv",
         "--die-with-parent",
@@ -80,9 +122,16 @@ def build_bwrap_argv(
         "--symlink", "usr/lib", "/lib64",
         "--symlink", "usr/bin", "/bin",
         "--ro-bind", "/etc/ld.so.cache", "/etc/ld.so.cache",
-        # julia toolchain + shared depot (packages + precompiled cache) -- read-only
+        # julia toolchain -- read-only
         "--ro-bind", julia_toolchain_dir, julia_toolchain_dir,
-        "--ro-bind", julia_depot, julia_depot,
+        # depot -- bound WRITABLE, at the depot's own real path (package
+        # source paths are baked into precompiled caches as absolutes, so
+        # the guest path must match, not just the content). The source is
+        # this worker's own private clone (see _clone_depot), never the
+        # live shared depot: a single writable entry avoids the split-
+        # JULIA_DEPOT_PATH build-id cascade below, without handing the
+        # worker write access to every other session's cache.
+        "--bind", depot_clone_dir or julia_depot, julia_depot,
         # this repo's source (the Neura package) -- read-only, worker cannot modify it
         "--ro-bind", repo_dir, repo_dir,
         # the dev project (Project.toml/Manifest.toml naming Neura + IJulia + deps) -- read-only
@@ -96,7 +145,7 @@ def build_bwrap_argv(
         argv += ["--ro-bind", broker_socket_dir, broker_socket_dir]
     argv += [
         "--setenv", "HOME", "/run/neurajl/home",
-        "--setenv", "JULIA_DEPOT_PATH", f"/run/neurajl/depot:{julia_depot}",
+        "--setenv", "JULIA_DEPOT_PATH", julia_depot,
         "--setenv", "JULIA_PROJECT", project_dir,
         "--setenv", "PATH", f"{julia_toolchain_dir}/bin:/usr/bin:/bin",
         "--setenv", "LANG", "en_US.UTF-8",
@@ -116,22 +165,33 @@ def run_worker(
     broker_socket_dir: str | None = None,
     network_enabled: bool = False,
     julia_depot: str | None = None,
+    depot_clone_root: str | None = None,
     timeout: float = 60.0,
 ) -> subprocess.CompletedProcess:
     julia_bin = _real_julia_binary()
     depot = julia_depot or os.environ.get("JULIA_DEPOT_PATH", str(Path.home() / ".julia")).split(":")[-1]
     Path(workspace_dir).mkdir(parents=True, exist_ok=True)
-    argv = build_bwrap_argv(
-        workspace_dir=workspace_dir,
-        broker_socket_dir=broker_socket_dir,
-        project_dir=project_dir,
-        repo_dir=repo_dir,
-        julia_bin=julia_bin,
-        julia_depot=depot,
-        network_enabled=network_enabled,
-    )
-    argv += ["--", julia_bin, "--startup-file=no", "-e", script]
-    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    # Same filesystem as the real depot, so `cp --reflink` is a real
+    # reflink and not a silent full-copy fallback -- default to a sibling
+    # of the depot itself rather than /tmp (often a separate tmpfs mount).
+    clone_root = depot_clone_root or str(Path(depot).parent / ".neurajl-depot-clones")
+    Path(clone_root).mkdir(parents=True, exist_ok=True)
+    depot_clone_dir = _clone_depot(depot, clone_root)
+    try:
+        argv = build_bwrap_argv(
+            workspace_dir=workspace_dir,
+            broker_socket_dir=broker_socket_dir,
+            project_dir=project_dir,
+            repo_dir=repo_dir,
+            julia_bin=julia_bin,
+            julia_depot=depot,
+            depot_clone_dir=depot_clone_dir,
+            network_enabled=network_enabled,
+        )
+        argv += ["--", julia_bin, "--startup-file=no", "-e", script]
+        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    finally:
+        shutil.rmtree(depot_clone_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
