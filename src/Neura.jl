@@ -25,6 +25,7 @@ using Dates
 using UUIDs
 using Sockets
 using JSON
+using SHA
 using Statistics: mean as stdlib_mean
 
 #==============================================================================
@@ -192,6 +193,23 @@ mutable struct KernelState
         # A fresh anonymous module per kernel state: real, isolated eval scope,
         # not shared global mutable state across sessions.
         state.eval_module = Module(Symbol("KernelScope_$(replace(string(state.id), '-' => '_'))"))
+        # `Core.eval`'d code lands in this fresh module, not Main -- `using
+        # Neura` at Main scope (e.g. in scripts/session_loop.jl) does not
+        # make `Neura` visible here (confirmed by direct testing: a real
+        # UndefVarError for `Neura` from inside eval_module otherwise).
+        # Bound once here so turn code can call
+        # `Neura.request_capability(...)` without re-importing it on every
+        # single turn just to reach the one function that's the entire
+        # point of the authority fence.
+        Core.eval(state.eval_module, :(const Neura = $(@__MODULE__)))
+        # A bare `Module(...)` never gets `include` for free (confirmed by
+        # direct testing across all constructor flag combinations -- this
+        # is not a Julia version regression, it never worked the way an
+        # earlier comment in this file assumed). Needed so promoted, kit-
+        # scope code (written to disk via a real broker-mediated
+        # external_fs_write, then loaded back with `include`) can actually
+        # be loaded into the persistent mind's own module, not just Main.
+        Core.eval(state.eval_module, :(include(path) = Base.include(@__MODULE__, path)))
         state.variables = Dict{String, Any}()
         state.execution_history = ExecutionRecord[]
         state.operator_registry = Dict{String, Function}()
@@ -288,6 +306,26 @@ struct ExecuteCode <: OperatorType
 
     function ExecuteCode(code::String; timeout_ms::Int=30000, context::Dict=Dict())
         new(code, timeout_ms, context)
+    end
+end
+
+"""
+    EphemeralTool
+
+Operation type for disposable, task-scoped code: generated helper logic
+that should not become a permanent member of the persistent session's
+`eval_module`. See `execute(op::EphemeralTool)` for why this needs to be a
+genuinely different code path from `ExecuteCode`, not just a naming
+convention -- Julia has no operation to un-define a method once it has
+been evaluated anywhere in the process, so "ephemeral" has to be enforced
+before eval, not cleaned up after.
+"""
+struct EphemeralTool <: OperatorType
+    code::String
+    tool_id::String
+
+    function EphemeralTool(code::String; tool_id::String=string(uuid4()))
+        new(code, tool_id)
     end
 end
 
@@ -390,7 +428,11 @@ function execute(op::ExecuteCode)::OperationReceipt
         # against the current world.
         own_name = nameof(state.eval_module)
         for sym in Base.invokelatest(names, state.eval_module; all=true)
-            (sym === own_name || sym === :eval || sym === :include) && continue
+            # :Neura is the constant KernelState's constructor binds here so
+            # turn code can reach `Neura.request_capability` without
+            # re-importing it every turn -- not a user variable, must not
+            # show up in GetState/discovery any more than :eval or :include do.
+            (sym === own_name || sym === :eval || sym === :include || sym === :Neura) && continue
             startswith(string(sym), '#') && continue
             if Base.invokelatest(isdefined, state.eval_module, sym)
                 state.variables[string(sym)] = Base.invokelatest(getfield, state.eval_module, sym)
@@ -424,6 +466,249 @@ function execute(op::ExecuteCode)::OperationReceipt
     push!(state.receipt_log, receipt)
 
     return receipt
+end
+
+struct EphemeralToolViolation <: Exception
+    reason::String
+end
+Base.showerror(io::IO, e::EphemeralToolViolation) = print(io, "EphemeralToolViolation: ", e.reason)
+
+"""
+    _qualified_def_target(head)::Bool
+
+True if a function-definition call head is a dotted/qualified name
+(`function Mod.name(...)`), i.e. defines a method on a generic function
+that belongs to another module, reachable and permanent from anywhere in
+the process the instant it's evaluated -- confirmed by direct testing:
+`Core.eval` of `function Base.show(io, x::Int) ... end` into a brand new,
+otherwise-unrelated module still adds a real, permanent method to
+`Base.show`, with no `import` needed at all.
+"""
+_qualified_def_target(head) = false
+_qualified_def_target(head::Expr) = head.head === :(.)
+
+"""
+    _call_head(expr)
+
+Pulls the name/target expression out of a function-definition's call
+signature, for both `function f(...) ... end` and `f(...) = ...` forms.
+`where`-clauses (`function f(x::T) where T`) wrap the call one level
+deeper and are unwrapped first.
+"""
+function _call_head(expr::Expr)
+    sig = expr.args[1]  # the signature slot for both `function f(...) ... end` and `f(...) = ...`
+    sig = sig isa Expr && sig.head === :where ? sig.args[1] : sig
+    sig isa Expr && sig.head === :call ? sig.args[1] : nothing
+end
+
+"""
+    _qualified_include_call(expr)::Bool
+
+True for a `:call` expression whose target is a qualified `.include`
+access (`Base.include(...)`, `Core.include(...)`, or any `Mod.include`),
+regardless of what module it targets.
+"""
+_qualified_include_call(expr) = false
+function _qualified_include_call(expr::Expr)
+    expr.head === :call || return false
+    target = expr.args[1]
+    target isa Expr && target.head === :(.) && length(target.args) == 2 || return false
+    name = target.args[2]
+    name isa QuoteNode && name.value === :include
+end
+
+"""
+    check_ephemeral_source!(parsed::Expr)
+
+Walks the ENTIRE parsed tree (not just top-level statements -- a
+definition nested inside a `let`/`if`/`for`/another function body would
+otherwise sail through unchecked) and throws `EphemeralToolViolation`
+before any of it is ever evaluated, for the real ways this process
+confirmed can extend a foreign generic function's method table
+permanently:
+
+1. Any `import` statement. `using Mod: f` alone is already blocked by
+   Julia itself for bare-name extension (confirmed by direct testing --
+   "function Base.show must be explicitly imported to be extended") --
+   but `import Mod: f` followed by a bare `function f(...)` succeeds and
+   is exactly the pattern that needs to be stopped before eval, since
+   Julia's own runtime won't stop it once `import` has run.
+2. Any qualified function definition head (`function Mod.name(...)`),
+   which extends `Mod`'s generic function directly, no `import` required
+   at all -- also confirmed by direct testing.
+3. Any qualified call to `.include` (`Base.include(@__MODULE__, path)`),
+   confirmed to load and run a file's contents with zero syntactic trace
+   in the calling code itself -- the whole point of this check is to
+   examine the submitted source, and an `include`d file's contents were
+   never submitted at all, so they can't be inspected here. `include`
+   itself is never bound in an ephemeral tool's own module (see
+   `execute(op::EphemeralTool)`) specifically so that only the fully
+   qualified form needs blocking here, not a bare name too.
+
+**This is a syntactic hygiene check, not a security boundary, and cannot
+be one.** Confirmed by direct adversarial testing: `Core.eval(Base,
+:(function show(io::IO, x::Int) ... end))` -- a *quoted* expression
+constructed and evaluated entirely at runtime -- extends `Base.show`
+exactly as effectively as writing the definition directly, and no
+parse-time check on the OUTER submitted source can see inside a value
+that is only ever assembled once the code is already running (Julia's
+`eval`/`Core.eval` remain fully callable, and must, for "unbounded power"
+to mean anything). This check stops accidental/careless pollution and the
+two simplest deliberate bypass shapes; it does not stop a determined
+adversarial payload built to route around exactly this check.
+**Genuinely untrusted generated code that must be hard-isolated belongs
+in a disposable child worker (`spawn_child_worker`, already OS-level
+sandboxed and adversarially tested -- see docs/THREAT_MODEL.md), not
+same-process ephemeral tool execution.** See the repository README's
+Authority philosophy note for how this relates to (and is separate from)
+`SafetyGuard`, a different, unrelated policy layer.
+"""
+function check_ephemeral_source!(parsed::Expr)
+    parsed.head === :toplevel || throw(EphemeralToolViolation("expected a top-level block"))
+    _check_ephemeral_node!(parsed)
+    nothing
+end
+
+function _check_ephemeral_node!(stmt)
+    stmt isa Expr || return nothing
+
+    if stmt.head === :import
+        throw(EphemeralToolViolation(
+            "ephemeral tool code may not use `import` -- it can permanently extend a foreign " *
+            "module's function (confirmed: `import Mod: f` then a bare `function f(...)` adds a " *
+            "real, permanent method). Use `using` to call existing functionality; a real need to " *
+            "extend one belongs in a durable kit, not disposable code."
+        ))
+    elseif _qualified_include_call(stmt)
+        throw(EphemeralToolViolation(
+            "ephemeral tool code may not call a qualified `.include` (e.g. `Base.include(...)`) -- " *
+            "this loads and runs a file whose contents were never part of the submitted source and " *
+            "so cannot be checked here at all. Kit code should be loaded into the persistent " *
+            "session's own eval_module, not ephemeral tool code."
+        ))
+    elseif stmt.head in (:function, :(=))
+        head = _call_head(stmt)
+        if head !== nothing && _qualified_def_target(head)
+            throw(EphemeralToolViolation(
+                "ephemeral tool code may not define a qualified method (`function Mod.name(...)`) -- " *
+                "confirmed: this extends the foreign module's generic function permanently, with no " *
+                "import needed at all. A real need to extend one belongs in a durable kit."
+            ))
+        end
+    end
+
+    # Recurse into every child regardless of which (if any) check matched
+    # above -- a dangerous definition or qualified include call nested
+    # inside a `let`/`if`/`for`/function body is exactly as real as one at
+    # the top level once this code actually runs.
+    for child in stmt.args
+        _check_ephemeral_node!(child)
+    end
+    nothing
+end
+
+"""
+    execute(op::EphemeralTool)::OperationReceipt
+
+Evaluates disposable code into a genuinely fresh, throwaway `Module` --
+never the persistent session's own `state.eval_module` -- so that once
+every reference to the returned receipt/result is dropped, the tool's
+bindings are ordinary garbage, not permanent state next to the session's
+real cognitive world. `check_ephemeral_source!` runs first and throws
+before any eval happens at all if the source would otherwise leave a
+permanent mark on the process outside this throwaway module (see its
+docstring for the two confirmed ways that can happen).
+
+This does not, and cannot, stop a name collision from being merely
+confusing (two ephemeral tools both defining a local `helper` function is
+fine -- they're in different modules) -- it stops permanent, cross-cutting
+pollution of shared, foreign method tables.
+"""
+function execute(op::EphemeralTool)::OperationReceipt
+    kernel_state = get_kernel_state()
+    start_time = time_ns()
+
+    result = OperationResult(nothing, true, nothing)
+    error_msg = nothing
+    tool_module = Module(Symbol("Ephemeral_$(replace(op.tool_id, '-' => '_'))"))
+    # Same reasoning as KernelState's own eval_module: ephemeral code has
+    # the SAME authority ceiling as durable code (broker-mediated, not
+    # granted by which module happens to run it), so it needs the same
+    # reachable path to request_capability.
+    Core.eval(tool_module, :(const Neura = $(@__MODULE__)))
+    # Deliberately NOT given an `include` binding, unlike the persistent
+    # eval_module: check_ephemeral_source! only inspects the source string
+    # passed directly to EphemeralTool -- it cannot see inside a file that
+    # code would dynamically `include` at runtime, so granting `include`
+    # here would be a silent bypass of the whole namespace-pollution guard
+    # (load a file containing `import Base: show; function show(...)`, and
+    # the guard never looked at it). Kit code loads into the durable mind
+    # deliberately, not into disposable ephemeral tool code.
+
+    try
+        parsed = Meta.parseall(op.code)
+        check_ephemeral_source!(parsed)
+        value = Core.eval(tool_module, parsed)
+        result = OperationResult(value, true, nothing)
+    catch e
+        result = OperationResult(nothing, false, sprint(showerror, e))
+        error_msg = sprint(showerror, e)
+    end
+
+    duration_ms = (time_ns() - start_time) / 1_000_000.0
+
+    receipt = OperationReceipt(
+        uuid4(),
+        Dates.now(),
+        "EphemeralTool",
+        result,
+        duration_ms,
+        kernel_state.id,
+        Dict{String,Any}("tool_id" => op.tool_id)
+    )
+    push!(kernel_state.receipt_log, receipt)
+    record_tool_capsule(op.tool_id, op.code, result, duration_ms)
+
+    return receipt
+end
+
+"""
+    record_tool_capsule(tool_id, code, result, duration_ms)
+
+Appends one mechanical, non-authoritative provenance record for a retired
+ephemeral tool to this worker's own workspace (`.neurajl/provenance.jsonl`,
+relative to `pwd()` -- the sandbox's `--chdir` target, which is already a
+real, host-bind-mounted directory, so this needs no broker mediation to
+become visible outside the sandbox: workspace writes are Class B, not C).
+
+Deliberately mechanical, not model-authored: a content hash (same
+convention as NeuraBash's own Forge module -- `bytes2hex(sha256(...))`),
+success/failure, and the source itself, so a human or agent can
+reconstruct what ran without the now-garbage-collected ephemeral module
+still existing. Written unconditionally at zero LLM cost regardless of
+whether anything ever reads it -- reading is opt-in (grep/jq against a
+JSONL file), never preloaded into any prompt. This is provenance, not
+authorization: nothing in this codebase reads this file to decide whether
+to permit anything, and it is never treated as such.
+"""
+function record_tool_capsule(tool_id::String, code::String, result::OperationResult, duration_ms::Float64)
+    dir = joinpath(pwd(), ".neurajl")
+    mkpath(dir)
+    capsule = Dict{String,Any}(
+        "schema" => "neurajl.tool_capsule.v1",
+        "tool_id" => tool_id,
+        "source_hash" => bytes2hex(sha256(code)),
+        "source" => code,
+        "success" => result.success,
+        "error" => result.error,
+        "duration_ms" => duration_ms,
+        "retired_at" => string(Dates.now()),
+        "disposition" => "RETIRED",
+    )
+    open(joinpath(dir, "provenance.jsonl"), "a") do io
+        println(io, JSON.json(capsule))
+    end
+    nothing
 end
 
 """
@@ -880,6 +1165,7 @@ export get_kernel_state, reset_kernel_state
 export OperatorType, OperatorVocabulary
 export CODE_EXECUTION_VOCAB, OPERATOR_INVOCATION_VOCAB, STATE_QUERY_VOCAB
 export ExecuteCode, InvokeOperator, GetState, ShellEscape
+export EphemeralTool, EphemeralToolViolation, check_ephemeral_source!, record_tool_capsule
 export register_operator!
 export OperationResult, StructuredResponse
 export DiscoveryService, IntrospectionResult, discover

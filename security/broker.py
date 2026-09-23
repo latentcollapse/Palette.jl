@@ -103,6 +103,15 @@ class Broker:
         # session's, which nothing before package_management ever needed.
         self.depot_dir = depot_dir
         self._log_lock = threading.Lock()
+        # NeuraBash's daemon (Project-LIRA-NeuraBash/julia/bin/daemon.jl)
+        # rejects a concurrent mutating request on a busy session
+        # (SessionBusyError) rather than letting two Pkg-style mutations
+        # race on shared environment state. This broker has the same
+        # exposure -- two concurrent package_management requests hitting
+        # this depot clone's single Pkg.add invocation -- serialized here
+        # rather than left to whatever Pkg's own on-disk locking happens
+        # to do under concurrent writers.
+        self._depot_lock = threading.Lock()
         Path(receipt_log_path).parent.mkdir(parents=True, exist_ok=True)
 
     # ---- capability handlers -------------------------------------------------
@@ -198,10 +207,11 @@ class Broker:
         env = dict(os.environ)
         env["JULIA_DEPOT_PATH"] = self.depot_dir
         env.pop("JULIA_PROJECT", None)  # target the depot's own shared @v#.# environment, not any caller's project
-        proc = subprocess.run(
-            ["julia", "--startup-file=no", "-e", f"using Pkg; Pkg.add(Pkg.PackageSpec({spec}))"],
-            env=env, capture_output=True, text=True, timeout=300,
-        )
+        with self._depot_lock:
+            proc = subprocess.run(
+                ["julia", "--startup-file=no", "-e", f"using Pkg; Pkg.add(Pkg.PackageSpec({spec}))"],
+                env=env, capture_output=True, text=True, timeout=300,
+            )
         if proc.returncode != 0:
             raise CapabilityDenied(f"Pkg.add({name!r}) failed: {proc.stderr[-800:]}")
         return {"name": name, "version": version, "installed": True, "stdout_tail": proc.stdout[-500:]}

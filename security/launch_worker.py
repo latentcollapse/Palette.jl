@@ -74,7 +74,7 @@ def _clone_depot(real_depot: str, clone_root: str) -> str:
     return dest
 
 
-def _real_julia_binary() -> str:
+def resolve_real_julia_binary() -> str:
     """Resolve past the juliaup shim to the real julia binary -- the shim
     itself does version-selection logic this sandbox doesn't need or want
     to grant filesystem access to resolve."""
@@ -147,6 +147,7 @@ def build_bwrap_argv(
         "--setenv", "HOME", "/run/neurajl/home",
         "--setenv", "JULIA_DEPOT_PATH", julia_depot,
         "--setenv", "JULIA_PROJECT", project_dir,
+        "--setenv", "NEURAJL_REPO_DIR", repo_dir,
         "--setenv", "PATH", f"{julia_toolchain_dir}/bin:/usr/bin:/bin",
         "--setenv", "LANG", "en_US.UTF-8",
         "--chdir", workspace_dir,
@@ -193,7 +194,7 @@ def run_worker(
     depot_clone_dir: str | None = None,
     timeout: float = 60.0,
 ) -> subprocess.CompletedProcess:
-    julia_bin = _real_julia_binary()
+    julia_bin = resolve_real_julia_binary()
     depot = julia_depot or default_depot()
     Path(workspace_dir).mkdir(parents=True, exist_ok=True)
 
