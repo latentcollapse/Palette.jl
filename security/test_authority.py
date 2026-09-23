@@ -39,7 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
 import broker as B
-from launch_worker import run_worker
+from launch_worker import create_session_depot, run_worker
 
 REPO_DIR = str(Path(__file__).resolve().parent.parent)
 
@@ -83,6 +83,15 @@ def _skip_if_no_project():
             f"no Julia dev project at {PROJECT_DIR} -- set NEURAJL_TEST_PROJECT_DIR "
             "to a project with Neura (dev-installed from this repo) and IJulia"
         )
+
+
+def _skip_if_no_network():
+    import socket
+
+    try:
+        socket.create_connection(("pkg.julialang.org", 443), timeout=5).close()
+    except OSError:
+        raise unittest.SkipTest("no network reachable -- package_management needs the real Julia registry")
 
 
 class SandboxTestCase(unittest.TestCase):
@@ -390,6 +399,83 @@ class TestNestedChildWorker(SandboxTestCase):
             stop.set()
             httpd.shutdown()
             httpd.server_close()
+
+
+class TestPackageManagement(SandboxTestCase):
+    """package_management: the broker decides whether a specific package is
+    allowed and performs the real Pkg.add itself, into this session's own
+    private depot clone -- never a worker's own writable JULIA_DEPOT_PATH
+    (that would let it install and run arbitrary build/artifact-download
+    code as an ungated, sandbox-local effect). Real network, real registry,
+    real install -- see broker.py's _handle_package_management docstring
+    for why this needs a shared, session-lifetime depot clone rather than
+    the one-clone-per-launch default every other test in this file uses.
+    """
+
+    def setUp(self):
+        super().setUp()
+        _skip_if_no_network()
+        self.depot_dir = create_session_depot()
+
+    def tearDown(self):
+        shutil.rmtree(self.depot_dir, ignore_errors=True)
+        super().tearDown()
+
+    def _serve(self, ceiling):
+        sock_dir = tempfile.mkdtemp(prefix="njl-pkgmgmt-bsock-")
+        stop = threading.Event()
+        server, _ = B.serve(
+            os.path.join(sock_dir, "broker.sock"), ceiling,
+            os.path.join(sock_dir, "receipts.jsonl"), "pkgmgmt-test",
+            depot_dir=self.depot_dir,
+        )
+        return sock_dir, server
+
+    def test_allowed_package_installs_and_becomes_usable(self):
+        sock_dir, server = self._serve({"package_management": {"allowed_packages": ["Crayons"]}})
+        try:
+            script = (
+                'using Neura\n'
+                'r = Neura.request_capability("package_management", Dict("name" => "Crayons"))\n'
+                'println("approved: ", r["approved"])\n'
+                'using Crayons\n'
+                'println("USABLE")\n'
+            )
+            r = run_worker(
+                workspace_dir=self.workspace, project_dir=PROJECT_DIR, repo_dir=REPO_DIR,
+                script=script, broker_socket_dir=sock_dir, network_enabled=False,
+                depot_clone_dir=self.depot_dir, timeout=400,
+            )
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("approved: true", r.stdout)
+            self.assertIn("USABLE", r.stdout)
+        finally:
+            server.shutdown()
+            server.server_close()
+            shutil.rmtree(sock_dir, ignore_errors=True)
+
+    def test_package_outside_allowlist_is_denied_without_installing(self):
+        sock_dir, server = self._serve({"package_management": {"allowed_packages": ["Crayons"]}})
+        try:
+            script = (
+                'using Neura\n'
+                'r = Neura.request_capability("package_management", Dict("name" => "HTTP"))\n'
+                'println("approved: ", r["approved"])\n'
+                'ok = try; using HTTP; true; catch; false; end\n'
+                'println("HTTP_USABLE: ", ok)\n'
+            )
+            r = run_worker(
+                workspace_dir=self.workspace, project_dir=PROJECT_DIR, repo_dir=REPO_DIR,
+                script=script, broker_socket_dir=sock_dir, network_enabled=False,
+                depot_clone_dir=self.depot_dir, timeout=60,
+            )
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("approved: false", r.stdout)
+            self.assertIn("HTTP_USABLE: false", r.stdout)
+        finally:
+            server.shutdown()
+            server.server_close()
+            shutil.rmtree(sock_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

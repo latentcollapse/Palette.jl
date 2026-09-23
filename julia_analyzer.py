@@ -34,7 +34,11 @@ try:
     HAS_TREE_SITTER = True
 except ImportError:
     HAS_TREE_SITTER = False
-    print("Warning: tree-sitter not available. Using regex-based fallback parser.")
+    # stderr, not stdout: --json mode's contract is "JSON on stdout, nothing
+    # else" (main() relies on this, printing nothing before json.dumps in
+    # that branch) -- a stdout warning here broke it silently whenever
+    # tree-sitter isn't installed, which this fallback path exists for.
+    print("Warning: tree-sitter not available. Using regex-based fallback parser.", file=sys.stderr)
 
 
 class Severity(Enum):
@@ -460,11 +464,18 @@ class PhaseValidator:
         
         req = self.PHASE_REQUIREMENTS[phase_num]
         
-        # Check required types
+        # Check required types. ERROR, not WARNING: this is the one check
+        # this whole analyzer exists to make, and a WARNING never fails the
+        # CI step that runs it (`julia_analyzer.py`'s only other ERROR is a
+        # file-read I/O failure) -- confirmed by deleting the ShellEscape
+        # struct entirely and finding the "preflight" step still exits 0.
+        # A required component silently missing is exactly the class of
+        # defect a preflight check is supposed to catch before Pkg.test()
+        # spends real time on it.
         for type_name in req["required_types"]:
             if type_name not in self.parser.types:
                 issues.append(Issue(
-                    Severity.WARNING,
+                    Severity.ERROR,
                     f"Phase {phase_num} requires type '{type_name}' but it was not found",
                     "phase_validator"
                 ))
@@ -474,14 +485,14 @@ class PhaseValidator:
                     f"Type '{type_name}' exists but may not be exported",
                     "phase_validator"
                 ))
-        
+
         # Check required functions
         for func_name in req["required_functions"]:
-            found = any(f.name == func_name or f.name.endswith('.' + func_name) 
+            found = any(f.name == func_name or f.name.endswith('.' + func_name)
                        for f in self.parser.functions)
             if not found:
                 issues.append(Issue(
-                    Severity.WARNING,
+                    Severity.ERROR,
                     f"Phase {phase_num} requires function '{func_name}' but it was not found",
                     "phase_validator"
                 ))
@@ -495,7 +506,7 @@ class JuliaStaticAnalyzer:
     def __init__(self):
         self.parser = JuliaParser()
         self.validator = PhaseValidator(self.parser)
-        self.all_issues: list[Issue] = []
+        self._phases_validated = False
         
     def analyze_directory(self, directory: str, extensions: list[str] = ['.jl']) -> bool:
         """Analyze all Julia files in a directory."""
@@ -526,14 +537,25 @@ class JuliaStaticAnalyzer:
         return self.parser.parse_file(filepath)
     
     def validate_phases(self, max_phase: int = 10) -> dict[int, list[Issue]]:
-        """Validate all phases up to max_phase."""
+        """Validate all phases up to max_phase. Extends `self.parser.issues`
+        -- the list `get_summary()`'s error/warning counts (and therefore
+        the CLI's exit code) actually read -- not a separate `all_issues`
+        list nothing else in this file ever consumed, which is how a
+        Phase-level ERROR could exist and still leave the process exiting
+        0 (found by deleting a required struct and watching the CI-facing
+        exit code stay clean). Idempotent per instance: calling this more
+        than once (print_report and a --json summary both may) must not
+        duplicate every phase issue into parser.issues on the second call.
+        """
         phase_results = {}
-        
+
         for phase in range(1, max_phase + 1):
             issues = self.validator.validate_phase(phase)
             phase_results[phase] = issues
-            self.all_issues.extend(issues)
-        
+            if not self._phases_validated:
+                self.parser.issues.extend(issues)
+
+        self._phases_validated = True
         return phase_results
     
     def get_summary(self) -> dict:
@@ -663,6 +685,7 @@ def main():
     
     if args.json:
         import json
+        analyzer.validate_phases()  # otherwise --json mode omits phase validation entirely
         # Only output JSON, not the "Found X files" messages
         summary = analyzer.get_summary()
         summary['types'] = {

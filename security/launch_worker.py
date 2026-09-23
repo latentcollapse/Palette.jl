@@ -156,6 +156,30 @@ def build_bwrap_argv(
     return argv
 
 
+def default_depot() -> str:
+    return os.environ.get("JULIA_DEPOT_PATH", str(Path.home() / ".julia")).split(":")[-1]
+
+
+def create_session_depot(real_depot: str | None = None, clone_root: str | None = None) -> str:
+    """Create one private, writable depot clone for a whole session (not
+    one launch) to share. Exists as a public entry point, not just an
+    internal `run_worker` detail, because `package_management` (see
+    `security/broker.py`) needs the broker to install into the EXACT same
+    directory a running worker already has bound -- a bind mount is a live
+    view of a directory, not a snapshot, so a host-side write into a
+    worker's depot clone while it's still running appears inside the
+    sandbox immediately, with no new mount and no restart. That only works
+    if there is one clone per session that both the worker and the broker
+    agree on, instead of `run_worker` silently making (and destroying) a
+    fresh one on every call, as it does for a caller that has no reason to
+    share one.
+    """
+    depot = real_depot or default_depot()
+    root = clone_root or str(Path(depot).parent / ".neurajl-depot-clones")
+    Path(root).mkdir(parents=True, exist_ok=True)
+    return _clone_depot(depot, root)
+
+
 def run_worker(
     *,
     workspace_dir: str,
@@ -166,17 +190,21 @@ def run_worker(
     network_enabled: bool = False,
     julia_depot: str | None = None,
     depot_clone_root: str | None = None,
+    depot_clone_dir: str | None = None,
     timeout: float = 60.0,
 ) -> subprocess.CompletedProcess:
     julia_bin = _real_julia_binary()
-    depot = julia_depot or os.environ.get("JULIA_DEPOT_PATH", str(Path.home() / ".julia")).split(":")[-1]
+    depot = julia_depot or default_depot()
     Path(workspace_dir).mkdir(parents=True, exist_ok=True)
-    # Same filesystem as the real depot, so `cp --reflink` is a real
-    # reflink and not a silent full-copy fallback -- default to a sibling
-    # of the depot itself rather than /tmp (often a separate tmpfs mount).
-    clone_root = depot_clone_root or str(Path(depot).parent / ".neurajl-depot-clones")
-    Path(clone_root).mkdir(parents=True, exist_ok=True)
-    depot_clone_dir = _clone_depot(depot, clone_root)
+
+    # A caller that already owns a session-lifetime clone (see
+    # create_session_depot) passes it in and keeps owning its cleanup --
+    # e.g. so `package_management` can keep installing into it across
+    # several launches. A caller with no such need gets the old
+    # single-launch behavior: a fresh clone, destroyed when this call ends.
+    owns_clone = depot_clone_dir is None
+    if owns_clone:
+        depot_clone_dir = create_session_depot(depot, depot_clone_root)
     try:
         argv = build_bwrap_argv(
             workspace_dir=workspace_dir,
@@ -191,7 +219,8 @@ def run_worker(
         argv += ["--", julia_bin, "--startup-file=no", "-e", script]
         return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
     finally:
-        shutil.rmtree(depot_clone_dir, ignore_errors=True)
+        if owns_clone:
+            shutil.rmtree(depot_clone_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

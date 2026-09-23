@@ -36,7 +36,7 @@ for every claim (`docs/THREAT_MODEL.md`).
 | Component | File | Lines | Role |
 |---|---|---|---|
 | Contained worker launcher | `security/launch_worker.py` | 159 | Builds the bubblewrap sandbox: namespace isolation, bounded filesystem, no ambient credentials, network off by default. Reuses NeuraBash's proven flag set (see `docs/NEURABASH_SECURITY_PORT.md`). |
-| Host capability broker | `security/broker.py` | 271 | Runs outside the sandbox. Unix-socket JSON protocol, two fully-implemented capability categories (`external_fs_write`, `network_access`) plus `spawn_child_worker` with real `C_child ⊆ C_caller` enforcement, append-only receipt log. |
+| Host capability broker | `security/broker.py` | ~370 | Runs outside the sandbox. Unix-socket JSON protocol, three fully-implemented capability categories (`external_fs_write`, `network_access`, `package_management`) plus `spawn_child_worker` with real `C_child ⊆ C_caller` enforcement (including for network, after a real bug in that path was found and fixed -- see THREAT_MODEL.md row 19), append-only receipt log. |
 | Worker-side client | `src/Neura.jl`, `request_capability()` | +50 net (incl. new `JSON`/`Sockets` deps) | The only code path in the package that can reach a broker-mediated effect. Performs no effect itself. |
 | Executable test suite | `security/test_authority.py` | 340 | 19 real tests, no mocks: 5 fast ceiling-subset-logic tests (no sandbox), 8 real-sandbox containment tests, 5 real broker-mediated tests, 1 real nested-worker test. All 19 pass. |
 

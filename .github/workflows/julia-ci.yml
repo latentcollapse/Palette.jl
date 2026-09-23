@@ -21,6 +21,9 @@ jobs:
     - name: Instantiate project
       run: julia --project=@. -e 'using Pkg; Pkg.instantiate()'
 
+    - name: Test the static analysis preflight tool itself
+      run: python3 test_julia_analyzer.py
+
     - name: Run static analysis preflight
       run: python3 julia_analyzer.py src/Neura.jl --verbose
 

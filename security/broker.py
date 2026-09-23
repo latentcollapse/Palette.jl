@@ -35,9 +35,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import socket
 import socketserver
+import subprocess
 import tempfile
 import threading
 import time
@@ -74,16 +76,32 @@ def ceiling_is_subset(requested: dict, parent: dict) -> tuple[bool, str]:
             parent_hosts = parent_cap.get("allowed_hosts")
             if req_hosts is not None and parent_hosts is not None and not set(req_hosts).issubset(set(parent_hosts)):
                 return False, f"requested allowed_hosts {req_hosts} is not a subset of parent's {parent_hosts}"
+        elif category == "package_management":
+            req_pkgs = req_cap.get("allowed_packages")
+            parent_pkgs = parent_cap.get("allowed_packages")
+            if req_pkgs is None:
+                return False, "requested package_management must name allowed_packages explicitly (no unrestricted child grant)"
+            if parent_pkgs is not None and not set(req_pkgs).issubset(set(parent_pkgs)):
+                return False, f"requested allowed_packages {req_pkgs} is not a subset of parent's {parent_pkgs}"
         else:
             return False, f"unrecognized category {category!r} cannot be validated as a subset -- denied, not ignored"
     return True, ""
 
 
 class Broker:
-    def __init__(self, ceiling: dict[str, Any], receipt_log_path: str, session_id: str):
+    def __init__(self, ceiling: dict[str, Any], receipt_log_path: str, session_id: str, depot_dir: str | None = None):
         self.ceiling = ceiling
         self.receipt_log_path = receipt_log_path
         self.session_id = session_id
+        # This session's own private depot clone (see launch_worker.
+        # create_session_depot), if one has been set up for it. Needed by
+        # package_management: a bind mount is a live view of a directory,
+        # not a snapshot, so the broker installing a package into this
+        # exact path (from the host, unsandboxed, with real network access)
+        # makes it appear inside an already-running worker immediately --
+        # but only if the broker actually knows which depot is this
+        # session's, which nothing before package_management ever needed.
+        self.depot_dir = depot_dir
         self._log_lock = threading.Lock()
         Path(receipt_log_path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -138,6 +156,56 @@ class Broker:
             body = resp.read(2048)
         return {"url": url, "status": resp.status, "body_prefix": body[:200].decode(errors="replace")}
 
+    _PACKAGE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+    _PACKAGE_VERSION_RE = re.compile(r"^[0-9]+(\.[0-9]+){0,2}$")
+
+    def _handle_package_management(self, params: dict) -> Any:
+        """Per docs/CAPABILITY_MODEL.md's intended shape: the broker decides
+        whether a specific package is allowed and performs the install
+        itself -- a worker's own JULIA_DEPOT_PATH is never made writable to
+        it for this purpose (that would let it install and RUN arbitrary
+        code -- Julia package installs run real build/artifact-download
+        scripts -- as an ungated, sandbox-local effect masquerading as
+        harmless filesystem I/O, exactly the leak flagged in this
+        project's own audit notes before this category existed).
+
+        Installs into `self.depot_dir` -- this session's own private depot
+        clone (see launch_worker.create_session_depot) -- with no active
+        project, so Pkg targets that depot's own default shared environment
+        (`@v#.#`), which every worker sharing this depot already has beneath
+        its own project on LOAD_PATH. A bind mount is a live view of a
+        directory, not a snapshot: an already-running worker sees the new
+        package the moment this finishes, no new mount, no restart.
+        """
+        cap = self.ceiling.get("package_management")
+        if not cap or cap.get("allowed_packages") is None:
+            raise CapabilityDenied("package_management is not in this session's capability ceiling")
+        if self.depot_dir is None:
+            raise CapabilityDenied("no session depot is configured for this broker -- package_management requires one")
+
+        name = params.get("name")
+        version = params.get("version")
+        if not isinstance(name, str) or not self._PACKAGE_NAME_RE.match(name):
+            raise CapabilityDenied("package_management requires a string 'name' that is a valid Julia identifier")
+        if version is not None and (not isinstance(version, str) or not self._PACKAGE_VERSION_RE.match(version)):
+            raise CapabilityDenied("package_management's 'version', if given, must look like '1', '1.2', or '1.2.3'")
+
+        allowed = cap["allowed_packages"]
+        if name not in allowed:
+            raise CapabilityDenied(f"package {name!r} is not in this session's allowed_packages {allowed}")
+
+        spec = f'name="{name}"' + (f', version="{version}"' if version else "")
+        env = dict(os.environ)
+        env["JULIA_DEPOT_PATH"] = self.depot_dir
+        env.pop("JULIA_PROJECT", None)  # target the depot's own shared @v#.# environment, not any caller's project
+        proc = subprocess.run(
+            ["julia", "--startup-file=no", "-e", f"using Pkg; Pkg.add(Pkg.PackageSpec({spec}))"],
+            env=env, capture_output=True, text=True, timeout=300,
+        )
+        if proc.returncode != 0:
+            raise CapabilityDenied(f"Pkg.add({name!r}) failed: {proc.stderr[-800:]}")
+        return {"name": name, "version": version, "installed": True, "stdout_tail": proc.stdout[-500:]}
+
     def _handle_spawn_child_worker(self, params: dict) -> Any:
         """C_child ⊆ C_caller, enforced here, not by trusting the worker's
         own request. The worker cannot do this itself -- it has no
@@ -158,7 +226,13 @@ class Broker:
             raise CapabilityDenied(
                 "spawn_child_worker requires string 'script', 'child_workspace', 'child_project', 'child_repo'"
             )
-        from launch_worker import run_worker
+        from launch_worker import create_session_depot, run_worker
+
+        # Only children that actually requested package_management pay for
+        # their own depot clone (create_session_depot costs a real, if
+        # cheap, reflink copy) -- everyone else keeps the old
+        # one-clone-per-launch behavior via run_worker's own default.
+        child_depot_dir = create_session_depot() if "package_management" in requested_ceiling else None
 
         # A child's OS-level network namespace is NEVER unshared, no matter
         # what its approved ceiling grants -- confirmed by direct testing
@@ -179,6 +253,7 @@ class Broker:
             requested_ceiling,
             child_receipts,
             f"{self.session_id}/child",
+            depot_dir=child_depot_dir,
         )
         try:
             result = run_worker(
@@ -188,12 +263,15 @@ class Broker:
                 script=script,
                 broker_socket_dir=child_sock_dir,
                 network_enabled=False,
+                depot_clone_dir=child_depot_dir,
                 timeout=90,
             )
         finally:
             child_server.shutdown()
             child_server.server_close()
             shutil.rmtree(child_sock_dir, ignore_errors=True)
+            if child_depot_dir:
+                shutil.rmtree(child_depot_dir, ignore_errors=True)
         return {
             "returncode": result.returncode,
             "stdout": result.stdout[-4000:],
@@ -203,6 +281,7 @@ class Broker:
     HANDLERS = {
         "external_fs_write": _handle_external_fs_write,
         "network_access": _handle_network_access,
+        "package_management": _handle_package_management,
         "spawn_child_worker": _handle_spawn_child_worker,
     }
 
@@ -282,10 +361,17 @@ class _UnixSocketServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServ
     daemon_threads = True
 
 
-def serve(sock_path: str, ceiling: dict, receipt_log_path: str, session_id: str, stop_event: threading.Event | None = None):
+def serve(
+    sock_path: str,
+    ceiling: dict,
+    receipt_log_path: str,
+    session_id: str,
+    stop_event: threading.Event | None = None,
+    depot_dir: str | None = None,
+):
     if os.path.exists(sock_path):
         os.unlink(sock_path)
-    broker = Broker(ceiling, receipt_log_path, session_id)
+    broker = Broker(ceiling, receipt_log_path, session_id, depot_dir=depot_dir)
     server = _UnixSocketServer(sock_path, _ConnHandler)
     server.broker = broker  # type: ignore[attr-defined]
     os.chmod(sock_path, 0o666)  # the sandboxed worker connects as a different uid view
