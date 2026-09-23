@@ -133,7 +133,7 @@ try {
 	const terminalAssistant = [...session.messages].reverse().find(
 		(message): message is AssistantMessage => message.role === "assistant",
 	);
-	if (!terminalAssistant || terminalAssistant.stopReason === "error" || terminalAssistant.stopReason === "aborted" || terminalAssistant.errorMessage) {
+	if (!terminalAssistant || (terminalAssistant.stopReason !== "stop" && terminalAssistant.stopReason !== "length") || terminalAssistant.errorMessage) {
 		throw new Error("Trial ended without a successful terminal assistant response; see the raw trace");
 	}
 } catch (cause) {
