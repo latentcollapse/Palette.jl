@@ -30,7 +30,7 @@ const model: Model<"openai-completions"> = {
 	reasoning: false,
 	input: ["text"],
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-	contextWindow: localBaseUrl ? 8192 : 256000,
+	contextWindow: localBaseUrl ? 10240 : 256000,
 	maxTokens: 2048,
 	compat: {
 		supportsDeveloperRole: false,
