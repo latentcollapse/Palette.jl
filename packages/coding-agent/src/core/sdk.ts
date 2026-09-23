@@ -29,6 +29,7 @@ import {
 	createEditTool,
 	createIpythonTool,
 	createNeurabashTool,
+	createNeurajlBaseToolsFactory,
 	withFileMutationQueue,
 } from "./tools/index.js";
 
@@ -113,7 +114,14 @@ export type { CreateRlmSubagentRuntimeOptions, RlmSubagentRuntime, SubagentRunti
 export type { Skill } from "./skills.js";
 export type { Tool } from "./tools/index.js";
 
-export { createBashTool, createEditTool, createIpythonTool, createNeurabashTool, withFileMutationQueue };
+export {
+	createBashTool,
+	createEditTool,
+	createIpythonTool,
+	createNeurabashTool,
+	createNeurajlBaseToolsFactory,
+	withFileMutationQueue,
+};
 
 // Helper Functions
 
