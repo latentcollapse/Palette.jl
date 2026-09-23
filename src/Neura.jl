@@ -1052,7 +1052,7 @@ EXPERIMENT 002: broker-mediated capability requests
 ==============================================================================#
 
 """
-    request_capability(category::String, params::Dict=Dict(); timeout_s::Real=10.0) -> Dict
+    request_capability(category::String, params::Dict=Dict(); timeout_s::Real=320.0) -> Dict
 
 Request a broker-mediated (Effect Class C) capability -- see
 docs/CAPABILITY_MODEL.md and docs/EXPERIMENT_002_AUTHORITY.md.
@@ -1079,17 +1079,37 @@ inside, not this function's cooperation.
 Throws if `NEURAJL_BROKER_SOCKET` is unset (no broker configured for this
 session -- e.g. running unsandboxed) or if the connection fails.
 """
-function request_capability(category::String, params::Dict=Dict{String,Any}(); timeout_s::Real=10.0)
+function request_capability(category::String, params::Dict=Dict{String,Any}(); timeout_s::Real=320.0)
     sock_path = get(ENV, "NEURAJL_BROKER_SOCKET", "")
     isempty(sock_path) && error("NEURAJL_BROKER_SOCKET is not set -- no capability broker is available in this session")
     req = Dict("id" => string(uuid4()), "category" => category, "params" => params)
     conn = connect(sock_path)
+    # `timeout_s` was accepted but never referenced anywhere in this
+    # function -- confirmed by reading it, not assumed: a broker that
+    # hung mid-effect (a stuck Pkg.add, a network call that never returns)
+    # would hang this call, and therefore this whole worker/turn, forever,
+    # with no way for the documented parameter to prevent it. Same
+    # Timer-based cancellation pattern already used for ShellEscape's
+    # timeout: closing the socket while `readline` blocks on it forces
+    # that read to error out instead of hanging indefinitely.
+    timed_out = Ref(false)
+    timer = Timer(timeout_s) do _
+        if isopen(conn)
+            timed_out[] = true
+            close(conn)
+        end
+    end
     try
         write(conn, JSON.json(req) * "\n")
         line = readline(conn)
+        timed_out[] && error("broker did not respond within timeout_s=$(timeout_s)s")
         isempty(line) && error("broker closed the connection without a response")
         return JSON.parse(line)
+    catch e
+        timed_out[] && error("broker did not respond within timeout_s=$(timeout_s)s")
+        rethrow()
     finally
+        close(timer)
         close(conn)
     end
 end

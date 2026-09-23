@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import selectors
 import shutil
 import subprocess
 import threading
@@ -54,8 +55,39 @@ class SessionDeadError(Exception):
     pipe, a dead poll() result, or an explicit close())."""
 
 
+class SessionTimeoutError(SessionDeadError):
+    """A turn exceeded turn_timeout waiting for a response. Deliberately a
+    SessionDeadError subclass, not a separate, recoverable condition: a
+    timed-out worker is killed (see turn()) rather than left half-blocked
+    on a response this call gave up reading, because the protocol here is
+    strictly one-request-one-response with no request-id-based recovery --
+    trying to "keep going" after a timeout would mean either leaving that
+    stale response for the NEXT turn() call to misread as ITS OWN
+    response, or building a request-id dispatch loop this module doesn't
+    have. Killing and failing closed is simpler and correct."""
+
+
 class SessionProtocolError(Exception):
     pass
+
+
+def _readline_with_timeout(pipe, timeout: float) -> str:
+    """`pipe.readline()` blocks forever on a hung/slow worker with no way
+    to bound it -- confirmed: `turn_timeout` was stored on `NeuraSession`
+    but never actually used anywhere, so a turn running `while true; end`
+    (or anything just slow) hung the calling thread indefinitely, with no
+    way for `close()` to interrupt it either (the call sits inside the
+    session lock `turn()` already holds). `selectors` gives a real,
+    enforced deadline on the underlying file descriptor before ever
+    calling the blocking `readline()`."""
+    sel = selectors.DefaultSelector()
+    sel.register(pipe, selectors.EVENT_READ)
+    try:
+        if not sel.select(timeout=timeout):
+            raise TimeoutError(f"no response within {timeout}s")
+        return pipe.readline()
+    finally:
+        sel.close()
 
 
 class NeuraSession:
@@ -95,6 +127,8 @@ class NeuraSession:
             str(Path(self._broker_sock_dir) / "broker.sock"),
             ceiling, receipts_path, self.session_id,
             depot_dir=self.depot_clone_dir,
+            project_dir=self.project_dir,
+            repo_dir=self.repo_dir,
         )
 
         julia_bin = resolve_real_julia_binary()
@@ -114,7 +148,13 @@ class NeuraSession:
             text=True, bufsize=1,
         )
 
-        hello_line = self._proc.stdout.readline()
+        try:
+            hello_line = _readline_with_timeout(self._proc.stdout, turn_timeout)
+        except TimeoutError:
+            self._proc.kill()
+            self._proc.wait()
+            self._teardown()
+            raise SessionDeadError(f"worker did not produce HELLO within {turn_timeout}s")
         if not hello_line:
             stderr = self._proc.stderr.read()
             self._teardown()
@@ -159,7 +199,24 @@ class NeuraSession:
             try:
                 self._proc.stdin.write(json.dumps(req) + "\n")
                 self._proc.stdin.flush()
-                line = self._proc.stdout.readline()
+                line = _readline_with_timeout(self._proc.stdout, self.turn_timeout)
+            except TimeoutError:
+                # TimeoutError IS-A OSError in Python's builtin hierarchy --
+                # this branch must come before the (BrokenPipeError, OSError)
+                # one below, or it silently never fires (confirmed: it
+                # didn't, on the first version of this fix). Killed, not
+                # left pending: this protocol is strictly one
+                # request/one response, so a timed-out turn's eventual
+                # response (if the worker ever produces one) would
+                # otherwise sit in the pipe and be misread as the NEXT
+                # turn's response. Killing the process is what makes this
+                # session's failure mode simple and correct instead of
+                # silently corrupting the next call.
+                self._proc.kill()
+                self._proc.wait()
+                raise SessionTimeoutError(
+                    f"session {self.session_id} turn exceeded turn_timeout={self.turn_timeout}s -- worker killed"
+                )
             except (BrokenPipeError, OSError) as e:
                 raise SessionDeadError(f"session {self.session_id} pipe broke: {e}") from e
             if not line:

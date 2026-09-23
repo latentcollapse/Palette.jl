@@ -112,12 +112,16 @@ for line in eachline(stdin)
                 "println(Neura.JSON.json(Dict(\"success\"=>r.result.success, ",
                 "\"data\"=>r.result.data, \"error\"=>r.result.error)))",
             )
+            # `child_workspace`/`child_project`/`child_repo` are no longer
+            # part of this request: the broker now always allocates the
+            # child's workspace itself and uses its own session-established
+            # project/repo paths -- a request can no longer choose WHERE a
+            # child's filesystem view points, only WHICH capabilities it
+            # gets (see broker.py's _handle_spawn_child_worker docstring
+            # for the exploit this closed).
             spawn_resp = Neura.request_capability("spawn_child_worker", Dict(
                 "ceiling" => requested_ceiling,
                 "script" => child_script,
-                "child_workspace" => mktempdir(),
-                "child_project" => ENV["JULIA_PROJECT"],
-                "child_repo" => get(ENV, "NEURAJL_REPO_DIR", ""),
             ))
             if get(spawn_resp, "approved", false)
                 child_stdout = String(get(spawn_resp["result"], "stdout", ""))
@@ -139,11 +143,20 @@ for line in eachline(stdin)
                 resp["data"] = nothing
                 resp["error"] = "spawn_child_worker denied: " * string(get(spawn_resp, "reason", "unknown"))
             end
-        else
+        elseif kind == "EXECUTE"
             receipt = execute(ExecuteCode(code))
             resp["success"] = receipt.result.success
             resp["data"] = receipt.result.data
             resp["error"] = receipt.result.error
+        else
+            # Fail closed on an unrecognized `kind` -- confirmed by direct
+            # testing that an earlier version of this branch ran ANY
+            # non-"EPHEMERAL" kind (a typo, a missing field, a future
+            # protocol version this process doesn't understand) as durable
+            # ExecuteCode against the persistent mind. A malformed or
+            # unrecognized request must be rejected, not silently treated
+            # as "the durable default."
+            error("unrecognized request 'kind': $(repr(kind)) (expected \"EXECUTE\" or \"EPHEMERAL\")")
         end
     catch e
         resp["success"] = false
