@@ -53,6 +53,32 @@ Two early "escape" attempts (`write` to `/tmp/...` and to an unbound `/home/matt
 
 Every row's outcome was checked against real, independent evidence (host filesystem state, process exit codes, kernel error text, a second process's own PID) -- not against what the worker's own script claimed.
 
+## Same-process ephemeral isolation is unsecurable, and that's not a bug -- it's where the boundary belongs
+
+2026-09-23, in the persistent-kernel work: NeuraJL grew a long-lived worker process (`scripts/session_loop.jl` / `security/session.py`'s `NeuraSession`) so a session's Julia state (bindings, compiled methods) survives across many turns instead of one process per script. The first version of "ephemeral" (disposable, task-scoped) code ran in a fresh, throwaway `Module` inside that SAME long-lived process (`Neura.EphemeralTool`), guarded by a parse-time AST check (`check_ephemeral_source!`) rejecting `import` and qualified `function Mod.name(...)` definitions -- the two confirmed ways a plain `Core.eval` can permanently extend a foreign module's method table.
+
+**That guard was adversarially defeated, on purpose, to find out how far same-process isolation could actually be pushed:**
+
+| Bypass | Payload | Result |
+|---|---|---|
+| Qualified `.include` call | `Base.include(@__MODULE__, "/tmp/evil.jl")`, file containing `import Base: show; function show(...)` | Loaded and ran the file's contents -- fixed (qualified `.include` calls are now rejected outright, since a check on the submitted source can't see inside a file it never received) |
+| Definition nested inside a function body | `function outer(); function Base.show(...); ...; end; end` | Sailed through an earlier version that only checked top-level statements -- fixed (the walk is now fully recursive) |
+| **Runtime-constructed `eval`** | `Core.eval(Base, :(function show(io::IO, x::Int) ... end))` | **Succeeded. `Base.show` was genuinely, permanently corrupted for the rest of that process, confirmed against real `sprint(show, 42)` output, not self-report.** |
+
+The third row is the actual finding. The quoted expression passed to `Core.eval` is *data*, assembled entirely at runtime -- there is no syntactic trace of a dangerous definition anywhere in the *submitted source* for any parse-time check to see, no matter how thorough. Blocking it would mean statically proving properties of an arbitrary value passed to `eval` in a Turing-complete language -- equivalent to writing a second Julia interpreter/verifier, and still incomplete (the value could be built behind dispatch, `ccall`, or further reflection). Crippling `eval` itself to close this would violate NeuraJL's own founding thesis: full, unbounded Julia language power inside the sandbox, authority enforced from outside it, not by policing the language from within.
+
+**The fix is architectural, not a smarter checker: the boundary moved from a Julia-language check to the OS.** `EPHEMERAL` turns no longer run in the persistent process at all -- they spawn a real, disposable, OS-sandboxed child via the already-adversarially-proven `spawn_child_worker` capability (rows 16-19 above). If the child's code corrupts its own `Base.show`, that corruption dies when the child process exits; there is nothing to detect, reverse, or garbage-collect, because Linux discards the entire process. Proven, not asserted:
+
+```
+parent: sprint(show, 42) == "42"
+child:  Core.eval(Base, ...); sprint(show, 42) == "PWNED"   <- exploit succeeds locally
+parent: sprint(show, 42) == "42"                             <- unaffected, checked in a real subsequent turn
+```
+
+See `security/test_session.py::TestPersistentMind::test_ephemeral_child_self_corruption_cannot_reach_the_parent` -- the exact payload above, preserved deliberately as a permanent regression, not deleted once it stopped being a live bug. `Neura.EphemeralTool`/`check_ephemeral_source!` still exist, unchanged, and are still real and tested for what they now honestly claim to be: a namespace-hygiene measure against accidental/careless pollution, not a security boundary. An ephemeral turn's OS-sandboxed child ceiling defaults to `{}` (full language power, zero broker-mediated authority) and must be explicitly widened by the caller, validated as a real subset of the session's own ceiling by the same `ceiling_is_subset` logic as any other `spawn_child_worker` request -- it is not inherited automatically.
+
+**The general lesson, stated once so it doesn't need rediscovering:** don't ask Julia to police Julia. The same principle that put the authority fence outside the language for host effects (Experiment 002) applies to in-process persistence isolation too -- put the boundary underneath the interpreter, not inside it.
+
 ## Known gaps (honest, not buried)
 
 - **Depot cold-start performance -- was a real ~35-40s tax on `using Neura` launches, now fixed.** Root cause: a split writable+readonly `JULIA_DEPOT_PATH` (`--tmpfs /run/neurajl/depot` layered over the real depot) made Julia recompute a mismatched build_id for stdlib deps, cascading into a full recompile of `JSON`'s dependency tree on every launch. Fixed by giving each worker a real, cheap (`cp --reflink`) private clone of the depot as the sandbox's single `JULIA_DEPOT_PATH` entry instead of a layered pair -- see `security/launch_worker.py`'s `_clone_depot` and `docs/NEURABASH_SECURITY_PORT.md` for the full root-cause and fix writeup. Not a security question either way: correctness was verified in every test above regardless of the cold-start tax, and all 19 tests still pass after the fix.

@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+"""
+NeuraJL persistent session -- "persistent mind, disposable machinery".
+
+The rest of this codebase (launch_worker.py, broker.py) launches one
+`julia -e script` process per call: real state persistence only within
+that one process's lifetime. This module keeps ONE sandboxed worker alive
+across many turns instead, running scripts/session_loop.jl, while reusing
+every existing authority primitive unchanged: the same bwrap argv builder,
+the same broker/ceiling model, the same depot-clone mechanism (now
+session-lifetime, via create_session_depot, instead of one-shot).
+
+Session identity is explicit, not assumed. `NeuraSession.epoch` is read
+from the worker process's own first line of output (a fresh UUID it
+generates itself on startup -- see session_loop.jl) -- never guessed,
+never carried over from a previous process. If the worker process dies,
+its epoch dies with it: `NeuraSession` does not silently relaunch or
+reconnect. A caller holding a dead session's handle gets `SessionDeadError`
+and has to decide what that means, the same way NeuraBash's daemon rejects
+a session handle from a previous `RUNTIME_EPOCH` (see
+`Project-LIRA-NeuraBash/julia/bin/daemon.jl`) rather than pretending
+process death didn't happen -- the lesson reused here, not the
+implementation (NeuraBash's is a multi-client daemon serving many logical
+sessions from one long-lived process with its own binary framed protocol;
+this is one dedicated sandboxed worker per session, newline-delimited JSON
+over its own stdio, no daemon, no multiplexing).
+
+The authority model is completely unchanged by persistence: the broker
+still only sees Class-C requests over its own socket, exactly as for a
+one-shot worker. Nothing about keeping the worker warm grants it anything
+it didn't already have.
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import threading
+import uuid
+from pathlib import Path
+
+from launch_worker import resolve_real_julia_binary, build_bwrap_argv, create_session_depot
+
+import broker as _broker
+
+REPO_DIR = str(Path(__file__).resolve().parent.parent)
+SESSION_LOOP_SCRIPT = str(Path(REPO_DIR) / "scripts" / "session_loop.jl")
+
+
+class SessionDeadError(Exception):
+    """The worker process this session was talking to is no longer alive.
+    Never raised speculatively -- only after direct evidence (a closed
+    pipe, a dead poll() result, or an explicit close())."""
+
+
+class SessionProtocolError(Exception):
+    pass
+
+
+class NeuraSession:
+    """One persistent, sandboxed NeuraJL worker plus its own broker,
+    ceiling, and depot clone -- a real Julia process kept alive across
+    many `turn()` calls, not a fresh one per call."""
+
+    def __init__(
+        self,
+        *,
+        project_dir: str,
+        ceiling: dict,
+        repo_dir: str = REPO_DIR,
+        workspace_dir: str | None = None,
+        network_enabled: bool = False,
+        receipts_dir: str | None = None,
+        turn_timeout: float = 60.0,
+    ):
+        self.session_id = f"neurajl-{uuid.uuid4().hex[:16]}"
+        self.project_dir = project_dir
+        self.repo_dir = repo_dir
+        self.turn_timeout = turn_timeout
+        self._lock = threading.Lock()
+        self._closed = False
+        self._next_request_id = 0
+
+        self._tmp_root = Path(workspace_dir or Path.home() / ".neurajl-sessions" / self.session_id)
+        self.workspace_dir = str(self._tmp_root / "workspace")
+        Path(self.workspace_dir).mkdir(parents=True, exist_ok=True)
+
+        self.depot_clone_dir = create_session_depot()
+
+        self._broker_sock_dir = str(self._tmp_root / "broker")
+        Path(self._broker_sock_dir).mkdir(parents=True, exist_ok=True)
+        receipts_path = str(Path(receipts_dir or self._broker_sock_dir) / "receipts.jsonl")
+        self._broker_server, self._broker = _broker.serve(
+            str(Path(self._broker_sock_dir) / "broker.sock"),
+            ceiling, receipts_path, self.session_id,
+            depot_dir=self.depot_clone_dir,
+        )
+
+        julia_bin = resolve_real_julia_binary()
+        argv = build_bwrap_argv(
+            workspace_dir=self.workspace_dir,
+            broker_socket_dir=self._broker_sock_dir,
+            project_dir=self.project_dir,
+            repo_dir=self.repo_dir,
+            julia_bin=julia_bin,
+            julia_depot=os.environ.get("JULIA_DEPOT_PATH", str(Path.home() / ".julia")).split(":")[-1],
+            depot_clone_dir=self.depot_clone_dir,
+            network_enabled=network_enabled,
+        )
+        argv += ["--", julia_bin, "--startup-file=no", SESSION_LOOP_SCRIPT]
+        self._proc = subprocess.Popen(
+            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, bufsize=1,
+        )
+
+        hello_line = self._proc.stdout.readline()
+        if not hello_line:
+            stderr = self._proc.stderr.read()
+            self._teardown()
+            raise SessionDeadError(f"worker exited before HELLO: {stderr[-2000:]}")
+        hello = json.loads(hello_line)
+        if hello.get("kind") != "HELLO" or not isinstance(hello.get("epoch"), str):
+            self._teardown()
+            raise SessionProtocolError(f"malformed HELLO: {hello_line!r}")
+        self.epoch = hello["epoch"]
+
+    def is_alive(self) -> bool:
+        return not self._closed and self._proc.poll() is None
+
+    def turn(self, code: str, *, ephemeral: bool = False, ephemeral_ceiling: dict | None = None) -> dict:
+        """Send one script to the persistent worker and block for its one
+        response. Raises SessionDeadError if the process is gone -- never
+        silently relaunches; a new process would mean a new epoch, i.e. a
+        different session, and this call has no authority to decide that
+        on the caller's behalf.
+
+        `ephemeral_ceiling` (ignored unless `ephemeral=True`) is the
+        capability ceiling the disposable child worker gets -- validated
+        as a real subset of this session's own ceiling by the broker
+        (`ceiling_is_subset`), same as any other `spawn_child_worker`
+        request. Defaults to `{}`: full, unbounded Julia language power
+        inside the child, zero broker-mediated authority, the safer
+        default for code whose actual needs aren't known ahead of time.
+        """
+        with self._lock:
+            if self._closed:
+                raise SessionDeadError(f"session {self.session_id} was explicitly closed")
+            if self._proc.poll() is not None:
+                raise SessionDeadError(
+                    f"session {self.session_id} worker process exited (code {self._proc.returncode}) "
+                    f"since epoch {self.epoch} was issued"
+                )
+            self._next_request_id += 1
+            request_id = str(self._next_request_id)
+            req = {"request_id": request_id, "kind": "EPHEMERAL" if ephemeral else "EXECUTE", "code": code}
+            if ephemeral and ephemeral_ceiling is not None:
+                req["ceiling"] = ephemeral_ceiling
+            try:
+                self._proc.stdin.write(json.dumps(req) + "\n")
+                self._proc.stdin.flush()
+                line = self._proc.stdout.readline()
+            except (BrokenPipeError, OSError) as e:
+                raise SessionDeadError(f"session {self.session_id} pipe broke: {e}") from e
+            if not line:
+                stderr = self._proc.stderr.read()
+                raise SessionDeadError(f"session {self.session_id} worker closed stdout: {stderr[-2000:]}")
+            resp = json.loads(line)
+            if resp.get("epoch") != self.epoch:
+                # Not expected to be reachable given one dedicated process
+                # per session and no respawning -- checked anyway, the same
+                # defensive posture NeuraBash's own handle validation takes
+                # toward its own process_epoch field, and cheap to verify.
+                raise SessionDeadError(
+                    f"epoch mismatch: session issued for {self.epoch!r}, response carries {resp.get('epoch')!r}"
+                )
+            if resp.get("request_id") != request_id:
+                raise SessionProtocolError(f"response request_id {resp.get('request_id')!r} != sent {request_id!r}")
+            return resp
+
+    def _teardown(self):
+        try:
+            if self._proc.poll() is None:
+                try:
+                    self._proc.stdin.close()
+                except Exception:
+                    pass
+                try:
+                    self._proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._proc.kill()
+                    self._proc.wait()
+        finally:
+            # subprocess.Popen does not close its pipe file objects on its
+            # own just because the process exited -- confirmed leaking real
+            # file descriptors (ResourceWarning on every session in the
+            # test suite) until explicitly closed here.
+            for pipe in (self._proc.stdin, self._proc.stdout, self._proc.stderr):
+                try:
+                    pipe.close()
+                except Exception:
+                    pass
+            try:
+                self._broker_server.shutdown()
+                self._broker_server.server_close()
+            except Exception:
+                pass
+            shutil.rmtree(self.depot_clone_dir, ignore_errors=True)
+            shutil.rmtree(self._tmp_root, ignore_errors=True)
+
+    def close(self):
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._teardown()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()

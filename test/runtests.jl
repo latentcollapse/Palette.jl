@@ -1,5 +1,6 @@
 using Test
 using Neura
+using JSON
 
 @testset "KernelState" begin
     reset_kernel_state()
@@ -164,4 +165,104 @@ end
 
     result = run_demo()
     @test result isa IntrospectionResult
+end
+
+@testset "EphemeralTool isolation" begin
+    reset_kernel_state()
+    state = get_kernel_state()
+
+    # ordinary ephemeral code works and does not leak into the persistent
+    # session's own eval_module
+    r1 = execute(EphemeralTool("helper(x) = x * 2; helper(21)"))
+    @test r1.result.success
+    @test r1.result.data == 42
+    @test !isdefined(state.eval_module, :helper)
+
+    # `import Mod: f` then a bare `function f(...)` is the confirmed real
+    # way to permanently extend a foreign generic function -- must be
+    # rejected before eval, not cleaned up after (Julia has no method
+    # deletion). Checked against REAL Base.show behavior, not the tool's
+    # own self-reported success/failure.
+    r2 = execute(EphemeralTool("import Base: show; function show(io::IO, x::Int); print(io, \"pwned\"); end"))
+    @test !r2.result.success
+    @test r2.result.error !== nothing && occursin("import", r2.result.error)
+    @test sprint(show, 42) == "42"
+
+    # a fully qualified `function Mod.name(...)` extends the same way with
+    # no `import` at all -- confirmed separately, must also be rejected
+    r3 = execute(EphemeralTool("function Base.show(io::IO, x::Int); print(io, \"pwned2\"); end"))
+    @test !r3.result.success
+    @test sprint(show, 42) == "42"
+
+    # the same qualified attempt, but joined onto a prior statement with a
+    # semicolon -- regression case: semicolon-joined statements parse as a
+    # NESTED :toplevel Expr that an earlier version of this check never
+    # recursed into, letting this exact shape bypass the guard silently
+    r3b = execute(EphemeralTool("x = 1; function Base.show(io::IO, x::Int); print(io, \"pwned3\"); end"))
+    @test !r3b.result.success
+    @test sprint(show, 42) == "42"
+
+    # a qualified def NESTED inside a function body -- regression case:
+    # an earlier version of this check only inspected top-level statements
+    # and their immediate :block/:toplevel children, missing anything
+    # nested one level deeper (inside a function body, let, if, for, ...)
+    r3c = execute(EphemeralTool("function outer(); function Base.show(io::IO, x::Int); print(io, \"n\"); end; end"))
+    @test !r3c.result.success
+    @test sprint(show, 42) == "42"
+
+    # `Base.include(...)` (qualified) loads and runs a file's contents
+    # with zero syntactic trace in the SUBMITTED source -- must be
+    # rejected outright, since there is nothing in the ephemeral tool's
+    # own source for this check to inspect once the file is loaded
+    mktemp() do path, io
+        write(io, "import Base: show; function show(io::IO, x::Int); print(io, \"file-pwned\"); end")
+        close(io)
+        r3d = execute(EphemeralTool("Base.include(@__MODULE__, \"$(path)\")"))
+        @test !r3d.result.success
+        @test sprint(show, 42) == "42"
+    end
+
+    # KNOWN, DOCUMENTED, UNCLOSABLE GAP -- not a regression, a permanent
+    # fact about running inside a language with reflective eval: a value
+    # only ASSEMBLED at runtime (here, a quoted Expr passed to Core.eval)
+    # has no syntactic trace in the submitted source at all, so no
+    # parse-time check can see it coming. This test exists so that a
+    # future change silently "closing" this without updating
+    # check_ephemeral_source!'s own docstring (which says explicitly this
+    # is a hygiene check, not a security boundary) gets caught by a test
+    # failure instead of quietly changing the security claim being made.
+    # Real isolation for genuinely untrusted code is spawn_child_worker
+    # (OS-level, already adversarially proven), not this same-process guard.
+    r3e = execute(EphemeralTool("Core.eval(Base, :(function show(io::IO, x::Int); print(io, \"PWNED2\"); end))"))
+    @test r3e.result.success  # succeeds -- this IS the documented open gap
+    @test sprint(show, 42) != "42"  # Base.show really is compromised at this point
+    # Restore Base.show can't be undone (Julia has no method deletion) --
+    # this test necessarily leaves Base.show permanently altered for the
+    # rest of THIS process. Acceptable here (test runs in its own `julia
+    # Pkg.test()` process, never reused), but never call this pattern
+    # against a persistent session worth continuing to trust.
+
+    # `using` alone (no import) remains fully unrestricted -- ephemeral
+    # tools keep unbounded power to USE anything, only extension is guarded
+    r4 = execute(EphemeralTool("using Statistics; Statistics.mean([1.0, 2.0, 3.0])"))
+    @test r4.result.success
+    @test r4.result.data == 2.0
+
+    # two ephemeral tools do not share state with each other either
+    execute(EphemeralTool("z = 999"))
+    r5 = execute(EphemeralTool("!@isdefined(z)"))
+    @test r5.result.success
+    @test r5.result.data == true
+
+    # every retirement leaves a mechanical, content-addressed provenance
+    # record -- cold by default (a file on disk), never preloaded
+    prov_path = joinpath(pwd(), ".neurajl", "provenance.jsonl")
+    @test isfile(prov_path)
+    lines = readlines(prov_path)
+    @test length(lines) >= 5
+    last_record = JSON.parse(lines[end])
+    @test last_record["schema"] == "neurajl.tool_capsule.v1"
+    @test haskey(last_record, "source_hash")
+    @test length(last_record["source_hash"]) == 64  # sha256 hex
+    rm(joinpath(pwd(), ".neurajl"); recursive=true, force=true)
 end
