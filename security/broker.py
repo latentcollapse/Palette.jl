@@ -110,11 +110,24 @@ class Broker:
         url = params.get("url")
         if not isinstance(url, str):
             raise CapabilityDenied("network_access requires a string 'url'")
+
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        # A "network_access" grant must not silently double as a host
+        # filesystem read: urllib.request.urlopen opens file:// URLs by
+        # default (confirmed: file:///etc/hostname reads the real host
+        # file, no network involved, from this broker process which runs
+        # unsandboxed with host privilege). That would let a grant meant
+        # to allow "http requests" instead bypass external_fs_write's
+        # entire allowlist from the read side. Scheme allowlist, not a
+        # blocklist, so a future urllib-supported scheme fails closed.
+        if parsed.scheme not in ("http", "https"):
+            raise CapabilityDenied(f"network_access only permits http/https URLs, got scheme {parsed.scheme!r}")
+
         allowed_hosts = cap.get("allowed_hosts")
         if allowed_hosts is not None:
-            from urllib.parse import urlparse
-
-            host = urlparse(url).hostname
+            host = parsed.hostname
             if host not in allowed_hosts:
                 raise CapabilityDenied(f"host {host} is not in this session's allowed_hosts {allowed_hosts}")
         # The broker performs the request itself, on the host, with the
@@ -208,13 +221,23 @@ class Broker:
                 f.write(json.dumps(receipt) + "\n")
 
 
+_MAX_REQUEST_BYTES = 1 << 20  # 1 MiB -- a worker holding unbounded power inside
+# its own sandbox is still an untrusted client of this unsandboxed host
+# process; an unterminated stream with no newline must not be allowed to
+# buffer forever and exhaust the broker's own memory.
+
+
 class _ConnHandler(socketserver.BaseRequestHandler):
     def handle(self):
         broker: Broker = self.server.broker  # type: ignore[attr-defined]
         f = self.request.makefile("rwb")
         try:
-            line = f.readline()
+            line = f.readline(_MAX_REQUEST_BYTES)
             if not line:
+                return
+            if len(line) >= _MAX_REQUEST_BYTES and not line.endswith(b"\n"):
+                f.write((json.dumps({"approved": False, "reason": "request exceeds maximum size"}) + "\n").encode())
+                f.flush()
                 return
             req = json.loads(line.decode())
             resp = broker.handle_request(req)
