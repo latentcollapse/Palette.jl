@@ -269,6 +269,54 @@ class TestBrokerMediatedCapabilities(SandboxTestCase):
         self.assertTrue(any(rec["category"] == "network_access" and rec["approved"] is False for rec in receipts))
 
 
+class TestNetworkRedirectSafety(unittest.TestCase):
+    """Direct Broker unit tests (no sandbox needed) -- regression for a
+    real bypass found by direct exploitation: an allowlisted host that
+    responds with an HTTP redirect to a DIFFERENT, non-allowlisted host
+    was silently followed by urllib's default opener, reaching the
+    disallowed host with the allowlist only ever having checked the FIRST
+    url."""
+
+    def setUp(self):
+        class _Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(handler_self):
+                if handler_self.path == "/redirect":
+                    handler_self.send_response(302)
+                    handler_self.send_header(
+                        "Location", f"http://localhost:{handler_self.server.server_address[1]}/secret"
+                    )
+                    handler_self.end_headers()
+                else:
+                    handler_self.send_response(200)
+                    handler_self.end_headers()
+                    handler_self.wfile.write(b"SECRET REACHED")
+
+            def log_message(handler_self, *args):
+                pass
+
+        self.httpd = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+        self.port = self.httpd.server_address[1]
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread.start()
+
+    def tearDown(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+    def test_redirect_to_disallowed_host_is_not_followed(self):
+        # allowlist covers the INITIAL host (127.0.0.1) but not the
+        # redirect target (localhost) -- confirmed exploitable before the
+        # fix: the redirect target's content ("SECRET REACHED") came back
+        # with the allowlist never having been asked about "localhost" at all.
+        broker = B.Broker(
+            {"network_access": {"allowed": True, "allowed_hosts": ["127.0.0.1"]}},
+            os.path.join(tempfile.mkdtemp(), "receipts.jsonl"), "redirect-test",
+        )
+        result = broker._handle_network_access({"url": f"http://127.0.0.1:{self.port}/redirect"})
+        self.assertEqual(result["status"], 302)
+        self.assertNotIn("SECRET", result["body_prefix"])
+
+
 class TestCeilingSubset(unittest.TestCase):
     """Fast, no sandbox: the C_child ⊆ C_caller logic in isolation."""
 
@@ -300,6 +348,29 @@ class TestCeilingSubset(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("not present", reason)
 
+    def test_omitted_allowed_hosts_against_host_restricted_parent_is_denied(self):
+        """Regression: a parent restricted to specific hosts previously let
+        a child omit allowed_hosts entirely (or pass it as null) and pass
+        the subset check -- "child said nothing about hosts" was silently
+        treated as "no widening", when omitting it actually means
+        unrestricted, which IS wider than a host-restricted parent.
+        Confirmed exploitable by direct testing before this fix."""
+        parent = {"network_access": {"allowed": True, "allowed_hosts": ["example.invalid"]}}
+        ok, reason = B.ceiling_is_subset({"network_access": {"allowed": True}}, parent)
+        self.assertFalse(ok)
+        self.assertIn("allowed_hosts", reason)
+
+        ok2, reason2 = B.ceiling_is_subset({"network_access": {"allowed": True, "allowed_hosts": None}}, parent)
+        self.assertFalse(ok2)
+        self.assertIn("allowed_hosts", reason2)
+
+    def test_real_host_subset_still_allowed(self):
+        """Not a false positive from the fix above: a child that DOES name
+        a real subset of the parent's allowed_hosts must still pass."""
+        parent = {"network_access": {"allowed": True, "allowed_hosts": ["a.invalid", "b.invalid"]}}
+        ok, _ = B.ceiling_is_subset({"network_access": {"allowed": True, "allowed_hosts": ["a.invalid"]}}, parent)
+        self.assertTrue(ok)
+
 
 class TestNestedChildWorker(SandboxTestCase):
     def setUp(self):
@@ -322,6 +393,7 @@ class TestNestedChildWorker(SandboxTestCase):
         t = threading.Thread(
             target=B.serve,
             args=(os.path.join(self.broker_socket_dir, "broker.sock"), ceiling, self.receipts_path, "nested-test", stop),
+            kwargs={"project_dir": PROJECT_DIR, "repo_dir": REPO_DIR},
             daemon=True,
         )
         t.start()
@@ -399,6 +471,34 @@ class TestNestedChildWorker(SandboxTestCase):
             stop.set()
             httpd.shutdown()
             httpd.server_close()
+
+    def test_child_workspace_param_cannot_pick_an_arbitrary_host_path(self):
+        """Regression test for a real bug found by direct exploitation: a
+        worker with a ceiling containing ONLY `spawn_child_worker` (no
+        `external_fs_write` at all) could previously name any host
+        directory as `child_workspace` in the request and have the broker
+        bind-mount it writable into the child -- a write attacker-chosen
+        outside any ceiling check. Independent host-side evidence: the
+        target directory is checked directly, not through the worker's
+        own self-report."""
+        attacker_chosen_dir = tempfile.mkdtemp(prefix="njl-attacker-target-")
+        stop = self._serve({"spawn_child_worker": {}})  # deliberately NO external_fs_write at all
+        try:
+            script = (
+                'using Neura; r = Neura.request_capability("spawn_child_worker", Dict('
+                '"ceiling" => Dict(), '
+                '"script" => "write(joinpath(pwd(), \\"ESCAPED.txt\\"), \\"no external_fs_write needed\\")", '
+                f'"child_workspace" => "{attacker_chosen_dir}")); println(r)'
+            )
+            r = self.run_script(script, broker_socket_dir=self.broker_socket_dir)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn('"approved" => true', r.stdout)  # the spawn itself is legitimate -- ceiling {} is a valid subset
+            self.assertFalse(
+                os.path.isfile(os.path.join(attacker_chosen_dir, "ESCAPED.txt")),
+                "child_workspace param let the request pick a real host write target with no ceiling check",
+            )
+        finally:
+            stop.set()
 
 
 class TestPackageManagement(SandboxTestCase):

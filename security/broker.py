@@ -33,6 +33,7 @@ full category list and which remain NOT YET PROVEN.
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -74,6 +75,20 @@ def ceiling_is_subset(requested: dict, parent: dict) -> tuple[bool, str]:
                 return False, "requested network_access=true but parent's ceiling has network_access=false"
             req_hosts = req_cap.get("allowed_hosts")
             parent_hosts = parent_cap.get("allowed_hosts")
+            # Confirmed by direct exploitation: a child omitting
+            # allowed_hosts entirely (or passing it as null) previously
+            # sailed through this check unexamined, even against a parent
+            # explicitly restricted to specific hosts -- "child asked for
+            # nothing about hosts" was silently treated as "no widening",
+            # when it actually means "unrestricted", which IS wider than a
+            # host-restricted parent. Only a parent that is ITSELF
+            # unrestricted (parent_hosts is None) can have a child that
+            # omits allowed_hosts without that being a widening.
+            if req_cap.get("allowed") and parent_hosts is not None and req_hosts is None:
+                return False, (
+                    "parent's network_access is restricted to allowed_hosts; a child request must name "
+                    "its own allowed_hosts subset explicitly, not omit it (omitting it means unrestricted)"
+                )
             if req_hosts is not None and parent_hosts is not None and not set(req_hosts).issubset(set(parent_hosts)):
                 return False, f"requested allowed_hosts {req_hosts} is not a subset of parent's {parent_hosts}"
         elif category == "package_management":
@@ -89,10 +104,39 @@ def ceiling_is_subset(requested: dict, parent: dict) -> tuple[bool, str]:
 
 
 class Broker:
-    def __init__(self, ceiling: dict[str, Any], receipt_log_path: str, session_id: str, depot_dir: str | None = None):
-        self.ceiling = ceiling
+    def __init__(
+        self,
+        ceiling: dict[str, Any],
+        receipt_log_path: str,
+        session_id: str,
+        depot_dir: str | None = None,
+        project_dir: str | None = None,
+        repo_dir: str | None = None,
+    ):
+        # Deep-copied, not stored by reference: confirmed by direct testing
+        # that a caller mutating the dict it passed in (e.g. appending to
+        # a nested allowed_dirs list) after construction silently widened
+        # THIS broker's own ceiling in place -- "fixed at broker start,
+        # never mutated by a request" (this file's own module docstring)
+        # was true against requests, but not against the host process that
+        # constructed it.
+        self.ceiling = copy.deepcopy(ceiling)
         self.receipt_log_path = receipt_log_path
         self.session_id = session_id
+        # This session's own trusted project/repo paths, established at
+        # broker construction time -- NOT accepted from a request. Found,
+        # by direct exploitation, that spawn_child_worker previously took
+        # `child_workspace`/`child_project`/`child_repo` straight from the
+        # REQUEST and bind-mounted them (workspace: writable) into the
+        # child with zero ceiling check: a worker holding a ceiling with
+        # ONLY spawn_child_worker (no external_fs_write at all) could pick
+        # any host directory as `child_workspace` and write into it. The
+        # fix is that a spawn request can no longer choose these paths at
+        # all -- it can only pick what the CEILING actually gates (which
+        # capabilities the child gets), never WHERE the child's filesystem
+        # view points.
+        self.project_dir = project_dir
+        self.repo_dir = repo_dir
         # This session's own private depot clone (see launch_worker.
         # create_session_depot), if one has been set up for it. Needed by
         # package_management: a bind mount is a live view of a directory,
@@ -132,6 +176,24 @@ class Broker:
         target.write_text(content)
         return {"path": str(target), "bytes_written": len(content.encode())}
 
+    class _NoRedirect(urllib.request.HTTPErrorProcessor):
+        """`urllib`'s default opener follows 3xx redirects transparently --
+        confirmed by direct exploitation: an allowlisted host returning a
+        redirect to a DIFFERENT, non-allowlisted host was silently
+        followed, reaching the disallowed host with no second check at
+        all. `_handle_network_access` only ever validates the URL it was
+        given; a redirect target is a different URL the allowlist was
+        never asked about. Disabling redirect-following (returning the
+        3xx response as ordinary data instead) means a caller that wants
+        to follow one must make an explicit new `network_access` request
+        for the target -- which gets checked exactly like any other URL,
+        instead of silently trusted because the first hop was."""
+
+        def http_response(self, request, response):
+            return response
+
+        https_response = http_response
+
     def _handle_network_access(self, params: dict) -> Any:
         cap = self.ceiling.get("network_access")
         if not cap or not cap.get("allowed"):
@@ -160,8 +222,11 @@ class Broker:
             if host not in allowed_hosts:
                 raise CapabilityDenied(f"host {host} is not in this session's allowed_hosts {allowed_hosts}")
         # The broker performs the request itself, on the host, with the
-        # host's real network namespace -- the worker never does.
-        with urllib.request.urlopen(url, timeout=5) as resp:
+        # host's real network namespace -- the worker never does. No
+        # redirect-following (see _NoRedirect): a 3xx response is returned
+        # as-is rather than silently chased to an unchecked host.
+        opener = urllib.request.build_opener(self._NoRedirect)
+        with opener.open(url, timeout=5) as resp:
             body = resp.read(2048)
         return {"url": url, "status": resp.status, "body_prefix": body[:200].decode(errors="replace")}
 
@@ -221,21 +286,33 @@ class Broker:
         own request. The worker cannot do this itself -- it has no
         namespace-creation privilege (see the adversarial self-spawn test in
         docs/EXPERIMENT_002_AUTHORITY.md); only the broker, unsandboxed on
-        the host, can actually launch the child."""
+        the host, can actually launch the child.
+
+        `child_workspace`/`child_project`/`child_repo` are NEVER taken from
+        `params` -- confirmed by direct exploitation that a worker whose
+        ceiling contained only `spawn_child_worker` (no external_fs_write
+        at all) could name any host directory as `child_workspace` and get
+        it bind-mounted writable into the child, and any host directory as
+        `child_project`/`child_repo` and get it bind-mounted readable. A
+        request may only choose WHICH capabilities the child gets (checked
+        against this session's own ceiling below); it can never choose
+        WHERE the child's filesystem view points -- that always comes from
+        this broker's own trusted, session-established paths.
+        """
         requested_ceiling = params.get("ceiling", {})
         if not isinstance(requested_ceiling, dict):
             raise CapabilityDenied("spawn_child_worker requires a 'ceiling' object")
         ok, reason = ceiling_is_subset(requested_ceiling, self.ceiling)
         if not ok:
             raise CapabilityDenied(f"requested child ceiling is not a subset of this session's ceiling: {reason}")
+        if self.project_dir is None or self.repo_dir is None:
+            raise CapabilityDenied("no session project/repo is configured for this broker -- spawn_child_worker requires one")
         script = params.get("script")
-        child_workspace = params.get("child_workspace")
-        child_project = params.get("child_project")
-        child_repo = params.get("child_repo")
-        if not all(isinstance(x, str) for x in (script, child_workspace, child_project, child_repo)):
-            raise CapabilityDenied(
-                "spawn_child_worker requires string 'script', 'child_workspace', 'child_project', 'child_repo'"
-            )
+        if not isinstance(script, str):
+            raise CapabilityDenied("spawn_child_worker requires a string 'script'")
+        child_workspace = tempfile.mkdtemp(prefix="neurajl-child-ws-")
+        child_project = self.project_dir
+        child_repo = self.repo_dir
         from launch_worker import create_session_depot, run_worker
 
         # Only children that actually requested package_management pay for
@@ -264,6 +341,8 @@ class Broker:
             child_receipts,
             f"{self.session_id}/child",
             depot_dir=child_depot_dir,
+            project_dir=child_project,
+            repo_dir=child_repo,
         )
         try:
             result = run_worker(
@@ -280,6 +359,7 @@ class Broker:
             child_server.shutdown()
             child_server.server_close()
             shutil.rmtree(child_sock_dir, ignore_errors=True)
+            shutil.rmtree(child_workspace, ignore_errors=True)
             if child_depot_dir:
                 shutil.rmtree(child_depot_dir, ignore_errors=True)
         return {
@@ -312,6 +392,17 @@ class Broker:
             approved = True
         except CapabilityDenied as e:
             reason = e.reason
+        except Exception as e:
+            # Confirmed by direct testing: a genuinely malformed request
+            # (e.g. a path containing a NUL byte, rejected deep inside
+            # pathlib/os rather than by this file's own isinstance checks)
+            # raised uncaught, skipping _write_receipt entirely and
+            # violating this module's own doctrine that a receipt is
+            # written "regardless of outcome". Any handler exception now
+            # fails closed with a receipt, distinguished from an ordinary
+            # CapabilityDenied by category so a bug doesn't read as a
+            # deliberate policy decision in the audit log.
+            reason = f"internal error handling request (not a policy denial): {e}"
         self._write_receipt(req_id, category, params, approved, result, reason)
         resp = {"id": req_id, "approved": approved}
         if approved:
@@ -378,10 +469,12 @@ def serve(
     session_id: str,
     stop_event: threading.Event | None = None,
     depot_dir: str | None = None,
+    project_dir: str | None = None,
+    repo_dir: str | None = None,
 ):
     if os.path.exists(sock_path):
         os.unlink(sock_path)
-    broker = Broker(ceiling, receipt_log_path, session_id, depot_dir=depot_dir)
+    broker = Broker(ceiling, receipt_log_path, session_id, depot_dir=depot_dir, project_dir=project_dir, repo_dir=repo_dir)
     server = _UnixSocketServer(sock_path, _ConnHandler)
     server.broker = broker  # type: ignore[attr-defined]
     os.chmod(sock_path, 0o666)  # the sandboxed worker connects as a different uid view
