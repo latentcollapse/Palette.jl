@@ -1,7 +1,5 @@
 /** One scored A/B/C trial. The task fixture is process.cwd(). */
-import { readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import type { Model } from "@earendil-works/pi-ai";
 import { AuthStorage } from "../packages/coding-agent/src/core/auth-storage.js";
 import { ModelRegistry } from "../packages/coding-agent/src/core/model-registry.js";
@@ -35,10 +33,15 @@ const model: Model<"openai-completions"> = {
 };
 
 const cwd = process.cwd();
-const authStorage = localBaseUrl
-	? AuthStorage.inMemory()
-	: AuthStorage.create(join(homedir(), ".prime", "agent", "auth.json"), { usePrimeCliConfig: false });
+const keyFile = process.env.ABC_OPENROUTER_KEY_FILE;
+let openRouterKey = keyFile ? readFileSync(keyFile, "utf8").trim() : undefined;
+delete process.env.ABC_OPENROUTER_KEY_FILE;
+if (keyFile) unlinkSync(keyFile);
+if (!localBaseUrl && !openRouterKey) throw new Error("OpenRouter key was not provided to the trial process");
+const authStorage = AuthStorage.inMemory();
 if (localBaseUrl) authStorage.setRuntimeApiKey("local-llamacpp", "local");
+else if (openRouterKey) authStorage.setRuntimeApiKey("openrouter", openRouterKey);
+openRouterKey = undefined;
 const modelRegistry = ModelRegistry.create(authStorage);
 const settingsManager = SettingsManager.create(cwd, agentDir);
 const resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
