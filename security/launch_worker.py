@@ -70,15 +70,30 @@ def _clone_depot(real_depot: str, clone_root: str) -> str:
     """
     dest = tempfile.mkdtemp(dir=clone_root, prefix="depot-")
     shutil.rmtree(dest)  # cp needs the destination to not exist yet
-    subprocess.run(["cp", "-a", "--reflink=auto", real_depot, dest], check=True)
+    subprocess.run(["cp", "-a", "--reflink=auto", real_depot, dest], check=True, stdin=subprocess.DEVNULL)
     return dest
 
 
 def resolve_real_julia_binary() -> str:
     """Resolve past the juliaup shim to the real julia binary -- the shim
     itself does version-selection logic this sandbox doesn't need or want
-    to grant filesystem access to resolve."""
-    out = subprocess.run(["julia", "-e", "print(Sys.BINDIR)"], capture_output=True, text=True, check=True)
+    to grant filesystem access to resolve.
+
+    `stdin=subprocess.DEVNULL` is not optional here: confirmed by direct
+    testing that `julia -e ...` invoked WITHOUT an explicit stdin (the
+    default: inherit the caller's own stdin fd) silently breaks the
+    CALLER's own subsequent reads from its own stdin -- invisible for
+    every one-shot caller so far (nothing before security/session_cli.py
+    depended on a live stdin pipe surviving past this call), but fatal for
+    a persistent process like session_cli.py, which reads turn requests
+    from its own stdin for its entire lifetime. This one call, running
+    inside a session's broker thread the moment any ephemeral turn
+    requested spawn_child_worker, would have corrupted that whole
+    session's ability to receive any further turn after the first one.
+    """
+    out = subprocess.run(
+        ["julia", "-e", "print(Sys.BINDIR)"], capture_output=True, text=True, check=True, stdin=subprocess.DEVNULL,
+    )
     bindir = out.stdout.strip()
     return str(Path(bindir) / "julia")
 
@@ -218,7 +233,13 @@ def run_worker(
             network_enabled=network_enabled,
         )
         argv += ["--", julia_bin, "--startup-file=no", "-e", script]
-        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        # stdin=DEVNULL: see resolve_real_julia_binary's docstring -- the
+        # exact same class of bug (an unspecified stdin inherits the
+        # caller's, and a `julia -e` invocation silently breaks that
+        # caller's own future stdin reads), reachable here via
+        # spawn_child_worker's broker handler running inside a persistent
+        # session's own process.
+        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
     finally:
         if owns_clone:
             shutil.rmtree(depot_clone_dir, ignore_errors=True)
