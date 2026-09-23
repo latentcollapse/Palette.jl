@@ -504,6 +504,12 @@ export class CompactionSkippedError extends Error {}
 /** Thrown when a session_before_refine extension skips the refinement round. */
 export class RefineSkippedError extends Error {}
 
+export type SessionBaseToolsFactory = (sessionId: string) => {
+	tools: Record<string, AgentTool>;
+	/** Release resources owned by this specific agent session. */
+	dispose?: () => void | Promise<void>;
+};
+
 export interface AgentSessionConfig {
 	agent: Agent;
 	sessionManager: SessionManager;
@@ -547,6 +553,15 @@ export interface AgentSessionConfig {
 	 * a definition-first registry even when callers provide plain AgentTool instances.
 	 */
 	baseToolsOverride?: Record<string, AgentTool>;
+	/**
+	 * Construct base tools once per AgentSession, including each RLM child.
+	 * The returned tools belong to that session and must not be shared with
+	 * another agent. `dispose` runs when that session is disposed, after child
+	 * sessions have begun their own teardown. This supports persistent operator
+	 * runtimes without letting a child inherit its parent's mutable bindings.
+	 * The factory is mutually exclusive with `baseToolsOverride`.
+	 */
+	baseToolsFactory?: SessionBaseToolsFactory;
 	extensionRunnerRef?: { current?: ExtensionRunner };
 	sessionStartEvent?: SessionStartEvent;
 	rlmDepth?: number;
@@ -1678,6 +1693,7 @@ export class AgentSession {
 	private _agentObserveController?: AgentObserveController;
 	private _mcpManager?: McpManager;
 	private _baseToolsOverride?: Record<string, AgentTool>;
+	private _baseToolsFactory?: SessionBaseToolsFactory;
 	private _sessionStartEvent: SessionStartEvent;
 	private _extensionUIContext?: ExtensionUIContext;
 	private _extensionCommandContextActions?: ExtensionCommandContextActions;
@@ -1803,7 +1819,13 @@ export class AgentSession {
 		this._agentMessageController = config.agentMessageController;
 		this._agentObserveController = config.agentObserveController;
 		this._mcpManager = config.mcpManager;
-		this._baseToolsOverride = config.baseToolsOverride;
+		if (config.baseToolsOverride && config.baseToolsFactory) {
+			throw new Error("baseToolsOverride and baseToolsFactory are mutually exclusive");
+		}
+		this._baseToolsFactory = config.baseToolsFactory;
+		const baseToolsScope = config.baseToolsFactory?.(this.sessionId);
+		this._baseToolsOverride = baseToolsScope?.tools ?? config.baseToolsOverride;
+		if (baseToolsScope?.dispose) this.registerDisposeCallback(baseToolsScope.dispose);
 		this._sessionStartEvent = config.sessionStartEvent ?? { type: "session_start", reason: "startup" };
 		const headerRlmDepth = this.sessionManager.getHeader()?.rlmDepth;
 		this._rlmDepth =
@@ -11286,7 +11308,8 @@ export class AgentSession {
 			activeToolNames: this.getActiveToolNames(),
 			allowedToolNames: this._allowedToolNames ? [...this._allowedToolNames] : undefined,
 			customTools: [...this._customTools],
-			baseToolsOverride: this._baseToolsOverride,
+			baseToolsOverride: this._baseToolsFactory ? undefined : this._baseToolsOverride,
+			baseToolsFactory: this._baseToolsFactory,
 			includeGoals: this._includeGoals,
 			includeCompactSkill: this._includeCompactSkill,
 			rlmDepth: this._rlmDepth + 1,
@@ -11356,6 +11379,7 @@ export class AgentSession {
 			initialActiveToolNames: options.activeToolNames,
 			allowedToolNames: options.allowedToolNames,
 			baseToolsOverride: options.baseToolsOverride,
+			baseToolsFactory: options.baseToolsFactory,
 			includeGoals: options.includeGoals,
 			includeCompactSkill: options.includeCompactSkill,
 			rlmDepth: options.rlmDepth,

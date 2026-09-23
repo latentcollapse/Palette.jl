@@ -224,6 +224,7 @@ describe("AgentSession rlm recursion", () => {
 			settingsManager?: SettingsManager;
 			extensionsResult?: LoadExtensionsResult;
 			baseToolsOverride?: ConstructorParameters<typeof AgentSession>[0]["baseToolsOverride"];
+			baseToolsFactory?: (sessionId: string) => { tools: Record<string, AgentTool>; dispose: () => void };
 		} = {},
 	): AgentSession {
 		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
@@ -274,6 +275,7 @@ describe("AgentSession rlm recursion", () => {
 			subagentRuntimeHost: options.subagentRuntimeHost,
 			customTools: options.customTools,
 			baseToolsOverride: options.baseToolsOverride,
+			baseToolsFactory: options.baseToolsFactory,
 			rlmDepth: options.depth,
 			rlmMaxDepth: options.maxDepth,
 			rlmSessionDir: options.rlmSessionDir,
@@ -548,6 +550,37 @@ describe("AgentSession rlm recursion", () => {
 		// setActiveToolsByName silently drops the unknown name -- the child
 		// ends up with zero callable tools, not a fallback to ipython.
 		expect(child.getActiveToolNames()).toEqual(["custom-substrate-stub"]);
+	});
+
+	it("gives a spawned child a separate stateful base tool and disposes both scopes", async () => {
+		const disposed: string[] = [];
+		const root = createSession({
+			baseToolsFactory: (sessionId) => {
+				let binding = "unset";
+				const tool = neuraStub("scoped");
+				tool.execute = async (_id, params) => {
+					const code = (params as { code: string }).code;
+					if (code !== "get") binding = code;
+					return { content: [{ type: "text", text: binding }], details: undefined };
+				};
+				return {
+					tools: { scoped: tool },
+					dispose: () => {
+						disposed.push(sessionId);
+					},
+				};
+			},
+		});
+		await root.getToolDefinition("scoped")!.execute("p1", { code: "parent" }, undefined, undefined, undefined as any);
+		const run = await root.runRlmChild("read the scoped tool");
+		const child = root.getRlmChildSession(basename(run.session_dir!));
+		expect(child).toBeDefined();
+		const result = await child!
+			.getToolDefinition("scoped")!
+			.execute("c1", { code: "get" }, undefined, undefined, undefined as any);
+		expect(result.content[0]).toMatchObject({ text: "unset" });
+		await root.disposeAsync();
+		expect(disposed).toEqual(expect.arrayContaining([root.sessionId, child!.sessionId]));
 	});
 
 	// RLM reachability spike: reuses createSession above. Every test here calls

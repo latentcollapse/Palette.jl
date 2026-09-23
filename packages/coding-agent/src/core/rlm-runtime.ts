@@ -1,6 +1,6 @@
 import type { AgentTool, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model, ServiceTier } from "@earendil-works/pi-ai";
-import type { AgentSession, RlmChildAgentStatus } from "./agent-session.js";
+import type { AgentSession, RlmChildAgentStatus, SessionBaseToolsFactory } from "./agent-session.js";
 import type { ToolDefinition } from "./extensions/index.js";
 import type { HostRequestHandler } from "./kernel/index.js";
 import { THINKING_LEVELS } from "./thinking-levels.js";
@@ -469,6 +469,7 @@ export interface CreateRlmSubagentRuntimeOptions {
 	 * silently construct an ipython kernel of its own.
 	 */
 	baseToolsOverride?: Record<string, AgentTool>;
+	baseToolsFactory?: SessionBaseToolsFactory;
 	includeGoals: boolean;
 	includeCompactSkill: boolean;
 	rlmDepth: number;

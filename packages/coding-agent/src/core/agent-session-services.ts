@@ -4,6 +4,7 @@ import type { Model, ServiceTier } from "@earendil-works/pi-ai";
 import { getAgentDir } from "../config.js";
 import type { AgentSessionMessageController } from "./agent-messages.js";
 import type { AgentObserveController } from "./agent-observe.js";
+import type { SessionBaseToolsFactory } from "./agent-session.js";
 import type { AgentExecutionMode } from "./agent-session-config.js";
 import { installAgentTraceUpload } from "./agent-traces.js";
 import { AuthStorage } from "./auth-storage.js";
@@ -68,6 +69,7 @@ export interface AgentSessionCreationOptions {
 	 * agent-session.ts for the full contract.
 	 */
 	baseToolsOverride?: Record<string, AgentTool>;
+	baseToolsFactory?: SessionBaseToolsFactory;
 	includeGoals?: boolean;
 	includeCompactSkill?: boolean;
 	agentMessageController?: AgentSessionMessageController;
@@ -281,6 +283,7 @@ export async function createAgentSessionFromServices(
 		initialActiveToolNames: options.initialActiveToolNames,
 		allowedToolNames: options.allowedToolNames,
 		baseToolsOverride: options.baseToolsOverride,
+		baseToolsFactory: options.baseToolsFactory,
 		includeGoals: options.includeGoals,
 		includeCompactSkill: options.includeCompactSkill,
 		agentMessageController: options.agentMessageController,

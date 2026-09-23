@@ -381,6 +381,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		initialActiveToolNames,
 		allowedToolNames,
 		baseToolsOverride: options.baseToolsOverride,
+		baseToolsFactory: options.baseToolsFactory,
 		includeGoals,
 		includeCompactSkill: options.includeCompactSkill,
 		rlmHeartbeatController: options.rlmHeartbeatController,
