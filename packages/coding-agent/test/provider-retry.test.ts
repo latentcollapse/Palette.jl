@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import { createModelRequestBudget } from "../src/core/model-request-budget.js";
 import {
 	completeWithProviderRetry,
 	DEFAULT_PROVIDER_WAIT_POLICY,
@@ -37,6 +38,50 @@ function providerError(kind?: string): AssistantMessage {
 }
 
 describe("completeWithProviderRetry", () => {
+	it("uses exact exponential delays when retry jitter is disabled", () => {
+		const policy = { baseDelayMs: 2000, maxRetryDelayMs: 12_000, jitter: false };
+		expect(providerRetryDelay(1, undefined, policy, () => 0)).toEqual({ kind: "wait", delayMs: 2000 });
+		expect(providerRetryDelay(2, undefined, policy, () => 1)).toEqual({ kind: "wait", delayMs: 4000 });
+		expect(providerRetryDelay(3, undefined, policy, () => 0)).toEqual({ kind: "wait", delayMs: 8000 });
+	});
+
+	it("shares the model request cap with one-shot requests and their retries", async () => {
+		const budget = createModelRequestBudget(2);
+		let attempts = 0;
+		const policy = {
+			enabled: true,
+			maxRetries: 3,
+			baseDelayMs: 0,
+			maxRetryDelayMs: 0,
+			requestBudget: budget,
+		};
+		const result = await completeWithProviderRetry(
+			async () => {
+				attempts += 1;
+				return attempts === 1
+					? providerError("server_error")
+					: ({ ...providerError(), stopReason: "stop", errorMessage: undefined } as AssistantMessage);
+			},
+			{ policy },
+		);
+
+		expect(result.stopReason).toBe("stop");
+		expect(attempts).toBe(2);
+		expect(budget.attempts).toBe(2);
+		expect(budget.requestErrors).toBe(1);
+		await expect(
+			completeWithProviderRetry(
+				async () => {
+					attempts += 1;
+					return result;
+				},
+				{ policy },
+			),
+		).rejects.toThrow("budget exhausted");
+		expect(attempts).toBe(2);
+		expect(budget.exhausted).toBe(true);
+	});
+
 	it("jitters the computed backoff while honoring a server wait exactly", () => {
 		const policy = { baseDelayMs: 2000, maxRetryDelayMs: 60_000 };
 		expect(providerRetryDelay(1, undefined, policy, () => 0)).toEqual({ kind: "wait", delayMs: 1500 });

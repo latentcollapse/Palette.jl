@@ -216,6 +216,7 @@ import {
 	RLM_CHILD_TERMINAL_NOTICE_CUSTOM_TYPE,
 } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
+import type { ModelRequestBudget } from "./model-request-budget.js";
 import { findExactModelReferenceMatch } from "./model-resolver.js";
 import { throwIfPromptAdmissionCancelled } from "./prompt-admission.js";
 import { expandPromptTemplate, type PromptTemplate, parseCommandArgs } from "./prompt-templates.js";
@@ -562,6 +563,7 @@ export interface AgentSessionConfig {
 	 * The factory is mutually exclusive with `baseToolsOverride`.
 	 */
 	baseToolsFactory?: SessionBaseToolsFactory;
+	modelRequestBudget?: ModelRequestBudget;
 	extensionRunnerRef?: { current?: ExtensionRunner };
 	sessionStartEvent?: SessionStartEvent;
 	rlmDepth?: number;
@@ -1694,6 +1696,7 @@ export class AgentSession {
 	private _mcpManager?: McpManager;
 	private _baseToolsOverride?: Record<string, AgentTool>;
 	private _baseToolsFactory?: SessionBaseToolsFactory;
+	private _modelRequestBudget?: ModelRequestBudget;
 	private _sessionStartEvent: SessionStartEvent;
 	private _extensionUIContext?: ExtensionUIContext;
 	private _extensionCommandContextActions?: ExtensionCommandContextActions;
@@ -1823,6 +1826,7 @@ export class AgentSession {
 			throw new Error("baseToolsOverride and baseToolsFactory are mutually exclusive");
 		}
 		this._baseToolsFactory = config.baseToolsFactory;
+		this._modelRequestBudget = config.modelRequestBudget;
 		const baseToolsScope = config.baseToolsFactory?.(this.sessionId);
 		this._baseToolsOverride = baseToolsScope?.tools ?? config.baseToolsOverride;
 		if (baseToolsScope?.dispose) this.registerDisposeCallback(baseToolsScope.dispose);
@@ -8954,7 +8958,7 @@ export class AgentSession {
 					// reasoning effort for the summary model.
 					undefined,
 					summaryCall,
-					providerRetryPolicy(this.settingsManager),
+					providerRetryPolicy(this.settingsManager, this._modelRequestBudget),
 					this.sessionId,
 				));
 			}
@@ -9543,7 +9547,7 @@ export class AgentSession {
 			refinementModel.headers,
 			signal,
 			this.thinkingLevel,
-			providerRetryPolicy(this.settingsManager),
+			providerRetryPolicy(this.settingsManager, this._modelRequestBudget),
 			this.sessionId,
 		);
 	}
@@ -9959,7 +9963,7 @@ export class AgentSession {
 			history,
 			refinementModel.model,
 			refinementModel.apiKey,
-			{ ...options, retry: providerRetryPolicy(this.settingsManager) },
+			{ ...options, retry: providerRetryPolicy(this.settingsManager, this._modelRequestBudget) },
 			refinementModel.headers,
 			signal,
 			this.thinkingLevel,
@@ -11310,6 +11314,7 @@ export class AgentSession {
 			customTools: [...this._customTools],
 			baseToolsOverride: this._baseToolsFactory ? undefined : this._baseToolsOverride,
 			baseToolsFactory: this._baseToolsFactory,
+			modelRequestBudget: this._modelRequestBudget,
 			includeGoals: this._includeGoals,
 			includeCompactSkill: this._includeCompactSkill,
 			rlmDepth: this._rlmDepth + 1,
@@ -11380,6 +11385,7 @@ export class AgentSession {
 			allowedToolNames: options.allowedToolNames,
 			baseToolsOverride: options.baseToolsOverride,
 			baseToolsFactory: options.baseToolsFactory,
+			modelRequestBudget: options.modelRequestBudget,
 			includeGoals: options.includeGoals,
 			includeCompactSkill: options.includeCompactSkill,
 			rlmDepth: options.rlmDepth,
@@ -13448,6 +13454,7 @@ export class AgentSession {
 		const delay = providerRetryDelay(this._retryAttempt, providerStreamFailureRetryAfterMs(message), {
 			baseDelayMs: settings.baseDelayMs,
 			maxRetryDelayMs,
+			jitter: settings.jitter,
 		});
 		if (delay.kind === "exceeds-cap") {
 			this._markProviderAuthStaleForRetryFailure(message, options);
@@ -14713,7 +14720,7 @@ export class AgentSession {
 					customInstructions,
 					replaceInstructions,
 					reserveTokens: branchSummarySettings.reserveTokens,
-					retry: providerRetryPolicy(this.settingsManager),
+					retry: providerRetryPolicy(this.settingsManager, this._modelRequestBudget),
 				});
 				if (result.aborted) {
 					return { cancelled: true, aborted: true };

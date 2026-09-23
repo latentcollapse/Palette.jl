@@ -336,6 +336,7 @@ export class AgentSessionRuntime implements SubagentRuntimeHost {
 					initialActiveToolNames: options.activeToolNames,
 					allowedToolNames: options.allowedToolNames,
 					customTools: options.customTools,
+					modelRequestBudget: options.modelRequestBudget,
 					includeGoals: options.includeGoals,
 					includeCompactSkill: options.includeCompactSkill,
 					rlmDepth: options.rlmDepth,

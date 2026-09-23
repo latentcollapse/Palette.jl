@@ -14,6 +14,7 @@ import { createHerdrAgentStateExtension } from "./extensions/builtin/herdr-agent
 import type { SessionStartEvent, ToolDefinition } from "./extensions/index.js";
 import { McpManager } from "./mcp/mcp-manager.js";
 import { ModelRegistry } from "./model-registry.js";
+import type { ModelRequestBudget } from "./model-request-budget.js";
 import { DefaultResourceLoader, type DefaultResourceLoaderOptions, type ResourceLoader } from "./resource-loader.js";
 import type { SubagentRuntimeHost } from "./rlm-runtime.js";
 import { type CreateAgentSessionResult, createAgentSession } from "./sdk.js";
@@ -70,6 +71,7 @@ export interface AgentSessionCreationOptions {
 	 */
 	baseToolsOverride?: Record<string, AgentTool>;
 	baseToolsFactory?: SessionBaseToolsFactory;
+	modelRequestBudget?: ModelRequestBudget;
 	includeGoals?: boolean;
 	includeCompactSkill?: boolean;
 	agentMessageController?: AgentSessionMessageController;
@@ -284,6 +286,7 @@ export async function createAgentSessionFromServices(
 		allowedToolNames: options.allowedToolNames,
 		baseToolsOverride: options.baseToolsOverride,
 		baseToolsFactory: options.baseToolsFactory,
+		modelRequestBudget: options.modelRequestBudget,
 		includeGoals: options.includeGoals,
 		includeCompactSkill: options.includeCompactSkill,
 		agentMessageController: options.agentMessageController,

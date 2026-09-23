@@ -3,6 +3,7 @@ import type { Api, Model, ServiceTier } from "@earendil-works/pi-ai";
 import type { AgentSession, RlmChildAgentStatus, SessionBaseToolsFactory } from "./agent-session.js";
 import type { ToolDefinition } from "./extensions/index.js";
 import type { HostRequestHandler } from "./kernel/index.js";
+import type { ModelRequestBudget } from "./model-request-budget.js";
 import { THINKING_LEVELS } from "./thinking-levels.js";
 
 /** Request emitted by `rlm.spawn`; cellSourceCode preserves the spawning cell for display. */
@@ -470,6 +471,7 @@ export interface CreateRlmSubagentRuntimeOptions {
 	 */
 	baseToolsOverride?: Record<string, AgentTool>;
 	baseToolsFactory?: SessionBaseToolsFactory;
+	modelRequestBudget?: ModelRequestBudget;
 	includeGoals: boolean;
 	includeCompactSkill: boolean;
 	rlmDepth: number;

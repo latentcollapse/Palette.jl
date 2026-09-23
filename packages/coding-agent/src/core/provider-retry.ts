@@ -1,6 +1,14 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { sleep } from "../utils/sleep.js";
+import { type ModelRequestBudget, recordModelRequestUsage } from "./model-request-budget.js";
 import type { SettingsManager } from "./settings-manager.js";
+
+export class ModelRequestBudgetExceededError extends Error {
+	constructor(maxAttempts: number) {
+		super(`Experiment model request budget exhausted (${maxAttempts} attempts)`);
+		this.name = "ModelRequestBudgetExceededError";
+	}
+}
 
 /**
  * The single retry policy (permanent kinds, Retry-After-aware capped delays),
@@ -11,14 +19,21 @@ export interface ProviderRetryPolicy {
 	enabled: boolean;
 	maxRetries: number;
 	baseDelayMs: number;
+	jitter?: boolean;
 	/** Max server-requested retry delay before giving up; 0 disables the cap. */
 	maxRetryDelayMs: number;
+	/** Shared trial ledger for all model requests in this agent session. */
+	requestBudget?: ModelRequestBudget;
 }
 
-export function providerRetryPolicy(settingsManager: SettingsManager): ProviderRetryPolicy {
+export function providerRetryPolicy(
+	settingsManager: SettingsManager,
+	requestBudget?: ModelRequestBudget,
+): ProviderRetryPolicy {
 	return {
 		...settingsManager.getRetrySettings(),
 		maxRetryDelayMs: settingsManager.getProviderRetrySettings().maxRetryDelayMs,
+		requestBudget,
 	};
 }
 
@@ -89,7 +104,7 @@ const MAX_TIMER_DELAY_MS = 2_147_483_647;
 export function providerRetryDelay(
 	attempt: number,
 	retryAfterMs: number | undefined,
-	policy: Pick<ProviderRetryPolicy, "baseDelayMs" | "maxRetryDelayMs">,
+	policy: Pick<ProviderRetryPolicy, "baseDelayMs" | "maxRetryDelayMs" | "jitter">,
 	rng: () => number = Math.random,
 ): ProviderRetryDelay {
 	if (retryAfterMs !== undefined && policy.maxRetryDelayMs > 0 && retryAfterMs > policy.maxRetryDelayMs) {
@@ -99,7 +114,7 @@ export function providerRetryDelay(
 	if (retryAfterMs !== undefined && retryAfterMs >= backoffMs) {
 		return { kind: "wait", delayMs: Math.min(retryAfterMs, MAX_TIMER_DELAY_MS) };
 	}
-	const jitteredMs = providerWaitJitter(backoffMs, rng);
+	const jitteredMs = policy.jitter === false ? backoffMs : providerWaitJitter(backoffMs, rng);
 	const flooredMs = Math.max(jitteredMs, retryAfterMs ?? 0);
 	const clampedMs = Math.min(flooredMs, MAX_TIMER_DELAY_MS);
 	return { kind: "wait", delayMs: clampedMs };
@@ -117,7 +132,17 @@ export async function completeWithProviderRetry(
 	const maxRetries = policy.enabled ? policy.maxRetries : 0;
 	let retriesPerformed = 0;
 	for (;;) {
+		if (policy.requestBudget) {
+			if (policy.requestBudget.attempts >= policy.requestBudget.maxAttempts) {
+				policy.requestBudget.exhausted = true;
+				throw new ModelRequestBudgetExceededError(policy.requestBudget.maxAttempts);
+			}
+			policy.requestBudget.attempts += 1;
+		}
 		const message = await attemptCompletion();
+		if (policy.requestBudget) {
+			recordModelRequestUsage(policy.requestBudget, message.usage, message.stopReason === "error");
+		}
 		if (message.stopReason !== "error") {
 			return message;
 		}

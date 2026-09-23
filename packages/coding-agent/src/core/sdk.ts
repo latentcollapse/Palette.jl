@@ -1,6 +1,13 @@
 import { join } from "node:path";
 import { Agent, type AgentMessage, type ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { clampServiceTier, clampThinkingLevel, type Message, type Model, streamSimple } from "@earendil-works/pi-ai";
+import {
+	clampServiceTier,
+	clampThinkingLevel,
+	createAssistantMessageEventStream,
+	type Message,
+	type Model,
+	streamSimple,
+} from "@earendil-works/pi-ai";
 import { getAgentDir } from "../config.js";
 import { AgentSession } from "./agent-session.js";
 import type { AgentSessionCreationOptions } from "./agent-session-services.js";
@@ -12,6 +19,7 @@ import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefi
 import { McpManager } from "./mcp/mcp-manager.js";
 import { convertToLlm } from "./messages.js";
 import { ModelRegistry } from "./model-registry.js";
+import { recordModelRequestUsage } from "./model-request-budget.js";
 import { findInitialModel, findSessionModelWithReadinessWait } from "./model-resolver.js";
 import {
 	instrumentConvertToLlm,
@@ -314,19 +322,60 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			tools: [],
 		},
 		convertToLlm: instrumentConvertToLlm(requestTimingEnabled, convertToLlmWithBlockImages),
-		streamFn: instrumentStreamFn(requestTimingEnabled, async (model, context, options) => {
-			const auth = await modelRegistry.getApiKeyAndHeaders(model, options?.headers);
+		streamFn: instrumentStreamFn(requestTimingEnabled, async (model, context, streamOptions) => {
+			const auth = await modelRegistry.getApiKeyAndHeaders(model, streamOptions?.headers);
 			if (!auth.ok) {
 				throw new Error(auth.error);
 			}
 			const providerRetrySettings = settingsManager.getProviderRetrySettings();
 			const requestModel = auth.requestModel ?? model;
-			return streamSimple(requestModel, context, {
-				...options,
+			const requestBudget = options.modelRequestBudget;
+			if (requestBudget && requestBudget.attempts >= requestBudget.maxAttempts) {
+				requestBudget.exhausted = true;
+				const message = {
+					role: "assistant" as const,
+					content: [],
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "error" as const,
+					errorMessage: `Experiment model request budget exhausted (${requestBudget.maxAttempts} attempts)`,
+					timestamp: Date.now(),
+					diagnostics: [
+						{
+							type: "agent_lifecycle_failure",
+							timestamp: Date.now(),
+							error: { name: "ModelRequestBudgetExceeded", message: "Trial-wide request budget exhausted" },
+						},
+					],
+				};
+				const stream = createAssistantMessageEventStream();
+				stream.push({ type: "error", reason: "error", error: message });
+				return stream;
+			}
+			if (requestBudget) requestBudget.attempts += 1;
+			const stream = streamSimple(requestModel, context, {
+				...streamOptions,
 				apiKey: auth.apiKey,
-				timeoutMs: options?.timeoutMs ?? providerRetrySettings.timeoutMs,
+				timeoutMs: streamOptions?.timeoutMs ?? providerRetrySettings.timeoutMs,
 				headers: auth.headers,
 			});
+			if (requestBudget) {
+				void stream
+					.result()
+					.then((message) =>
+						recordModelRequestUsage(requestBudget, message.usage, message.stopReason === "error"),
+					);
+			}
+			return stream;
 		}),
 		onPayload: async (payload, _model) => {
 			const runner = extensionRunnerRef.current;
@@ -390,6 +439,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		allowedToolNames,
 		baseToolsOverride: options.baseToolsOverride,
 		baseToolsFactory: options.baseToolsFactory,
+		modelRequestBudget: options.modelRequestBudget,
 		includeGoals,
 		includeCompactSkill: options.includeCompactSkill,
 		rlmHeartbeatController: options.rlmHeartbeatController,

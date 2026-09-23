@@ -1,5 +1,5 @@
 /** One scored A/B/C trial. The task fixture is process.cwd(). */
-import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import type { Model } from "@earendil-works/pi-ai";
 import { AuthStorage } from "../packages/coding-agent/src/core/auth-storage.js";
 import { ModelRegistry } from "../packages/coding-agent/src/core/model-registry.js";
@@ -7,6 +7,7 @@ import { DefaultResourceLoader } from "../packages/coding-agent/src/core/resourc
 import { createAgentSession } from "../packages/coding-agent/src/core/sdk.js";
 import { SessionManager } from "../packages/coding-agent/src/core/session-manager.js";
 import { SettingsManager } from "../packages/coding-agent/src/core/settings-manager.js";
+import { createModelRequestBudget } from "../packages/coding-agent/src/core/model-request-budget.js";
 import { createNeurabashOperatorTools } from "../packages/coding-agent/src/core/tools/neurabash-session.js";
 
 const promptFile = process.env.ABC_PROMPT_FILE;
@@ -33,6 +34,19 @@ const model: Model<"openai-completions"> = {
 };
 
 const cwd = process.cwd();
+const retryPolicy = {
+	enabled: true,
+	maxRetries: 3,
+	baseDelayMs: 2000,
+	jitter: false,
+	provider: {
+		timeoutMs: 180000,
+		maxRetryDelayMs: 12000,
+		waitForUsage: { enabled: false },
+	},
+};
+const toolTimeoutMs = 60000;
+writeFileSync(`${agentDir}/settings.json`, `${JSON.stringify({ retry: retryPolicy }, null, 2)}\n`);
 const keyFile = process.env.ABC_OPENROUTER_KEY_FILE;
 let openRouterKey = keyFile ? readFileSync(keyFile, "utf8").trim() : undefined;
 delete process.env.ABC_OPENROUTER_KEY_FILE;
@@ -47,6 +61,7 @@ const settingsManager = SettingsManager.create(cwd, agentDir);
 const resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
 await resourceLoader.reload();
 const started = Date.now();
+const modelRequestBudget = createModelRequestBudget(60);
 const { session } = await createAgentSession({
 	cwd,
 	agentDir,
@@ -56,22 +71,48 @@ const { session } = await createAgentSession({
 	resourceLoader,
 	model,
 	sessionManager: SessionManager.inMemory(cwd),
-	baseToolsFactory: createNeurabashOperatorTools(cwd, { binPath, rootPath, profile: "workspace" }),
+	baseToolsFactory: createNeurabashOperatorTools(cwd, {
+		binPath,
+		rootPath,
+		profile: "workspace",
+		timeoutMs: toolTimeoutMs,
+	}),
 	initialActiveToolNames: ["neurabash", "neurabash_session"],
 	allowedToolNames: ["neurabash", "neurabash_session"],
 	includeGoals: false,
+	modelRequestBudget,
 });
 let error: string | undefined;
 let assistantCalls = 0;
-let callBudgetExceeded = false;
+const persistTrace = () => {
+	const temporaryTraceFile = `${traceFile}.tmp`;
+	writeFileSync(
+		temporaryTraceFile,
+		JSON.stringify(
+			{
+				stack: "nira-neurabash",
+				model: `${model.provider}/${model.id}`,
+				started,
+				ended: Date.now(),
+				retryPolicy,
+				toolTimeoutMs,
+				modelRequestBudget,
+				activeTools: session.getActiveToolNames(),
+				assistantCalls,
+				messages: session.messages,
+				error,
+			},
+			null,
+			2,
+		),
+	);
+	renameSync(temporaryTraceFile, traceFile);
+};
 const unsubscribe = session.subscribe((event) => {
 	if (event.type === "message_end" && event.message.role === "assistant") {
 		assistantCalls += 1;
-		if (assistantCalls >= 60) {
-			callBudgetExceeded = true;
-			void session.abort();
-		}
 	}
+	if (event.type === "message_end") persistTrace();
 });
 try {
 	if (session.getToolDefinition("ipython")) throw new Error("IPython leaked into NeuraBash condition");
@@ -81,17 +122,7 @@ try {
 } finally {
 	unsubscribe();
 	await session.disposeAsync();
-	writeFileSync(traceFile, JSON.stringify({
-		stack: "nira-neurabash",
-		model: `${model.provider}/${model.id}`,
-		started,
-		ended: Date.now(),
-		activeTools: session.getActiveToolNames(),
-		assistantCalls,
-		callBudgetExceeded,
-		messages: session.messages,
-		error,
-	}, null, 2));
+	persistTrace();
 }
 if (error) {
 	console.error(error);
