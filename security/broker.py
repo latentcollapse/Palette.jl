@@ -290,9 +290,15 @@ class Broker:
         env["JULIA_DEPOT_PATH"] = self.depot_dir
         env.pop("JULIA_PROJECT", None)  # target the depot's own shared @v#.# environment, not any caller's project
         with self._depot_lock:
+            # stdin=DEVNULL: see launch_worker.resolve_real_julia_binary's
+            # docstring -- an unspecified stdin here inherits the broker
+            # process's own, and `julia -e` silently breaks that process's
+            # own future stdin reads. This handler runs inside a
+            # persistent session's own process exactly as often as any
+            # turn calls package_management.
             proc = subprocess.run(
                 ["julia", "--startup-file=no", "-e", f"using Pkg; Pkg.add(Pkg.PackageSpec({spec}))"],
-                env=env, capture_output=True, text=True, timeout=300,
+                env=env, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL,
             )
         if proc.returncode != 0:
             raise CapabilityDenied(f"Pkg.add({name!r}) failed: {proc.stderr[-800:]}")
