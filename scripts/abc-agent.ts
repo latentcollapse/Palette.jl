@@ -1,6 +1,6 @@
 /** One scored A/B/C trial. The task fixture is process.cwd(). */
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import type { Model } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { AuthStorage } from "../packages/coding-agent/src/core/auth-storage.js";
 import { ModelRegistry } from "../packages/coding-agent/src/core/model-registry.js";
 import { DefaultResourceLoader } from "../packages/coding-agent/src/core/resource-loader.js";
@@ -130,6 +130,12 @@ const unsubscribe = session.subscribe((event) => {
 try {
 	if (session.getToolDefinition("ipython")) throw new Error("IPython leaked into NeuraBash condition");
 	await session.prompt(readFileSync(promptFile, "utf8"));
+	const terminalAssistant = [...session.messages].reverse().find(
+		(message): message is AssistantMessage => message.role === "assistant",
+	);
+	if (!terminalAssistant || terminalAssistant.stopReason === "error" || terminalAssistant.stopReason === "aborted" || terminalAssistant.errorMessage) {
+		throw new Error("Trial ended without a successful terminal assistant response; see the raw trace");
+	}
 } catch (cause) {
 	error = cause instanceof Error ? cause.message : String(cause);
 } finally {
