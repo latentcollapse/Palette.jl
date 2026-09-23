@@ -16,7 +16,9 @@ const agentDir = process.env.ABC_AGENT_DIR;
 const binPath = process.env.NEURABASH_BIN;
 const rootPath = process.env.NEURABASH_ROOT;
 if (!promptFile || !traceFile || !agentDir || !binPath || !rootPath) throw new Error("Missing A/B/C trial configuration");
-const localBaseUrl = process.env.ABC_BASE_URL;
+const configuredBaseUrl = process.env.ABC_BASE_URL;
+const localBaseUrl = configuredBaseUrl && !configuredBaseUrl.includes("openrouter.ai") ? configuredBaseUrl : undefined;
+const requestBaseUrl = configuredBaseUrl ?? "https://openrouter.ai/api/v1";
 const modelId = process.env.ABC_MODEL ?? "cohere/north-mini-code:free";
 if (!localBaseUrl && modelId !== "cohere/north-mini-code:free") throw new Error("OpenRouter condition requires the pinned model");
 const model: Model<"openai-completions"> = {
@@ -24,13 +26,17 @@ const model: Model<"openai-completions"> = {
 	name: modelId,
 	api: "openai-completions",
 	provider: localBaseUrl ? "local-llamacpp" : "openrouter",
-	baseUrl: localBaseUrl ?? "https://openrouter.ai/api/v1",
+	baseUrl: requestBaseUrl,
 	reasoning: false,
 	input: ["text"],
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: localBaseUrl ? 8192 : 256000,
 	maxTokens: 2048,
-	compat: { supportsDeveloperRole: false, maxTokensField: "max_tokens" },
+	compat: {
+		supportsDeveloperRole: false,
+		maxTokensField: "max_tokens",
+		...(localBaseUrl ? {} : { openRouterRouting: { only: ["cohere"], allow_fallbacks: false } }),
+	},
 };
 
 const cwd = process.cwd();
@@ -45,8 +51,11 @@ const retryPolicy = {
 		waitForUsage: { enabled: false },
 	},
 };
+const compactionSettings = localBaseUrl
+	? { enabled: true, reserveTokens: 2560, keepRecentTokens: 3072 }
+	: { enabled: true, reserveTokens: 2560, keepRecentTokens: 16000 };
 const toolTimeoutMs = 60000;
-writeFileSync(`${agentDir}/settings.json`, `${JSON.stringify({ retry: retryPolicy }, null, 2)}\n`);
+writeFileSync(`${agentDir}/settings.json`, `${JSON.stringify({ retry: retryPolicy, compaction: compactionSettings }, null, 2)}\n`);
 const keyFile = process.env.ABC_OPENROUTER_KEY_FILE;
 let openRouterKey = keyFile ? readFileSync(keyFile, "utf8").trim() : undefined;
 delete process.env.ABC_OPENROUTER_KEY_FILE;
@@ -62,6 +71,7 @@ const resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManage
 await resourceLoader.reload();
 const started = Date.now();
 const modelRequestBudget = createModelRequestBudget(60);
+const sessionManager = SessionManager.inMemory(cwd);
 const { session } = await createAgentSession({
 	cwd,
 	agentDir,
@@ -70,7 +80,7 @@ const { session } = await createAgentSession({
 	settingsManager,
 	resourceLoader,
 	model,
-	sessionManager: SessionManager.inMemory(cwd),
+	sessionManager,
 	baseToolsFactory: createNeurabashOperatorTools(cwd, {
 		binPath,
 		rootPath,
@@ -95,11 +105,14 @@ const persistTrace = () => {
 				started,
 				ended: Date.now(),
 				retryPolicy,
+				contextPolicy: { contextWindow: model.contextWindow, maxOutputTokens: model.maxTokens, compaction: compactionSettings },
+				routePolicy: localBaseUrl ? null : { only: ["cohere"], allow_fallbacks: false },
 				toolTimeoutMs,
 				modelRequestBudget,
 				activeTools: session.getActiveToolNames(),
 				assistantCalls,
 				messages: session.messages,
+				rawSessionEntries: sessionManager.getBranch(),
 				error,
 			},
 			null,
