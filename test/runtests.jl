@@ -131,7 +131,7 @@ end
 end
 
 @testset "SafetyGuard" begin
-    guard = SafetyGuard(5000, 1024, Set(["ExecuteCode", "GetState"]), [r"rm -rf", r":\(\)\{:\|:&\};:"])
+    guard = SafetyGuard(5000, 1024, Set{DataType}([ExecuteCode, GetState]), [r"rm -rf", r":\(\)\{:\|:&\};:"])
 
     @test guard.max_execution_time_ms == 5000
     @test any(p -> p.pattern == "rm -rf", guard.blocked_patterns)

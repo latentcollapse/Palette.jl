@@ -25,6 +25,7 @@ using Dates
 using UUIDs
 using Sockets
 using JSON
+using Statistics: mean as stdlib_mean
 
 #==============================================================================
 PHASE 2: Operator Types & Vocabulary (leaf types first)
@@ -349,12 +350,6 @@ function register_operator!(state::KernelState, name::String, f::Function)
     return nothing
 end
 
-# Names Julia's parser accepts as assignment targets for the lightweight
-# post-eval variable index below. This is a display/introspection
-# convenience only -- it does not gate what code may run; eval already ran
-# the real, unrestricted code by the time this regex runs.
-const ASSIGNMENT_TARGET_PATTERN = r"^\s*([A-Za-z_][A-Za-z0-9_!]*)\s*="
-
 """
     execute(op::ExecuteCode)::OperationReceipt
 
@@ -378,24 +373,27 @@ function execute(op::ExecuteCode)::OperationReceipt
         value = Core.eval(state.eval_module, parsed)
         result = OperationResult(value, true, nothing)
 
-        # Best-effort variable index for GetState/discovery convenience.
-        # Real persistence already happened above via eval_module bindings;
-        # this only mirrors top-level simple assignments (one per line) for
-        # introspection -- it does not attempt to parse destructuring,
-        # compound, or nested assignment targets.
+        # Variable index for GetState/discovery convenience, built from
+        # real module reflection (`names`) rather than regex-guessing
+        # assignment targets out of the source text -- the previous
+        # approach matched one simple `name =` per line and silently
+        # missed destructuring (`a, b = 1, 2`), multi-statement lines
+        # (`x = 1; y = 2`), and anything else that isn't that one shape.
+        # `names(module; all=true)` reports exactly what Julia itself
+        # considers a top-level binding in this module, which is the
+        # actual question being asked here.
         # World-age note: Core.eval above ran in a compiled function, so it
         # defines eval_module's new bindings in a NEW world age -- plain
-        # isdefined/getfield here would still see the OLD world and report
-        # `false` for bindings that unquestionably exist (confirmed by
-        # direct testing, not assumed). Base.invokelatest forces resolution
+        # names/isdefined/getfield here would still see the OLD world and
+        # miss bindings that unquestionably exist (confirmed by direct
+        # testing, not assumed). Base.invokelatest forces resolution
         # against the current world.
-        for line in split(op.code, '\n')
-            m = match(ASSIGNMENT_TARGET_PATTERN, line)
-            m === nothing && continue
-            var_name = m.captures[1]
-            sym = Symbol(var_name)
+        own_name = nameof(state.eval_module)
+        for sym in Base.invokelatest(names, state.eval_module; all=true)
+            (sym === own_name || sym === :eval || sym === :include) && continue
+            startswith(string(sym), '#') && continue
             if Base.invokelatest(isdefined, state.eval_module, sym)
-                state.variables[var_name] = Base.invokelatest(getfield, state.eval_module, sym)
+                state.variables[string(sym)] = Base.invokelatest(getfield, state.eval_module, sym)
             end
         end
     catch e
@@ -524,20 +522,28 @@ function execute(op::ShellEscape)::OperationReceipt
         cmd = Cmd(`sh -c $(op.command)`; dir=op.working_dir)
         proc = run(pipeline(cmd; stdout=out_buf, stderr=err_buf); wait=false)
 
-        deadline = time() + op.timeout_ms / 1000
-        while process_running(proc) && time() < deadline
-            sleep(0.01)
+        # Event-driven timeout, not a 10ms sleep-poll loop: a `Timer` fires
+        # once at the deadline and kills the process if it's still
+        # running, while `wait(proc)` blocks cooperatively on the task
+        # scheduler in the meantime (no busy-waking every 10ms for the
+        # entire duration of every shell command this runs).
+        timed_out = Ref(false)
+        timer = Timer(op.timeout_ms / 1000) do _
+            if process_running(proc)
+                timed_out[] = true
+                kill(proc)
+            end
         end
-        if process_running(proc)
-            kill(proc)
-            wait(proc)
+        wait(proc)
+        close(timer)
+
+        if timed_out[]
             result = OperationResult(
                 Dict("stdout" => String(take!(out_buf)), "stderr" => String(take!(err_buf))),
                 false,
                 "timed out after $(op.timeout_ms)ms",
             )
         else
-            wait(proc)
             exit_code = proc.exitcode
             data = op.capture_output ? Dict(
                 "stdout" => String(take!(out_buf)),
@@ -599,11 +605,13 @@ end
 """
     mean(iter)::Float64
 
-Simple mean calculation (avoiding StatsBase dependency).
+`Statistics.mean` (a stdlib, not the StatsBase dependency this was
+originally hand-rolled to avoid) with this package's own empty-input
+convention (`0.0`, not `NaN`) for `execution_stats`.
 """
 function mean(iter)
-    vals = collect(Float64, iter)
-    return isempty(vals) ? 0.0 : sum(vals) / length(vals)
+    isempty(iter) && return 0.0
+    return Float64(stdlib_mean(iter))
 end
 
 """
@@ -684,12 +692,12 @@ failure containment (Phase 9), not to be relied on as a security boundary.
 struct SafetyGuard
     max_execution_time_ms::Int
     max_memory_mb::Int
-    allowed_operations::Set{String}
+    allowed_operations::Set{DataType}
     blocked_patterns::Vector{Regex}
 
     function SafetyGuard(max_time::Int=60000,
                          max_mem::Int=1024,
-                         allowed::Set{String}=Set(["ExecuteCode", "InvokeOperator", "GetState"]),
+                         allowed::Set{DataType}=Set{DataType}([ExecuteCode, InvokeOperator, GetState]),
                          blocked::Vector{Regex}=Regex[])
         new(max_time, max_mem, allowed, blocked)
     end
@@ -698,11 +706,15 @@ end
 """
     validate(op, guard::SafetyGuard)::Bool
 
-Validates that an operation passes safety checks.
+Validates that an operation passes safety checks. Dispatches on the
+operation's actual type against a `Set{DataType}` -- this used to stringify
+`typeof(op)` and look it up in a `Set{String}`, which is duck-typing
+grafted onto a language whose type system already answers "is this op one
+of the allowed kinds" directly, without an allocation or a name-collision
+risk between unrelated types that happen to share a short name.
 """
 function validate(op, guard::SafetyGuard)::Bool
-    op_type = string(typeof(op).name.name)
-    return op_type in guard.allowed_operations
+    return typeof(op) in guard.allowed_operations
 end
 
 """
