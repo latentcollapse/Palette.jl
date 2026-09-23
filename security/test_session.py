@@ -127,6 +127,32 @@ class TestSessionLifecycle(SessionTestCase):
         with self.assertRaises(SessionDeadError):
             s.turn("1 + 1")
 
+    def test_construction_failure_does_not_leak_the_depot_clone(self):
+        """Regression test for a real bug found by direct testing:
+        __init__ had no exception handling at all between creating a real
+        depot clone (a genuine, if cheap, reflink copy) and the worker's
+        subprocess.Popen -- a failure anywhere in that window (confirmed:
+        the broker's own serve() raising) leaked the depot clone, the
+        broker's thread/socket, and the workspace directories permanently.
+        _teardown() itself was also unsafe to call this early (it
+        unconditionally referenced self._proc, which didn't exist yet) --
+        both fixed together."""
+        import session as session_module
+
+        depot_root = os.path.expanduser("~/.neurajl-depot-clones")
+        before = set(os.listdir(depot_root)) if os.path.isdir(depot_root) else set()
+
+        orig_serve = session_module._broker.serve
+        session_module._broker.serve = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("simulated failure"))
+        try:
+            with self.assertRaises(RuntimeError):
+                NeuraSession(project_dir=PROJECT_DIR, ceiling={})
+        finally:
+            session_module._broker.serve = orig_serve
+
+        after = set(os.listdir(depot_root)) if os.path.isdir(depot_root) else set()
+        self.assertEqual(after - before, set(), "depot clone leaked after a construction failure")
+
 
 class TestAuthorityUnderPersistence(SessionTestCase):
     """The whole point: keeping the worker warm must not change what it's
