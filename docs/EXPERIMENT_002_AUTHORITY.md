@@ -65,7 +65,7 @@ Full detail and exact evidence in `docs/THREAT_MODEL.md`; summary:
 **NOT YET PROVEN:**
 - External filesystem *read* (only write is implemented).
 - Credential access, package-management effects, host service invocation as their own categories (design intent documented in `docs/CAPABILITY_MODEL.md`, no implementation).
-- Depot cold-start performance is unsolved, but scoped narrower than first suspected: plain Base-only sandboxed launches are fast (8 real sandbox launches in ~7s, `security/test_authority.py`'s `TestSandboxContainment`); the ~35-40s tax is specific to scripts that `using Neura` (which pulls in `JSON` transitively for `request_capability`). This is a real, open engineering gap, honestly recorded in `docs/NEURABASH_SECURITY_PORT.md`, not a security gap. It does not affect the correctness of any claim above; it does affect whether repeated Neura-loading sandboxed launches are currently practical.
+- Depot cold-start performance is **solved** (parity-pass follow-up to this experiment, not part of the original run): the ~35-40s tax on `using Neura` launches was traced to a build_id-mismatch cascade caused by a split writable+readonly `JULIA_DEPOT_PATH`, and fixed by giving each worker a real, cheap (`cp --reflink`) private clone of the depot as the *single* `JULIA_DEPOT_PATH` entry instead. Measured through the real code path: ~41s -> ~4.4s per cold launch, all 19 security tests still passing. Full root-cause and fix writeup in `docs/NEURABASH_SECURITY_PORT.md`.
 - Multi-level (grandchild) nesting -- the subset-check logic is recursive in principle but was only exercised one level deep.
 - Broker socket has no request authentication beyond filesystem reachability -- fine for one worker per broker (the only configuration tested), an open question for anything more.
 
@@ -103,12 +103,11 @@ demonstrated, stop. It's demonstrated. The next experiment, per the goal's
 own framing, is **NeuraJL vs. NeuraBash** -- head-to-head, on the actual
 operator-surface question (which substrate makes the model more capable)
 and eventually the full-system question (which does so without giving away
-the house). Before that comparison is meaningful, the two open items most
-worth closing first are the depot cold-start cost (makes repeated
-experiment runs painfully slow otherwise) and expanding the capability
-category coverage enough that a real task-shaped comparison (not just
-adversarial probes) can run through the broker for whatever categories that
-task actually needs.
+the house). Before that comparison is meaningful, the depot cold-start cost is now
+closed (see above); the remaining item worth closing is expanding the
+capability category coverage enough that a real task-shaped comparison
+(not just adversarial probes) can run through the broker for whatever
+categories that task actually needs.
 
 No CUDA, no kernel autotuning, no ML features, no additional operator
 commands, and no Prime integration were added or attempted in this pass,
