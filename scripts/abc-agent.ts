@@ -130,6 +130,7 @@ const unsubscribe = session.subscribe((event) => {
 try {
 	if (session.getToolDefinition("ipython")) throw new Error("IPython leaked into NeuraBash condition");
 	await session.prompt(readFileSync(promptFile, "utf8"));
+	await session.waitForHeadlessIdle();
 	const terminalAssistant = [...session.messages].reverse().find(
 		(message): message is AssistantMessage => message.role === "assistant",
 	);
