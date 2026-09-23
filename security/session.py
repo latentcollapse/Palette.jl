@@ -114,56 +114,65 @@ class NeuraSession:
         self._closed = False
         self._next_request_id = 0
 
-        self._tmp_root = Path(workspace_dir or Path.home() / ".neurajl-sessions" / self.session_id)
-        self.workspace_dir = str(self._tmp_root / "workspace")
-        Path(self.workspace_dir).mkdir(parents=True, exist_ok=True)
-
-        self.depot_clone_dir = create_session_depot()
-
-        self._broker_sock_dir = str(self._tmp_root / "broker")
-        Path(self._broker_sock_dir).mkdir(parents=True, exist_ok=True)
-        receipts_path = str(Path(receipts_dir or self._broker_sock_dir) / "receipts.jsonl")
-        self._broker_server, self._broker = _broker.serve(
-            str(Path(self._broker_sock_dir) / "broker.sock"),
-            ceiling, receipts_path, self.session_id,
-            depot_dir=self.depot_clone_dir,
-            project_dir=self.project_dir,
-            repo_dir=self.repo_dir,
-        )
-
-        julia_bin = resolve_real_julia_binary()
-        argv = build_bwrap_argv(
-            workspace_dir=self.workspace_dir,
-            broker_socket_dir=self._broker_sock_dir,
-            project_dir=self.project_dir,
-            repo_dir=self.repo_dir,
-            julia_bin=julia_bin,
-            julia_depot=os.environ.get("JULIA_DEPOT_PATH", str(Path.home() / ".julia")).split(":")[-1],
-            depot_clone_dir=self.depot_clone_dir,
-            network_enabled=network_enabled,
-        )
-        argv += ["--", julia_bin, "--startup-file=no", SESSION_LOOP_SCRIPT]
-        self._proc = subprocess.Popen(
-            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, bufsize=1,
-        )
-
+        # Everything from here through the HELLO handshake is wrapped in one
+        # try/except: confirmed by direct testing that a failure ANYWHERE
+        # in this window (e.g. the broker's socket bind failing right after
+        # a real, several-GB depot clone was already made) leaked the
+        # depot clone, the broker's thread and socket, and the workspace
+        # directories permanently, since nothing called cleanup before this
+        # fix. _teardown() is hasattr-guarded specifically so it's safe to
+        # call here no matter how early the failure happened.
         try:
-            hello_line = _readline_with_timeout(self._proc.stdout, turn_timeout)
-        except TimeoutError:
-            self._proc.kill()
-            self._proc.wait()
+            self._tmp_root = Path(workspace_dir or Path.home() / ".neurajl-sessions" / self.session_id)
+            self.workspace_dir = str(self._tmp_root / "workspace")
+            Path(self.workspace_dir).mkdir(parents=True, exist_ok=True)
+
+            self.depot_clone_dir = create_session_depot()
+
+            self._broker_sock_dir = str(self._tmp_root / "broker")
+            Path(self._broker_sock_dir).mkdir(parents=True, exist_ok=True)
+            receipts_path = str(Path(receipts_dir or self._broker_sock_dir) / "receipts.jsonl")
+            self._broker_server, self._broker = _broker.serve(
+                str(Path(self._broker_sock_dir) / "broker.sock"),
+                ceiling, receipts_path, self.session_id,
+                depot_dir=self.depot_clone_dir,
+                project_dir=self.project_dir,
+                repo_dir=self.repo_dir,
+            )
+
+            julia_bin = resolve_real_julia_binary()
+            argv = build_bwrap_argv(
+                workspace_dir=self.workspace_dir,
+                broker_socket_dir=self._broker_sock_dir,
+                project_dir=self.project_dir,
+                repo_dir=self.repo_dir,
+                julia_bin=julia_bin,
+                julia_depot=os.environ.get("JULIA_DEPOT_PATH", str(Path.home() / ".julia")).split(":")[-1],
+                depot_clone_dir=self.depot_clone_dir,
+                network_enabled=network_enabled,
+            )
+            argv += ["--", julia_bin, "--startup-file=no", SESSION_LOOP_SCRIPT]
+            self._proc = subprocess.Popen(
+                argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, bufsize=1,
+            )
+
+            try:
+                hello_line = _readline_with_timeout(self._proc.stdout, turn_timeout)
+            except TimeoutError:
+                self._proc.kill()
+                self._proc.wait()
+                raise SessionDeadError(f"worker did not produce HELLO within {turn_timeout}s")
+            if not hello_line:
+                stderr = self._proc.stderr.read()
+                raise SessionDeadError(f"worker exited before HELLO: {stderr[-2000:]}")
+            hello = json.loads(hello_line)
+            if hello.get("kind") != "HELLO" or not isinstance(hello.get("epoch"), str):
+                raise SessionProtocolError(f"malformed HELLO: {hello_line!r}")
+            self.epoch = hello["epoch"]
+        except BaseException:
             self._teardown()
-            raise SessionDeadError(f"worker did not produce HELLO within {turn_timeout}s")
-        if not hello_line:
-            stderr = self._proc.stderr.read()
-            self._teardown()
-            raise SessionDeadError(f"worker exited before HELLO: {stderr[-2000:]}")
-        hello = json.loads(hello_line)
-        if hello.get("kind") != "HELLO" or not isinstance(hello.get("epoch"), str):
-            self._teardown()
-            raise SessionProtocolError(f"malformed HELLO: {hello_line!r}")
-        self.epoch = hello["epoch"]
+            raise
 
     def is_alive(self) -> bool:
         return not self._closed and self._proc.poll() is None
@@ -236,33 +245,46 @@ class NeuraSession:
             return resp
 
     def _teardown(self):
-        try:
-            if self._proc.poll() is None:
-                try:
-                    self._proc.stdin.close()
-                except Exception:
-                    pass
-                try:
-                    self._proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self._proc.kill()
-                    self._proc.wait()
-        finally:
-            # subprocess.Popen does not close its pipe file objects on its
-            # own just because the process exited -- confirmed leaking real
-            # file descriptors (ResourceWarning on every session in the
-            # test suite) until explicitly closed here.
-            for pipe in (self._proc.stdin, self._proc.stdout, self._proc.stderr):
-                try:
-                    pipe.close()
-                except Exception:
-                    pass
+        # Defensive against EVERY attribute below, not just self._proc: this
+        # is also called from __init__'s own except clause (see below) if
+        # construction fails partway through -- confirmed by direct testing
+        # that a failure between create_session_depot() and the worker's
+        # subprocess.Popen (e.g. the broker's socket bind failing) used to
+        # leak the depot clone, the broker's thread and socket, and the
+        # workspace directories permanently, since nothing called cleanup
+        # at all before this fix, and _teardown() itself would have raised
+        # AttributeError if called before self._proc existed.
+        if hasattr(self, "_proc"):
+            try:
+                if self._proc.poll() is None:
+                    try:
+                        self._proc.stdin.close()
+                    except Exception:
+                        pass
+                    try:
+                        self._proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        self._proc.kill()
+                        self._proc.wait()
+            finally:
+                # subprocess.Popen does not close its pipe file objects on
+                # its own just because the process exited -- confirmed
+                # leaking real file descriptors (ResourceWarning on every
+                # session in the test suite) until explicitly closed here.
+                for pipe in (self._proc.stdin, self._proc.stdout, self._proc.stderr):
+                    try:
+                        pipe.close()
+                    except Exception:
+                        pass
+        if hasattr(self, "_broker_server"):
             try:
                 self._broker_server.shutdown()
                 self._broker_server.server_close()
             except Exception:
                 pass
+        if hasattr(self, "depot_clone_dir"):
             shutil.rmtree(self.depot_clone_dir, ignore_errors=True)
+        if hasattr(self, "_tmp_root"):
             shutil.rmtree(self._tmp_root, ignore_errors=True)
 
     def close(self):
