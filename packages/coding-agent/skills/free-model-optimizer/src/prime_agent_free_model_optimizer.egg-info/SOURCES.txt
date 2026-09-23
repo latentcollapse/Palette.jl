@@ -1,0 +1,8 @@
+pyproject.toml
+src/free_model_optimizer/__init__.py
+src/free_model_optimizer/optimizer.py
+src/prime_agent_free_model_optimizer.egg-info/PKG-INFO
+src/prime_agent_free_model_optimizer.egg-info/SOURCES.txt
+src/prime_agent_free_model_optimizer.egg-info/dependency_links.txt
+src/prime_agent_free_model_optimizer.egg-info/entry_points.txt
+src/prime_agent_free_model_optimizer.egg-info/top_level.txt

@@ -1,0 +1,2 @@
+[console_scripts]
+free-model-optimizer = optimizer:main

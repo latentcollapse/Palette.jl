@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: prime-agent-tencentdb-memory
+Version: 0.1.0
+Summary: TencentDB Agent Memory integration for Prime Agent
+Author: Prime Agent
+License: MIT
+Requires-Python: >=3.8

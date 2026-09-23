@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: prime-agent-symbolic-memory
+Version: 0.1.0
+Summary: Symbolic memory extensions for Prime Agent harness
+Author: Prime Agent
+License: MIT
+Requires-Python: >=3.8

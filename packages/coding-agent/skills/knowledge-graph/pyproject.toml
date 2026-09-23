@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prime-agent-knowledge-graph"
+version = "0.1.0"
+description = "Knowledge graph builder and query tool for Prime Agent"
+authors = [{name = "Prime Agent"}]
+license = {text = "MIT"}
+requires-python = ">=3.8"
+dependencies = []
+
+[project.scripts]
+knowledge-graph = "knowledge_graph:main"

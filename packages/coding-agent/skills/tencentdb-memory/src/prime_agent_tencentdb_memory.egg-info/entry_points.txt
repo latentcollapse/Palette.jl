@@ -1,0 +1,2 @@
+[console_scripts]
+tencentdb-memory = tencentdb_memory:main

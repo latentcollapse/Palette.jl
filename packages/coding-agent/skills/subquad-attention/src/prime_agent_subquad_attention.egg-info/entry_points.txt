@@ -1,0 +1,2 @@
+[console_scripts]
+subquad-attention = subquad_attention:main

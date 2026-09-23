@@ -1,0 +1,2 @@
+[console_scripts]
+symbolic-memory = symbolic_memory:main

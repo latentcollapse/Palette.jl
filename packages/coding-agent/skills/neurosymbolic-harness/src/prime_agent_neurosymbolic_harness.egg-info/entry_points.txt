@@ -1,0 +1,2 @@
+[console_scripts]
+neurosymbolic-harness = harness:main

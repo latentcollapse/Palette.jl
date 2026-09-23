@@ -1,0 +1,8 @@
+pyproject.toml
+src/prime_agent_rotorquant.egg-info/PKG-INFO
+src/prime_agent_rotorquant.egg-info/SOURCES.txt
+src/prime_agent_rotorquant.egg-info/dependency_links.txt
+src/prime_agent_rotorquant.egg-info/entry_points.txt
+src/prime_agent_rotorquant.egg-info/top_level.txt
+src/rotorquant/__init__.py
+src/rotorquant/integration.py
