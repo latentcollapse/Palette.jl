@@ -125,10 +125,9 @@ for line in eachline(stdin)
             ))
             if get(spawn_resp, "approved", false)
                 child_stdout = String(get(spawn_resp["result"], "stdout", ""))
-                last_line = ""
-                for ln in split(child_stdout, '\n')
-                    isempty(strip(ln)) || (last_line = ln)
-                end
+                lines = split(child_stdout, '\n')
+                idx = findlast(ln -> !isempty(strip(ln)), lines)
+                last_line = idx === nothing ? "" : lines[idx]
                 child_result = JSON.parse(last_line)
                 resp["success"] = get(child_result, "success", false)
                 resp["data"] = get(child_result, "data", nothing)

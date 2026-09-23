@@ -500,6 +500,40 @@ class TestNestedChildWorker(SandboxTestCase):
         finally:
             stop.set()
 
+    def test_grandchild_nesting_actually_works(self):
+        """Regression test for a real bug found by direct testing:
+        ceiling_is_subset used `if not parent_cap` (Python truthiness) to
+        check whether a category was present in the parent's ceiling --
+        but `spawn_child_worker`'s own ceiling shape is `{}` throughout
+        this codebase, and an empty dict is falsy. That made granting a
+        CHILD the ability to spawn its own children unconditionally
+        impossible even when the parent's ceiling explicitly named
+        spawn_child_worker, and there was also no explicit
+        ceiling_is_subset branch for the category at all. Both fixed;
+        this proves a real two-level nesting end to end, not just the
+        ceiling-logic unit case -- the grandchild reports its own real,
+        independent PID namespace (pid=1), the same independent evidence
+        the one-level case already used."""
+        stop = self._serve({"spawn_child_worker": {}})
+        try:
+            grandchild_script = 'println("grandchild pid=", getpid())'
+            child_script = (
+                'using Neura; r2 = Neura.request_capability("spawn_child_worker", Dict('
+                '"ceiling" => Dict(), '
+                f'"script" => {json.dumps(grandchild_script)})); println("child got: ", r2)'
+            )
+            top_script = (
+                'using Neura; r1 = Neura.request_capability("spawn_child_worker", Dict('
+                '"ceiling" => Dict("spawn_child_worker" => Dict()), '
+                f'"script" => {json.dumps(child_script)})); println("top got: ", r1)'
+            )
+            r = self.run_script(top_script, broker_socket_dir=self.broker_socket_dir, timeout=120)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn('"approved" => true', r.stdout)
+            self.assertIn("grandchild pid=1", r.stdout)
+        finally:
+            stop.set()
+
 
 class TestPackageManagement(SandboxTestCase):
     """package_management: the broker decides whether a specific package is
