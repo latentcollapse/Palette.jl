@@ -26,6 +26,7 @@ dev environment was built).
 """
 from __future__ import annotations
 
+import http.server
 import json
 import os
 import shutil
@@ -334,6 +335,61 @@ class TestNestedChildWorker(SandboxTestCase):
             self.assertIn('"approved" => false', r.stdout)
         finally:
             stop.set()
+
+    def test_child_with_approved_network_cannot_reach_host_outside_allowlist(self):
+        """Regression test for a real bug found and fixed after Experiment
+        002 first shipped: an approved child ceiling with `network_access`
+        used to get a raw, unshared network namespace (`--unshare-net`
+        omitted) regardless of `allowed_hosts` -- proven exploitable by
+        reaching an arbitrary local listener the ceiling never named, with
+        zero broker mediation. Independent host-side evidence, not the
+        worker's own self-report: a real local HTTP server, outside the
+        sandbox, that only a real network connection could have reached."""
+
+        class _Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"UNAUTHORIZED HOST REACHED")
+
+            def log_message(self, *_args):
+                pass
+
+        httpd = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+        port = httpd.server_address[1]
+        server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        server_thread.start()
+
+        stop = self._serve({"network_access": {"allowed": True, "allowed_hosts": ["example.invalid"]}})
+        try:
+            child_script = (
+                "using Sockets\n"
+                "try\n"
+                f'    sock = connect("127.0.0.1", {port})\n'
+                '    println(sock, "GET / HTTP/1.0\\r\\n\\r\\n")\n'
+                "    resp = readline(sock)\n"
+                '    println("REACHED: ", resp)\n'
+                "catch e\n"
+                '    println("BLOCKED: ", e)\n'
+                "end\n"
+            )
+            spawn_script = (
+                'using Neura; r = Neura.request_capability("spawn_child_worker", Dict('
+                '"ceiling" => Dict("network_access" => Dict("allowed" => true, "allowed_hosts" => ["example.invalid"])), '
+                f'"script" => {json.dumps(child_script)}, '
+                f'"child_workspace" => "{self.child_workspace}", '
+                f'"child_project" => "{PROJECT_DIR}", '
+                f'"child_repo" => "{REPO_DIR}")); println(r)'
+            )
+            r = self.run_script(spawn_script, broker_socket_dir=self.broker_socket_dir)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn('"approved" => true', r.stdout)  # the spawn itself is a legitimate subset request
+            self.assertIn("BLOCKED", r.stdout)
+            self.assertNotIn("REACHED", r.stdout)
+        finally:
+            stop.set()
+            httpd.shutdown()
+            httpd.server_close()
 
 
 if __name__ == "__main__":

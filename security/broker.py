@@ -35,8 +35,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import socketserver
+import tempfile
 import threading
 import time
 import urllib.request
@@ -158,15 +160,40 @@ class Broker:
             )
         from launch_worker import run_worker
 
-        network_enabled = bool(requested_ceiling.get("network_access", {}).get("allowed"))
-        result = run_worker(
-            workspace_dir=child_workspace,
-            project_dir=child_project,
-            repo_dir=child_repo,
-            script=script,
-            network_enabled=network_enabled,
-            timeout=90,
+        # A child's OS-level network namespace is NEVER unshared, no matter
+        # what its approved ceiling grants -- confirmed by direct testing
+        # that the previous code (`network_enabled =
+        # requested_ceiling["network_access"]["allowed"]`, passed straight
+        # to `--unshare-net`) let an approved child reach an arbitrary host
+        # OUTSIDE its own `allowed_hosts`, with zero broker mediation: real,
+        # raw connectivity, not the authorize/execute/receipt effect this
+        # category is documented to be. `network_access` for a child means
+        # exactly what it means for any worker -- ask a broker, which
+        # enforces the ceiling and performs the effect itself -- so the
+        # child gets its own broker instance (enforcing its own, already
+        # ceiling_is_subset-validated ceiling) instead of an OS capability.
+        child_sock_dir = tempfile.mkdtemp(prefix="neurajl-child-broker-")
+        child_receipts = os.path.join(child_sock_dir, "receipts.jsonl")
+        child_server, _ = serve(
+            os.path.join(child_sock_dir, "broker.sock"),
+            requested_ceiling,
+            child_receipts,
+            f"{self.session_id}/child",
         )
+        try:
+            result = run_worker(
+                workspace_dir=child_workspace,
+                project_dir=child_project,
+                repo_dir=child_repo,
+                script=script,
+                broker_socket_dir=child_sock_dir,
+                network_enabled=False,
+                timeout=90,
+            )
+        finally:
+            child_server.shutdown()
+            child_server.server_close()
+            shutil.rmtree(child_sock_dir, ignore_errors=True)
         return {
             "returncode": result.returncode,
             "stdout": result.stdout[-4000:],
