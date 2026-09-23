@@ -264,5 +264,15 @@ end
     @test last_record["schema"] == "neurajl.tool_capsule.v1"
     @test haskey(last_record, "source_hash")
     @test length(last_record["source_hash"]) == 64  # sha256 hex
+    @test last_record["disposition"] == "RETIRED"  # this one succeeded
+
+    # regression: disposition used to be hardcoded "RETIRED" regardless of
+    # result.success, so a failed ephemeral tool's capsule was
+    # indistinguishable from a successful one in the provenance log
+    execute(EphemeralTool("error(\"deliberate failure\")"))
+    failed_record = JSON.parse(readlines(prov_path)[end])
+    @test failed_record["success"] == false
+    @test failed_record["disposition"] == "FAILED"
+
     rm(joinpath(pwd(), ".neurajl"); recursive=true, force=true)
 end

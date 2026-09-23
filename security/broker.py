@@ -61,9 +61,19 @@ def ceiling_is_subset(requested: dict, parent: dict) -> tuple[bool, str]:
     category present in the request but absent from the parent, is denied
     -- never silently ignored or silently granted."""
     for category, req_cap in requested.items():
-        parent_cap = parent.get(category)
-        if not parent_cap:
+        # Key PRESENCE, not truthiness -- confirmed by direct testing:
+        # `spawn_child_worker`'s own ceiling shape is `{}` throughout this
+        # codebase (including this file's own child-spawn code and its
+        # tests), and an empty dict is falsy in Python. The old
+        # `if not parent_cap` treated "the parent's ceiling has this
+        # category, with an intentionally empty value" identically to
+        # "the parent's ceiling doesn't have this category at all" --
+        # which made granting a grandchild spawn_child_worker
+        # unconditionally impossible even when the parent's own ceiling
+        # explicitly named it.
+        if category not in parent:
             return False, f"category {category!r} is not present in the parent's ceiling at all"
+        parent_cap = parent[category]
         if category == "external_fs_write":
             req_dirs = [Path(d).resolve() for d in req_cap.get("allowed_dirs", [])]
             parent_dirs = [Path(d).resolve() for d in parent_cap.get("allowed_dirs", [])]
@@ -98,6 +108,13 @@ def ceiling_is_subset(requested: dict, parent: dict) -> tuple[bool, str]:
                 return False, "requested package_management must name allowed_packages explicitly (no unrestricted child grant)"
             if parent_pkgs is not None and not set(req_pkgs).issubset(set(parent_pkgs)):
                 return False, f"requested allowed_packages {req_pkgs} is not a subset of parent's {parent_pkgs}"
+        elif category == "spawn_child_worker":
+            # No sub-fields of its own to narrow here -- a grandchild's
+            # actual ceiling gets its own full ceiling_is_subset check
+            # against the CHILD's ceiling when it is actually spawned (see
+            # _handle_spawn_child_worker). Presence in the parent's
+            # ceiling is the only thing this level needs to establish.
+            pass
         else:
             return False, f"unrecognized category {category!r} cannot be validated as a subset -- denied, not ignored"
     return True, ""

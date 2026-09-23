@@ -629,7 +629,6 @@ function execute(op::EphemeralTool)::OperationReceipt
     start_time = time_ns()
 
     result = OperationResult(nothing, true, nothing)
-    error_msg = nothing
     tool_module = Module(Symbol("Ephemeral_$(replace(op.tool_id, '-' => '_'))"))
     # Same reasoning as KernelState's own eval_module: ephemeral code has
     # the SAME authority ceiling as durable code (broker-mediated, not
@@ -652,7 +651,6 @@ function execute(op::EphemeralTool)::OperationReceipt
         result = OperationResult(value, true, nothing)
     catch e
         result = OperationResult(nothing, false, sprint(showerror, e))
-        error_msg = sprint(showerror, e)
     end
 
     duration_ms = (time_ns() - start_time) / 1_000_000.0
@@ -703,7 +701,12 @@ function record_tool_capsule(tool_id::String, code::String, result::OperationRes
         "error" => result.error,
         "duration_ms" => duration_ms,
         "retired_at" => string(Dates.now()),
-        "disposition" => "RETIRED",
+        # Reflects the real outcome -- confirmed by direct testing that
+        # this was previously hardcoded to "RETIRED" regardless of
+        # result.success, so a failed ephemeral tool's capsule looked
+        # indistinguishable from a successful one to anything reading the
+        # provenance log later.
+        "disposition" => result.success ? "RETIRED" : "FAILED",
     )
     open(joinpath(dir, "provenance.jsonl"), "a") do io
         println(io, JSON.json(capsule))
