@@ -172,6 +172,39 @@ class TestSessionCli(unittest.TestCase):
         self.proc.wait(timeout=60)
         self.assertTrue(Path(self.task_workspace, "marker.txt").is_file())
 
+    def test_turn_code_reading_stdin_does_not_consume_the_next_request(self):
+        """Turn code shared fd 0 with the request channel: a `readline()` took
+        the next request, and the host waited for a reply until timeout."""
+        r1 = self._turn('(readline(), read(`cat`, String))')
+        self.assertTrue(r1["success"], r1)
+        self.assertEqual(r1["data"], ["", ""])
+        r2 = self._turn("2 + 2", request_id="2")
+        self.assertEqual(r2["request_id"], "2")
+        self.assertEqual(r2["data"], 4)
+
+    def test_ephemeral_provenance_stays_out_of_the_task_workspace(self):
+        r = self._turn("1 + 1", ephemeral=True)
+        self.assertTrue(r["success"], r)
+        self.assertEqual(sorted(os.listdir(self.task_workspace)), ["marker.txt"])
+
+    def test_hung_ephemeral_child_is_killed_before_the_session_is(self):
+        """The broker gave a child 90s while the session gave the turn less,
+        so a hung ephemeral turn killed the persistent kernel with it."""
+        self._turn("x = 5")
+        r = self._turn("sleep(600)", request_id="2", ephemeral=True)
+        self.assertFalse(r["success"])
+        self.assertNotIn("session_dead", r)
+        self.assertIn("time limit", r["error"])
+        r3 = self._turn("x", request_id="3")
+        self.assertEqual(r3["data"], 5)
+
+    def test_stdlib_loads_without_precompiling(self):
+        """Fails until security/prewarm_depot.py has run for this depot: a
+        cold `using Pkg` took ~80s per session, longer than a turn."""
+        r = self._turn("using Test, Pkg, SparseArrays; 1")
+        self.assertTrue(r["success"], r)
+        self.assertNotIn("Precompiling", r["output"], "run security/prewarm_depot.py for this depot")
+
     def test_timeout_reply_marks_the_session_dead(self):
         r = self._turn("sleep(60)")
         self.assertFalse(r["success"])

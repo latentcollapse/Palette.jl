@@ -155,6 +155,9 @@ class NeuraSession:
                 depot_dir=self.depot_clone_dir,
                 project_dir=self.project_dir,
                 repo_dir=self.repo_dir,
+                # Leaves the child's own shutdown and the reply time to land
+                # inside the turn.
+                child_timeout=max(5.0, turn_timeout - 10.0),
             )
 
             julia_bin = resolve_real_julia_binary()
@@ -168,6 +171,9 @@ class NeuraSession:
                 depot_clone_dir=self.depot_clone_dir,
                 network_enabled=network_enabled,
             )
+            # Ephemeral-turn provenance goes to the sandbox's private home; the
+            # working directory may be the caller's task workspace.
+            argv += ["--setenv", "NEURAJL_PROVENANCE_DIR", "/run/neurajl/home/.neurajl"]
             argv += ["--", julia_bin, "--startup-file=no", SESSION_LOOP_SCRIPT]
             self._proc = subprocess.Popen(
                 argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
