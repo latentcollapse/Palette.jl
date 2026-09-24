@@ -1,54 +1,38 @@
 import { spawn } from "child_process";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { type Static, Type } from "typebox";
+import { getShellEnv, killProcessTree, trackDetachedChildPid, untrackDetachedChildPid } from "../../utils/shell.js";
 import type { SessionBaseToolsFactory } from "../agent-session.js";
 import type { ToolDefinition } from "../extensions/types.js";
-import { getShellEnv, killProcessTree, trackDetachedChildPid, untrackDetachedChildPid } from "../../utils/shell.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 /**
- * NIRA-Prime integration point: exposes NeuraJL (ijulia-operator-lab) as this
- * fork's operator surface, via `baseToolsFactory` rather than
- * `baseToolsOverride` -- deliberately, not the boundary
- * docs/NIRA_OPERATOR_SURFACE_STAGING.md names, because `baseToolsFactory` is
- * built for exactly this shape (construct once per agent session, including
- * per RLM child, with an explicit `dispose`) and NeuraJL's whole thesis this
- * pass is real session persistence -- `baseToolsOverride` shares one static
- * tool map across however many sessions ask for it, which would mean every
- * agent session (and every RLM child) silently sharing ONE Julia kernel's
- * mutable bindings. That is exactly the failure mode NeuraJL's own
- * C_child ⊆ C_caller authority model exists to prevent one level down
- * (see ijulia-operator-lab/docs/THREAT_MODEL.md); reusing `baseToolsOverride`
- * here would reintroduce the same problem at the chassis layer instead.
+ * NIRA-Prime integration point: exposes NeuraJL (neurajl-operator-lab) as this
+ * fork's operator surface.
  *
- * Unlike `neurabash.ts`'s current first pass (explicitly one-shot,
- * "session persistence... is real future work, not done here"), this tool
- * spawns ONE persistent `security/session_cli.py` process per agent session
- * (via `baseToolsFactory`'s per-session construction) and keeps it alive for
- * that session's whole lifetime -- real bindings, real compiled methods,
- * surviving across tool calls the way `ipython`'s kernel does, backed by
- * NeuraJL's own adversarially-tested persistent session
- * (ijulia-operator-lab/security/session.py's `NeuraSession`).
+ * It uses `baseToolsFactory`, not `baseToolsOverride`: the factory builds tools
+ * once per agent session (including each RLM child) with a dispose hook, so
+ * every session gets its own Julia kernel. A shared override map would let
+ * every session and RLM child mutate one kernel's bindings, the same failure
+ * NeuraJL's C_child ⊆ C_caller model prevents one level down.
  *
- * Scope deliberately kept narrow, matching `neurabash.ts`'s own stated first
- * pass: no RLM sub-agent spawning surfaced through THIS tool (RLM already
- * gets its own base-tool override per child per `baseToolsFactory`'s own
- * contract -- a child session gets its OWN NeuraJL process, not this
- * parent's), no Python-skills bridge, no diff/attachment display protocol.
- * `ipython.ts`'s kernel owns all of that today; this tool intentionally
- * replaces it for the NeuraJL condition (see the staging doc: "omit the
- * IPython kernel rather than merely leave it inactive").
+ * Each session drives one `security/session_cli.py` process over
+ * newline-delimited JSON. That process owns a bubblewrap-contained Julia
+ * worker whose working directory is the agent's own `cwd`, bound writable.
+ *
+ * A worker that dies (turn timeout, abort, crash) is not silently replaced.
+ * The next call starts a new kernel and its result says, first, that every
+ * earlier binding is gone and which epoch replaced which.
  */
 
 const neurajlSchema = Type.Object({
 	code: Type.String({
 		description:
-			"Julia source to evaluate in this agent session's persistent NeuraJL kernel. Real bindings, functions, and compiled methods survive across calls within this session (and are isolated from every other session/RLM child, each of which gets its own kernel). Full, unrestricted Julia language power -- eval, ccall, metaprogramming, Base, Pkg -- runs OS-sandboxed; broker-mediated host effects (filesystem writes outside the workspace, network, package installs) are gated by this session's fixed capability ceiling, not by anything in this tool call.",
+			"Julia source to evaluate in this session's persistent NeuraJL kernel. The working directory is the task workspace. Bindings, functions and compiled methods survive across calls. Everything printed (println, @show, @warn, output of run(`cmd`)) is returned along with the value of the last expression. Full Julia runs inside an OS sandbox: Base, eval, ccall, run(`...`) for shell commands, file I/O in the workspace.",
 	}),
 	ephemeral: Type.Optional(
 		Type.Boolean({
 			description:
-				"Run this code in a real, disposable, OS-sandboxed CHILD process instead of the persistent kernel -- for throwaway/generated helper code you do not want to leave bindings or compiled methods behind in the session's own mind. Defaults to false (persistent). Ephemeral code gets NO broker-mediated authority by default (network/filesystem/package access), regardless of what the persistent session itself is allowed -- an unusual need for one is a signal the code belongs in the persistent kernel instead, not a reason to widen this flag's default.",
+				"Run this code in a disposable sandboxed child process instead of the persistent kernel, so it leaves no bindings behind. The child does not see the task workspace. Defaults to false.",
 		}),
 	),
 });
@@ -58,33 +42,30 @@ export type NeurajlToolInput = Static<typeof neurajlSchema>;
 export interface NeurajlToolDetails {
 	success: boolean;
 	epoch?: string;
+	restartedFromEpoch?: string;
 	durationMs?: number;
+	outputTruncated?: boolean;
 }
 
 export interface NeurajlToolOptions {
-	/** Absolute path to security/session_cli.py in the ijulia-operator-lab checkout. No default: unset fails closed at first use, not silently. */
+	/** Absolute path to security/session_cli.py. Unset fails closed at first use. */
 	sessionCliPath?: string;
-	/** Absolute path to the ijulia-operator-lab checkout itself (session_cli.py's --repo-dir). Defaults to session_cli.py's own parent's parent. */
+	/** The neurajl-operator-lab checkout (session_cli.py's --repo-dir). Defaults to session_cli.py's grandparent. */
 	repoDir?: string;
-	/** A Julia dev project with Neura (dev-installed) + IJulia available -- see ijulia-operator-lab/docs/EXPERIMENT_002_AUTHORITY.md's Naming section for how one is built. No default: unset fails closed. */
+	/** A Julia project with Neura dev-installed. Unset fails closed at first use. */
 	projectDir?: string;
-	/** Python interpreter to run session_cli.py with. Default: "python3". */
+	/** Python interpreter for session_cli.py. Default: "python3". */
 	pythonBin?: string;
-	/**
-	 * This session's own capability ceiling -- see
-	 * ijulia-operator-lab/docs/CAPABILITY_MODEL.md. Default: `{}` (full
-	 * language power inside the sandbox, zero broker-mediated authority).
-	 * An empty ceiling is a deliberate, safe default for a first
-	 * integration pass, not an oversight -- widen it only for a condition
-	 * that specifically needs a broker-mediated capability.
-	 */
+	/** This session's capability ceiling (see CAPABILITY_MODEL.md). Default `{}`: no broker-mediated authority. */
 	ceiling?: Record<string, unknown>;
-	/** Grant the top-level worker raw network access (bypassing broker mediation for network specifically). Default: false. Distinct from the `network_access` broker capability, which stays broker-mediated regardless of this flag. */
+	/** Give the worker raw network access. Default: false. */
 	network?: boolean;
-	/** Per-turn timeout in seconds, forwarded to NeuraSession's own turn_timeout. Default: 60. */
+	/** Per-turn timeout in seconds, enforced by NeuraSession; the worker is killed when it expires. Default: 60. */
 	turnTimeout?: number;
-	/** How long to wait for the child process's HELLO line before giving up. Default: 30s (real cold-start: a fresh depot clone plus a fresh sandboxed Julia launch, not free). */
+	/** How long to wait for the kernel's HELLO. Default: 180s, since a cold `using Neura` precompile takes ~40s. */
 	startupTimeoutMs?: number;
+	/** Model-visible characters per result; the middle of longer output is elided. Default: unlimited. */
+	maxOutputChars?: number;
 }
 
 interface PendingTurn {
@@ -92,50 +73,71 @@ interface PendingTurn {
 	reject: (err: Error) => void;
 }
 
-function resolveSessionCliPath(options?: NeurajlToolOptions): string {
-	const path = options?.sessionCliPath ?? process.env.NEURAJL_SESSION_CLI;
-	if (!path) {
-		throw new Error(
-			"neurajl: session_cli.py path not configured (options.sessionCliPath / NEURAJL_SESSION_CLI). " +
-				"Point it at <ijulia-operator-lab checkout>/security/session_cli.py before this tool can start a session.",
-		);
-	}
-	return path;
+interface NeurajlKernel {
+	epoch: string;
+	isDead: () => boolean;
+	turn: (
+		code: string,
+		ephemeral: boolean | undefined,
+		signal: AbortSignal | undefined,
+	) => Promise<Record<string, unknown>>;
+	dispose: () => Promise<void>;
 }
 
-function resolveProjectDir(options?: NeurajlToolOptions): string {
-	const dir = options?.projectDir ?? process.env.NEURAJL_PROJECT_DIR;
-	if (!dir) {
-		throw new Error(
-			"neurajl: no Julia dev project configured (options.projectDir / NEURAJL_PROJECT_DIR) -- " +
-				"see ijulia-operator-lab/docs/EXPERIMENT_002_AUTHORITY.md's Naming section for how to build one " +
-				"(Neura dev-installed + IJulia).",
-		);
-	}
-	return dir;
+function requiredSetting(value: string | undefined, name: string): string {
+	if (!value) throw new Error(`neurajl: ${name} is not configured`);
+	return value;
 }
 
-/**
- * Starts one persistent `session_cli.py` process, wires its newline-JSON
- * stdio protocol to a request-id-keyed promise map, and returns the ready
- * `{tools, dispose}` pair `SessionBaseToolsFactory` expects.
- *
- * Session identity is explicit here too, not assumed: this function does not
- * resolve until the child's own HELLO line (carrying its own real epoch,
- * generated by NeuraSession itself, not by this process) has been read --
- * mirroring the same discipline `security/session.py`'s `NeuraSession`
- * already holds toward `scripts/session_loop.jl`, one layer further out.
- */
-async function startNeurajlSession(
-	cwd: string,
-	options: NeurajlToolOptions | undefined,
-): Promise<{ tool: AgentTool<typeof neurajlSchema, NeurajlToolDetails>; dispose: () => Promise<void> }> {
-	const cliPath = resolveSessionCliPath(options);
-	const projectDir = resolveProjectDir(options);
+export function truncateMiddle(text: string, maxChars: number | undefined): { text: string; truncated: boolean } {
+	if (maxChars === undefined || text.length <= maxChars) return { text, truncated: false };
+	const notice = `\n[... ${text.length - maxChars} characters elided ...]\n`;
+	const keep = Math.max(0, maxChars - notice.length);
+	const head = Math.ceil(keep / 2);
+	return { text: text.slice(0, head) + notice + text.slice(text.length - (keep - head)), truncated: true };
+}
+
+export function formatNeurajlResponse(response: Record<string, unknown>): string {
+	const parts: string[] = [];
+	const output = typeof response.output === "string" ? response.output.trimEnd() : "";
+	if (output) parts.push(output);
+	if (response.success === true) {
+		const display =
+			typeof response.display === "string"
+				? response.display
+				: response.data === null || response.data === undefined
+					? undefined
+					: typeof response.data === "string"
+						? response.data
+						: JSON.stringify(response.data);
+		if (display !== undefined) parts.push(output ? `=> ${display}` : display);
+	} else {
+		parts.push(`Error: ${typeof response.error === "string" ? response.error : "unknown error"}`);
+	}
+	return parts.join("\n") || "(no output)";
+}
+
+async function startKernel(cwd: string, options: NeurajlToolOptions | undefined): Promise<NeurajlKernel> {
+	const cliPath = requiredSetting(options?.sessionCliPath ?? process.env.NEURAJL_SESSION_CLI, "session_cli.py path");
+	const projectDir = requiredSetting(
+		options?.projectDir ?? process.env.NEURAJL_PROJECT_DIR,
+		"Julia project directory",
+	);
 	const pythonBin = options?.pythonBin ?? process.env.NEURAJL_PYTHON ?? "python3";
-	const startupTimeoutMs = options?.startupTimeoutMs ?? 30_000;
+	const startupTimeoutMs = options?.startupTimeoutMs ?? 180_000;
 
-	const args = [cliPath, "--project-dir", projectDir, "--ceiling", JSON.stringify(options?.ceiling ?? {})];
+	const args = [
+		"-u",
+		cliPath,
+		"--project-dir",
+		projectDir,
+		"--ceiling",
+		JSON.stringify(options?.ceiling ?? {}),
+		"--workspace-dir",
+		cwd,
+		"--startup-timeout",
+		String(startupTimeoutMs / 1000),
+	];
 	if (options?.repoDir) args.push("--repo-dir", options.repoDir);
 	if (options?.network) args.push("--network");
 	if (options?.turnTimeout) args.push("--turn-timeout", String(options.turnTimeout));
@@ -145,191 +147,209 @@ async function startNeurajlSession(
 
 	const pending = new Map<string, PendingTurn>();
 	let nextRequestId = 0;
-	let dead = false;
-	let deadReason = "";
+	let deadReason: string | undefined;
 	let stdoutBuffer = "";
 	let stderrTail = "";
+	let resolveHello: (message: Record<string, unknown>) => void = () => {};
+	let rejectHello: (error: Error) => void = () => {};
+	const helloPromise = new Promise<Record<string, unknown>>((resolve, reject) => {
+		resolveHello = resolve;
+		rejectHello = reject;
+	});
+	let helloSeen = false;
 
-	const failAllPending = (reason: string) => {
-		dead = true;
-		deadReason = reason;
+	const markDead = (reason: string) => {
+		if (deadReason === undefined) deadReason = reason;
+		if (!helloSeen) rejectHello(new Error(reason));
 		for (const waiter of pending.values()) waiter.reject(new Error(reason));
 		pending.clear();
 	};
+	// The reply that reports the death is still delivered; only later turns fail.
+	const markDeadAfterReply = (reason: string) => {
+		if (deadReason === undefined) deadReason = reason;
+	};
+	const exited = new Promise<void>((resolve) => child.once("close", () => resolve()));
 
 	child.stderr?.on("data", (chunk: Buffer) => {
 		stderrTail = (stderrTail + chunk.toString("utf8")).slice(-4000);
 	});
-
-	const helloPromise = new Promise<Record<string, unknown>>((resolveHello, rejectHello) => {
-		let resolved = false;
-		const timeoutHandle = setTimeout(() => {
-			if (resolved) return;
-			resolved = true;
-			rejectHello(
-				new Error(`neurajl: session process did not send HELLO within ${startupTimeoutMs}ms. stderr: ${stderrTail}`),
-			);
-		}, startupTimeoutMs);
-
-		child.stdout?.on("data", (chunk: Buffer) => {
-			stdoutBuffer += chunk.toString("utf8");
-			let newlineIndex: number;
-			// biome-ignore lint: while-assignment is the clearest shape for draining a growing buffer line by line
-			while ((newlineIndex = stdoutBuffer.indexOf("\n")) !== -1) {
-				const line = stdoutBuffer.slice(0, newlineIndex);
-				stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
-				if (!line.trim()) continue;
-
-				let message: Record<string, unknown>;
-				try {
-					message = JSON.parse(line);
-				} catch {
-					continue; // a malformed line from the bridge is not this tool's problem to surface as a turn result
-				}
-
-				if (!resolved) {
-					resolved = true;
-					clearTimeout(timeoutHandle);
-					if (message.kind === "HELLO") resolveHello(message);
-					else rejectHello(new Error(`neurajl: unexpected first line from session_cli.py: ${line}`));
-					continue;
-				}
-
-				const requestId = message.request_id !== undefined && message.request_id !== null ? String(message.request_id) : undefined;
-				const waiter = requestId !== undefined ? pending.get(requestId) : undefined;
-				if (waiter) {
-					pending.delete(requestId as string);
-					waiter.resolve(message);
-				}
+	child.stdout?.on("data", (chunk: Buffer) => {
+		stdoutBuffer += chunk.toString("utf8");
+		let newlineIndex = stdoutBuffer.indexOf("\n");
+		while (newlineIndex !== -1) {
+			const line = stdoutBuffer.slice(0, newlineIndex);
+			stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+			newlineIndex = stdoutBuffer.indexOf("\n");
+			if (!line.trim()) continue;
+			let message: Record<string, unknown>;
+			try {
+				message = JSON.parse(line);
+			} catch {
+				markDead(`neurajl: bridge sent a non-JSON line: ${line.slice(0, 200)}`);
+				child.kill("SIGTERM");
+				return;
 			}
-		});
+			if (!helloSeen) {
+				helloSeen = true;
+				if (message.kind === "HELLO" && typeof message.epoch === "string") resolveHello(message);
+				else {
+					const reason = `neurajl: kernel failed to start: ${String(message.error ?? line)}`;
+					rejectHello(new Error(reason));
+					markDead(reason);
+				}
+				continue;
+			}
+			const requestId =
+				message.request_id === undefined || message.request_id === null ? undefined : String(message.request_id);
+			const waiter = requestId === undefined ? undefined : pending.get(requestId);
+			if (message.session_dead === true) markDeadAfterReply(String(message.error ?? "neurajl: kernel stopped"));
+			if (waiter && requestId !== undefined) {
+				pending.delete(requestId);
+				waiter.resolve(message);
+			}
+		}
 	});
-
-	child.on("exit", (code) => {
+	// "close", not "exit": the bridge writes its final response and exits at
+	// once, and "exit" can fire before that last stdout chunk is delivered.
+	child.on("close", (code, signal) => {
 		if (child.pid) untrackDetachedChildPid(child.pid);
-		failAllPending(`neurajl: session process exited (code ${code}). stderr: ${stderrTail}`);
+		markDead(`neurajl: kernel process exited (${signal ?? code}). stderr: ${stderrTail}`);
 	});
-	child.on("error", (err) => {
-		failAllPending(`neurajl: session process failed to start: ${err.message}`);
-	});
+	child.on("error", (err) => markDead(`neurajl: kernel process failed to start: ${err.message}`));
 
-	await helloPromise;
-
-	async function turn(code: string, ephemeral: boolean | undefined): Promise<Record<string, unknown>> {
-		if (dead) throw new Error(deadReason);
-		const requestId = String(++nextRequestId);
-		const request: Record<string, unknown> = { request_id: requestId, code };
-		if (ephemeral) request.ephemeral = true;
-		const responsePromise = new Promise<Record<string, unknown>>((resolve, reject) => {
-			pending.set(requestId, { resolve, reject });
-		});
-		child.stdin?.write(`${JSON.stringify(request)}\n`);
-		return responsePromise;
+	const startupTimer = setTimeout(() => {
+		markDead(`neurajl: kernel did not start within ${startupTimeoutMs}ms. stderr: ${stderrTail}`);
+		child.kill("SIGTERM");
+	}, startupTimeoutMs + 5000);
+	let hello: Record<string, unknown>;
+	try {
+		hello = await helloPromise;
+	} finally {
+		clearTimeout(startupTimer);
 	}
 
-	const definition: ToolDefinition<typeof neurajlSchema, NeurajlToolDetails> = {
-		name: "neurajl",
-		label: "neurajl",
-		description:
-			"Execute Julia code in this session's own persistent NeuraJL kernel: real state, real compiled methods, surviving across calls (unlike a one-shot interpreter invocation). Prefer this over guessing at numerical, symbolic, or structured computation in-context. Set `ephemeral: true` for disposable generated code you deliberately do not want to leave behind in the persistent kernel's own namespace. Does not support spawning sub-agents, file diffs, or image attachments.",
-		promptSnippet: "neurajl - persistent, stateful Julia kernel with a broker-mediated authority fence",
-		executionMode: "sequential",
-		parameters: neurajlSchema,
-		execute: async (_toolCallId, params) => {
-			const started = Date.now();
-			let response: Record<string, unknown>;
-			try {
-				response = await turn(params.code, params.ephemeral);
-			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
-				return { content: [{ type: "text", text: `NeuraJL session error: ${message}` }], details: { success: false }, isError: true };
-			}
-
-			const success = response.success === true;
-			const errorText = typeof response.error === "string" ? response.error : undefined;
-			const data = response.data;
-			const text = success
-				? data === null || data === undefined
-					? "(no output)"
-					: typeof data === "string"
-						? data
-						: JSON.stringify(data)
-				: `Error: ${errorText ?? "unknown error"}`;
-
-			const details: NeurajlToolDetails = {
-				success,
-				epoch: typeof response.epoch === "string" ? response.epoch : undefined,
-				durationMs: Date.now() - started,
-			};
-			return { content: [{ type: "text", text }], details, isError: !success };
-		},
+	// session_cli.py tears down its sandbox and depot clone on stdin EOF or
+	// SIGTERM. SIGKILL is the last resort because it skips that cleanup.
+	const stop = async () => {
+		if (child.exitCode !== null || child.signalCode !== null) return;
+		child.stdin?.end();
+		const graceful = await Promise.race([exited.then(() => true), sleep(10_000).then(() => false)]);
+		if (graceful) return;
+		child.kill("SIGTERM");
+		const terminated = await Promise.race([exited.then(() => true), sleep(20_000).then(() => false)]);
+		if (!terminated && child.pid) killProcessTree(child.pid);
 	};
 
 	return {
-		tool: wrapToolDefinition(definition),
-		dispose: async () => {
-			try {
-				child.stdin?.end();
-			} catch {
-				// already closed; nothing to do
-			}
-			await new Promise<void>((resolve) => {
-				const forceKillTimeout = setTimeout(() => {
-					if (child.pid) killProcessTree(child.pid);
-					resolve();
-				}, 5000);
-				child.once("exit", () => {
-					clearTimeout(forceKillTimeout);
-					resolve();
+		epoch: String(hello.epoch),
+		isDead: () => deadReason !== undefined,
+		turn: (code, ephemeral, signal) => {
+			if (deadReason !== undefined) return Promise.reject(new Error(deadReason));
+			if (signal?.aborted) return Promise.reject(new Error("neurajl: aborted"));
+			const requestId = String(++nextRequestId);
+			const request: Record<string, unknown> = { request_id: requestId, code };
+			if (ephemeral) request.ephemeral = true;
+			return new Promise<Record<string, unknown>>((resolve, reject) => {
+				// The protocol is one request, one response, in order. A turn
+				// abandoned mid-flight leaves the kernel busy with no way to
+				// resynchronize, so an abort ends this kernel.
+				const onAbort = () => {
+					markDead("neurajl: turn aborted; kernel stopped");
+					child.kill("SIGTERM");
+				};
+				signal?.addEventListener("abort", onAbort, { once: true });
+				pending.set(requestId, {
+					resolve: (message) => {
+						signal?.removeEventListener("abort", onAbort);
+						resolve(message);
+					},
+					reject: (error) => {
+						signal?.removeEventListener("abort", onAbort);
+						reject(error);
+					},
 				});
+				child.stdin?.write(`${JSON.stringify(request)}\n`);
 			});
 		},
+		dispose: stop,
 	};
 }
 
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms).unref?.());
+}
+
 /**
- * `SessionBaseToolsFactory` for NeuraJL -- see the module docstring above for
- * why this is the right boundary (not `baseToolsOverride`). Called once per
- * agent session, including once per RLM child (each getting its own,
- * independent NeuraJL process/kernel -- never sharing the parent's mutable
- * bindings), per `baseToolsFactory`'s own documented contract in
- * agent-session.ts.
+ * `SessionBaseToolsFactory` for NeuraJL: one kernel per agent session,
+ * including each RLM child, started lazily on the first call.
  */
 export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlToolOptions): SessionBaseToolsFactory {
 	return (_sessionId: string) => {
-		let sessionPromise: ReturnType<typeof startNeurajlSession> | undefined;
+		let kernelPromise: Promise<NeurajlKernel> | undefined;
+		let lastEpoch: string | undefined;
+		let disposed = false;
 
-		function ensureStarted() {
-			if (!sessionPromise) sessionPromise = startNeurajlSession(cwd, options);
-			return sessionPromise;
+		// Returns the live kernel, starting one if none exists or the last one
+		// died. `restartedFrom` names the dead kernel's epoch.
+		async function liveKernel(): Promise<{ kernel: NeurajlKernel; restartedFrom?: string }> {
+			if (disposed) throw new Error("neurajl: session disposed");
+			if (kernelPromise) {
+				const current = await kernelPromise.catch(() => undefined);
+				if (current && !current.isDead()) return { kernel: current };
+				if (current) await current.dispose();
+			}
+			const restartedFrom = lastEpoch;
+			kernelPromise = startKernel(cwd, options);
+			const kernel = await kernelPromise;
+			lastEpoch = kernel.epoch;
+			return { kernel, restartedFrom };
 		}
 
-		// The tool registered here is a thin proxy: AgentSession needs a real
-		// tool object synchronously (`baseToolsFactory` is not async), but
-		// starting the actual NeuraJL process is. The first real call lazily
-		// starts it and every call (including the first) awaits readiness
-		// before sending a turn -- callers see a normal async tool call, not
-		// a two-phase "start, then use" API.
-		const proxyDefinition: ToolDefinition<typeof neurajlSchema, NeurajlToolDetails> = {
+		const definition: ToolDefinition<typeof neurajlSchema, NeurajlToolDetails> = {
 			name: "neurajl",
 			label: "neurajl",
 			description:
-				"Execute Julia code in this session's own persistent NeuraJL kernel: real state, real compiled methods, surviving across calls (unlike a one-shot interpreter invocation). Prefer this over guessing at numerical, symbolic, or structured computation in-context. Set `ephemeral: true` for disposable generated code you deliberately do not want to leave behind in the persistent kernel's own namespace. Does not support spawning sub-agents, file diffs, or image attachments.",
-			promptSnippet: "neurajl - persistent, stateful Julia kernel with a broker-mediated authority fence",
+				"Execute Julia in this session's persistent NeuraJL kernel. The working directory is the task workspace; read and edit files with Julia's file I/O and run shell commands with run(`...`) or read(`...`, String). State survives across calls. Printed output and the last expression's value are returned. A call that exceeds the time limit or is aborted stops the kernel; the next call starts a fresh one and says so.",
+			promptSnippet: "neurajl - persistent Julia kernel in the task workspace, OS-sandboxed",
 			executionMode: "sequential",
 			parameters: neurajlSchema,
-			execute: async (toolCallId, params, signal, onUpdate, ctx) => {
-				const { tool } = await ensureStarted();
-				return tool.execute(toolCallId, params, signal, onUpdate, ctx as never);
+			// The agent loop marks a tool result as an error only when execute
+			// throws; an `isError` field on a returned result is ignored.
+			execute: async (_toolCallId, params, signal) => {
+				const started = Date.now();
+				const { kernel, restartedFrom } = await liveKernel();
+				const notice =
+					restartedFrom === undefined
+						? ""
+						: `[neurajl: the previous kernel (epoch ${restartedFrom}) stopped; this call ran in a NEW kernel (epoch ${kernel.epoch}). All earlier bindings, functions and loaded packages are gone. Files written to the workspace remain.]\n`;
+				let response: Record<string, unknown>;
+				try {
+					response = await kernel.turn(params.code, params.ephemeral, signal);
+				} catch (err) {
+					throw new Error(`${notice}${err instanceof Error ? err.message : String(err)}`);
+				}
+				const { text, truncated } = truncateMiddle(formatNeurajlResponse(response), options?.maxOutputChars);
+				if (response.success !== true) throw new Error(`${notice}${text}`);
+				return {
+					content: [{ type: "text", text: `${notice}${text}` }],
+					details: {
+						success: true,
+						epoch: kernel.epoch,
+						restartedFromEpoch: restartedFrom,
+						durationMs: Date.now() - started,
+						outputTruncated: truncated,
+					},
+				};
 			},
 		};
 
 		return {
-			tools: { neurajl: wrapToolDefinition(proxyDefinition) },
+			tools: { neurajl: wrapToolDefinition(definition) },
 			dispose: async () => {
-				if (!sessionPromise) return; // never actually started -- nothing to clean up
-				const { dispose } = await sessionPromise;
-				await dispose();
+				disposed = true;
+				if (!kernelPromise) return;
+				const kernel = await kernelPromise.catch(() => undefined);
+				await kernel?.dispose();
 			},
 		};
 	};

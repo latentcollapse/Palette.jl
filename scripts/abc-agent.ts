@@ -1,4 +1,4 @@
-/** One scored A/B/C trial. The task fixture is process.cwd(). */
+/** One scored D (NeuraJL) trial. The task fixture is process.cwd(). */
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { AuthStorage } from "../packages/coding-agent/src/core/auth-storage.js";
@@ -8,14 +8,19 @@ import { createAgentSession } from "../packages/coding-agent/src/core/sdk.js";
 import { SessionManager } from "../packages/coding-agent/src/core/session-manager.js";
 import { SettingsManager } from "../packages/coding-agent/src/core/settings-manager.js";
 import { createModelRequestBudget } from "../packages/coding-agent/src/core/model-request-budget.js";
-import { createNeurabashOperatorTools } from "../packages/coding-agent/src/core/tools/neurabash-session.js";
+import { createNeurajlBaseToolsFactory } from "../packages/coding-agent/src/core/tools/neurajl.js";
 
 const promptFile = process.env.ABC_PROMPT_FILE;
 const traceFile = process.env.ABC_TRACE_FILE;
 const agentDir = process.env.ABC_AGENT_DIR;
-const binPath = process.env.NEURABASH_BIN;
-const rootPath = process.env.NEURABASH_ROOT;
-if (!promptFile || !traceFile || !agentDir || !binPath || !rootPath) throw new Error("Missing A/B/C trial configuration");
+const sessionCliPath = process.env.NEURAJL_SESSION_CLI;
+const projectDir = process.env.NEURAJL_PROJECT_DIR;
+const repoDir = process.env.NEURAJL_REPO_DIR;
+const maxOutputChars = Number(process.env.ABC_NEURAJL_MAX_OUTPUT_CHARS);
+if (!promptFile || !traceFile || !agentDir || !sessionCliPath || !projectDir || !repoDir) {
+	throw new Error("Missing A/B/C/D trial configuration");
+}
+if (!Number.isSafeInteger(maxOutputChars) || maxOutputChars <= 0) throw new Error("Invalid NeuraJL output cap");
 const configuredBaseUrl = process.env.ABC_BASE_URL;
 const localBaseUrl = configuredBaseUrl && !configuredBaseUrl.includes("openrouter.ai") ? configuredBaseUrl : undefined;
 const requestBaseUrl = configuredBaseUrl ?? "https://openrouter.ai/api/v1";
@@ -83,14 +88,15 @@ const { session } = await createAgentSession({
 	resourceLoader,
 	model,
 	sessionManager,
-	baseToolsFactory: createNeurabashOperatorTools(cwd, {
-		binPath,
-		rootPath,
-		profile: "workspace",
-		timeoutMs: toolTimeoutMs,
+	baseToolsFactory: createNeurajlBaseToolsFactory(cwd, {
+		sessionCliPath,
+		projectDir,
+		repoDir,
+		turnTimeout: toolTimeoutMs / 1000,
+		maxOutputChars,
 	}),
-	initialActiveToolNames: ["neurabash", "neurabash_session"],
-	allowedToolNames: ["neurabash", "neurabash_session"],
+	initialActiveToolNames: ["neurajl"],
+	allowedToolNames: ["neurajl"],
 	includeGoals: false,
 	modelRequestBudget,
 });
@@ -102,7 +108,7 @@ const persistTrace = () => {
 		temporaryTraceFile,
 		JSON.stringify(
 			{
-				stack: "nira-neurabash",
+				stack: "nira-neurajl",
 				model: `${model.provider}/${model.id}`,
 				started,
 				ended: Date.now(),
@@ -110,6 +116,7 @@ const persistTrace = () => {
 				contextPolicy: { contextWindow: model.contextWindow, maxOutputTokens: model.maxTokens, compaction: compactionSettings },
 				routePolicy: localBaseUrl ? null : { only: ["cohere"], allow_fallbacks: false },
 				toolTimeoutMs,
+				toolOutputCapChars: maxOutputChars,
 				modelRequestBudget,
 				activeTools: session.getActiveToolNames(),
 				assistantCalls,
@@ -130,7 +137,7 @@ const unsubscribe = session.subscribe((event) => {
 	if (event.type === "message_end") persistTrace();
 });
 try {
-	if (session.getToolDefinition("ipython")) throw new Error("IPython leaked into NeuraBash condition");
+	if (session.getToolDefinition("ipython")) throw new Error("IPython leaked into NeuraJL condition");
 	await session.prompt(readFileSync(promptFile, "utf8"));
 	await session.waitForHeadlessIdle();
 	const terminalAssistant = [...session.messages].reverse().find(
