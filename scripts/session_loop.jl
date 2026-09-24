@@ -93,30 +93,36 @@ function respond(resp::Dict{String,Any})
     flush(PROTO)
 end
 
-function read_capped(path::AbstractString)
-    open(path) do io
-        size = filesize(io)
-        text = String(read(io, min(size, MAX_OUTPUT_BYTES)))
-        size > MAX_OUTPUT_BYTES ? text * "\n[output truncated: $(size) bytes total]" : text
-    end
-end
-
-# Runs `f` with fd 1 and fd 2 both pointed at one file, so printed output and
-# errors keep their order the way a terminal shows them.
+# Runs `f` with fd 1 and fd 2 both on one pipe. A pipe, not a file: Julia
+# buffers writes to a file stream, so a `run` child's output (written to the
+# fd directly) showed up before prints that came earlier in the turn.
 function capture_output(f)
-    path, io = mktemp()
+    pipe = Pipe()
+    Base.link_pipe!(pipe; reader_supports_async=true, writer_supports_async=true)
+    collected = IOBuffer()
+    total = Ref(0)
+    reader = @async while !eof(pipe)
+        chunk = readavailable(pipe)
+        total[] += length(chunk)
+        room = MAX_OUTPUT_BYTES - collected.size
+        room > 0 && write(collected, length(chunk) <= room ? chunk : chunk[1:room])
+    end
     value = nothing
     try
-        redirect_stdout(io) do
-            redirect_stderr(io) do
+        redirect_stdout(pipe.in) do
+            redirect_stderr(pipe.in) do
                 value = f()
             end
         end
     finally
-        close(io)
+        close(pipe.in)
+        # A background process the turn started still holds the write end, so
+        # EOF may never come; take what has arrived rather than hang the turn.
+        timedwait(() -> istaskdone(reader), 2.0)
+        istaskdone(reader) || close(pipe.out)
     end
-    output = read_capped(path)
-    rm(path; force=true)
+    output = String(take!(collected))
+    total[] > MAX_OUTPUT_BYTES && (output *= "\n[output truncated: $(total[]) bytes total]")
     return value, output
 end
 
