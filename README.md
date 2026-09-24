@@ -30,6 +30,11 @@ Conventional Julia package layout -- repo root is the package root:
 | `demo/` | Empty by design -- see `demo/README.md` for where the real demos live |
 | `docs/` | Experiment reports (results, authority model, threat model, capability model) |
 | `scripts/` | The real IJulia integration proof, plus a retired pointer stub |
+| `security/` | Sandbox launcher, capability broker, persistent session and its stdio bridge |
+
+Before the first session on a depot, and again after Neura or the session
+project changes, run `python3 security/prewarm_depot.py --project-dir <project>`.
+Without it every session recompiles stdlibs on first use (`using Pkg` ~80s).
 
 ## Substrate clarification (read this)
 

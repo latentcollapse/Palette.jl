@@ -129,6 +129,7 @@ class Broker:
         depot_dir: str | None = None,
         project_dir: str | None = None,
         repo_dir: str | None = None,
+        child_timeout: float = 90.0,
     ):
         # Deep-copied, not stored by reference: confirmed by direct testing
         # that a caller mutating the dict it passed in (e.g. appending to
@@ -154,6 +155,10 @@ class Broker:
         # view points.
         self.project_dir = project_dir
         self.repo_dir = repo_dir
+        # Host-set, never taken from a request. A persistent session sets it
+        # below its own turn timeout, so a hung ephemeral child is killed
+        # before the session gives up on the turn and kills the kernel too.
+        self.child_timeout = child_timeout
         # This session's own private depot clone (see launch_worker.
         # create_session_depot), if one has been set up for it. Needed by
         # package_management: a bind mount is a live view of a directory,
@@ -376,8 +381,10 @@ class Broker:
                 broker_socket_dir=child_sock_dir,
                 network_enabled=False,
                 depot_clone_dir=child_depot_dir,
-                timeout=90,
+                timeout=self.child_timeout,
             )
+        except subprocess.TimeoutExpired:
+            raise CapabilityDenied(f"child worker exceeded its {self.child_timeout:g}s time limit and was killed")
         finally:
             child_server.shutdown()
             child_server.server_close()
@@ -494,10 +501,14 @@ def serve(
     depot_dir: str | None = None,
     project_dir: str | None = None,
     repo_dir: str | None = None,
+    child_timeout: float = 90.0,
 ):
     if os.path.exists(sock_path):
         os.unlink(sock_path)
-    broker = Broker(ceiling, receipt_log_path, session_id, depot_dir=depot_dir, project_dir=project_dir, repo_dir=repo_dir)
+    broker = Broker(
+        ceiling, receipt_log_path, session_id,
+        depot_dir=depot_dir, project_dir=project_dir, repo_dir=repo_dir, child_timeout=child_timeout,
+    )
     server = _UnixSocketServer(sock_path, _ConnHandler)
     server.broker = broker  # type: ignore[attr-defined]
     os.chmod(sock_path, 0o666)  # the sandboxed worker connects as a different uid view

@@ -674,10 +674,10 @@ end
     record_tool_capsule(tool_id, code, result, duration_ms)
 
 Appends one mechanical, non-authoritative provenance record for a retired
-ephemeral tool to this worker's own workspace (`.neurajl/provenance.jsonl`,
-relative to `pwd()` -- the sandbox's `--chdir` target, which is already a
-real, host-bind-mounted directory, so this needs no broker mediation to
-become visible outside the sandbox: workspace writes are Class B, not C).
+ephemeral tool to `provenance.jsonl` under `ENV["NEURAJL_PROVENANCE_DIR"]`,
+or `.neurajl/` relative to `pwd()` when that is unset. A persistent session
+sets it to the sandbox's private home, because there `pwd()` is the agent's
+task workspace and the log would show up among the task's own files.
 
 Deliberately mechanical, not model-authored: a content hash (same
 convention as NeuraBash's own Forge module -- `bytes2hex(sha256(...))`),
@@ -690,7 +690,7 @@ authorization: nothing in this codebase reads this file to decide whether
 to permit anything, and it is never treated as such.
 """
 function record_tool_capsule(tool_id::String, code::String, result::OperationResult, duration_ms::Float64)
-    dir = joinpath(pwd(), ".neurajl")
+    dir = get(ENV, "NEURAJL_PROVENANCE_DIR", joinpath(pwd(), ".neurajl"))
     mkpath(dir)
     capsule = Dict{String,Any}(
         "schema" => "neurajl.tool_capsule.v1",

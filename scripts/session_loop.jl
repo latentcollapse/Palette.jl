@@ -72,6 +72,15 @@ const PROTO = let fd = ccall(:dup, Cint, (Cint,), 1)
     fd < 0 && error("dup(1) failed")
     fdio(fd, true)
 end
+# Requests arrive on a duplicate of fd 0 for the same reason, and fd 0 itself
+# becomes /dev/null: a `readline()` or a `run(`cat`)` in turn code used to
+# consume the next request and leave the host waiting for a reply until the
+# turn timed out.
+const PROTO_IN = let fd = ccall(:dup, Cint, (Cint,), 0)
+    fd < 0 && error("dup(0) failed")
+    open(Base.RawFD(fd))
+end
+redirect_stdin(open("/dev/null"))
 const SINK = open(joinpath(tempdir(), "neurajl-background-output.log"), "a")
 redirect_stdout(SINK)
 redirect_stderr(SINK)
@@ -147,7 +156,7 @@ end
 
 respond(Dict{String,Any}("kind" => "HELLO", "epoch" => EPOCH))
 
-for line in eachline(stdin)
+for line in eachline(PROTO_IN)
     isempty(strip(line)) && continue
 
     local req
@@ -197,7 +206,14 @@ for line in eachline(stdin)
                 lines = split(child_stdout, '\n')
                 idx = findlast(ln -> !isempty(strip(ln)), lines)
                 last_line = idx === nothing ? "" : lines[idx]
-                child_result = JSON.parse(last_line)
+                child_result = try
+                    JSON.parse(last_line)
+                catch
+                    # The child died before printing its result line.
+                    stderr_tail = strip(String(get(spawn_resp["result"], "stderr", "")))
+                    error("ephemeral child exited with code $(get(spawn_resp["result"], "returncode", "?")) and no result" *
+                          (isempty(stderr_tail) ? "" : ":\n" * last(stderr_tail, 1500)))
+                end
                 resp["success"] = get(child_result, "success", false)
                 resp["data"] = get(child_result, "data", nothing)
                 resp["output"] = idx === nothing ? "" : join(lines[1:idx-1], '\n')
