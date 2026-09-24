@@ -154,6 +154,24 @@ function bounded_data(value)
     return text_display(value)
 end
 
+# In trials a model met these errors and retried the same thing several
+# times, a model request each; the hint names what works instead.
+const PKG_OFFLINE = get(ENV, "JULIA_PKG_OFFLINE", "") == "true"
+const LOADABLE = let deps = get(Base.parsed_toml(Base.active_project()), "deps", Dict())
+    join(["the Julia standard library"; sort!([String(k) for k in keys(deps) if k != "Neura"])], ", ")
+end
+
+function with_hint(err)
+    err isa AbstractString || return err
+    if occursin("must be quoted in commands", err)
+        return err * "\nHint: backticks start one program without a shell. " *
+               "Use bash(\"...\") for pipes, globs, redirects and &&."
+    elseif PKG_OFFLINE && occursin(r"not found in current path|has no known versions|Could not resolve host|name resolution", err)
+        return err * "\nHint: this kernel has no network, so Pkg.add cannot install packages. Loadable: $LOADABLE."
+    end
+    return err
+end
+
 respond(Dict{String,Any}("kind" => "HELLO", "epoch" => EPOCH))
 
 for line in eachline(PROTO_IN)
@@ -251,5 +269,6 @@ for line in eachline(PROTO_IN)
         resp["error"] = sprint(showerror, e)
     end
 
+    resp["error"] = with_hint(get(resp, "error", nothing))
     respond(resp)
 end

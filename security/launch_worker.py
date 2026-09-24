@@ -169,6 +169,10 @@ def build_bwrap_argv(
     ]
     if broker_socket_dir:
         argv += ["--setenv", "NEURAJL_BROKER_SOCKET", str(Path(broker_socket_dir) / "broker.sock")]
+    if not network_enabled:
+        # Without it Pkg.add spends ~18s per package on DNS retries before
+        # failing, and a few adds in one turn outlast the turn limit.
+        argv += ["--setenv", "JULIA_PKG_OFFLINE", "true"]
     return argv
 
 

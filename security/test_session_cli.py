@@ -205,6 +205,23 @@ class TestSessionCli(unittest.TestCase):
         self.assertTrue(r["success"], r)
         self.assertNotIn("Precompiling", r["output"], "run security/prewarm_depot.py for this depot")
 
+    def test_bash_runs_shell_syntax_and_returns_the_exit_code(self):
+        r = self._turn('bash("ls *.txt | wc -l; echo to-stderr >&2; exit 3")')
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["data"], 3)
+        self.assertEqual(r["output"].split(), ["1", "to-stderr"])
+
+    def test_shell_syntax_in_backticks_points_to_bash(self):
+        r = self._turn("run(`ls *.txt 2>&1`)")
+        self.assertFalse(r["success"])
+        self.assertIn('bash("...")', r["error"])
+
+    def test_missing_package_says_there_is_no_network(self):
+        r = self._turn("using NoSuchPackageAnywhere")
+        self.assertFalse(r["success"])
+        self.assertIn("no network", r["error"])
+        self.assertIn("Loadable: the Julia standard library", r["error"])
+
     def test_timeout_reply_marks_the_session_dead(self):
         r = self._turn("sleep(60)")
         self.assertFalse(r["success"])

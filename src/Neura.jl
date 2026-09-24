@@ -210,6 +210,10 @@ mutable struct KernelState
         # external_fs_write, then loaded back with `include`) can actually
         # be loaded into the persistent mind's own module, not just Main.
         Core.eval(state.eval_module, :(include(path) = Base.include(@__MODULE__, path)))
+        # Backtick commands start one program with no shell, so a pipe, glob
+        # or `2>&1` inside them is a parse error; this is the explicit way
+        # to reach a shell from turn code.
+        Core.eval(state.eval_module, :(bash(script::AbstractString) = $(run_bash)(script)))
         state.variables = Dict{String, Any}()
         state.execution_history = ExecutionRecord[]
         state.operator_registry = Dict{String, Function}()
@@ -377,6 +381,15 @@ struct ShellEscape <: OperatorType
 end
 
 """
+    run_bash(script) -> Int
+
+Runs `script` with `bash -c`, so pipes, globs, redirects and `&&` work. Output
+goes to the caller's stdout and stderr. Returns the exit code instead of
+throwing on a nonzero one. Turn code reaches it as `bash(script)`.
+"""
+run_bash(script::AbstractString) = run(ignorestatus(`bash -c $script`)).exitcode
+
+"""
     register_operator!(state::KernelState, name::String, f::Function)
 
 Registers a real, callable operator under `name`. `InvokeOperator` calls the
@@ -432,7 +445,7 @@ function execute(op::ExecuteCode)::OperationReceipt
             # turn code can reach `Neura.request_capability` without
             # re-importing it every turn -- not a user variable, must not
             # show up in GetState/discovery any more than :eval or :include do.
-            (sym === own_name || sym === :eval || sym === :include || sym === :Neura) && continue
+            (sym === own_name || sym in (:eval, :include, :bash, :Neura)) && continue
             startswith(string(sym), '#') && continue
             if Base.invokelatest(isdefined, state.eval_module, sym)
                 state.variables[string(sym)] = Base.invokelatest(getfield, state.eval_module, sym)

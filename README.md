@@ -35,6 +35,9 @@ Conventional Julia package layout -- repo root is the package root:
 Before the first session on a depot, and again after Neura or the session
 project changes, run `python3 security/prewarm_depot.py --project-dir <project>`.
 Without it every session recompiles stdlibs on first use (`using Pkg` ~80s).
+Run it with the same mounts sessions will have: a harness that puts the Julia
+runtime or this repo at another path must prewarm there, or every kernel
+start recompiles (~45s).
 
 ## Substrate clarification (read this)
 
