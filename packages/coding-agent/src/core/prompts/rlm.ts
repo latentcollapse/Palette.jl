@@ -11,9 +11,13 @@ export interface RlmPromptOptions {
 	activeTools?: string[];
 }
 
+const DELEGATION_PROMPT =
+	"When delegation is available and useful, assign independent substantive tasks to separate workers. Start independent workers without waiting for each one sequentially, and let them run in parallel.";
+
+// Only the IPython REPL has background `bash()` handles and completion follow-ups.
 const LONG_RUNNING_WORK_PROMPT = [
 	"For slow or independently completing work, use a nonblocking control loop: start the work, record its handle or output location, then end your turn. A `bash()` handle left running beyond its creating cell sends a completion follow-up; when it arrives, inspect the saved handle and continue. Reading a finished handle's result first cancels that follow-up.",
-	"When delegation is available and useful, assign independent substantive tasks to separate workers. Start independent workers without waiting for each one sequentially, and let them run in parallel.",
+	DELEGATION_PROMPT,
 	"Do not keep the turn open by polling with `time.sleep()` or shell `sleep`, and do not replace polling with a long blocking `await`. Await only the short operation needed to start work or inspect a result that is already available; otherwise end the turn.",
 ].join("\n");
 
@@ -95,7 +99,7 @@ export function buildRlmPrompt(options: RlmPromptOptions): string {
 		"You solve tasks by breaking down problems into sub-tasks, writing and executing code, observing results, and iterating one step at a time.",
 		"When you are done, stop calling tools and state your final answer.",
 		"",
-		LONG_RUNNING_WORK_PROMPT,
+		hasIpython ? LONG_RUNNING_WORK_PROMPT : DELEGATION_PROMPT,
 		"",
 		...(depth === 0 ? [USER_PROGRESS_PROMPT, ""] : []),
 		SIMPLIFIED_TECHNICAL_ENGLISH_PROMPT,
@@ -103,8 +107,12 @@ export function buildRlmPrompt(options: RlmPromptOptions): string {
 		`Working directory: ${cwd}`,
 		`Conversation log: ${messagesPath}`,
 		`Recursive agent depth: ${depth}`,
-		`Pre-installed Python packages: ${DEFAULT_RLM_EXTRA_IMPORT_LABELS.join(", ")}.`,
-		"Install additional packages with `uv pip install <pkg>` (this is a uv-managed venv with no pip module).",
+		...(hasIpython
+			? [
+					`Pre-installed Python packages: ${DEFAULT_RLM_EXTRA_IMPORT_LABELS.join(", ")}.`,
+					"Install additional packages with `uv pip install <pkg>` (this is a uv-managed venv with no pip module).",
+				]
+			: []),
 	];
 
 	const childDoctrine = buildChildAgentDoctrine(options);
