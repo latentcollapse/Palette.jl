@@ -281,10 +281,6 @@ function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms).unref?.());
 }
 
-/**
- * `SessionBaseToolsFactory` for NeuraJL: one kernel per agent session,
- * including each RLM child, started lazily on the first call.
- */
 // Names under [deps] in the session project's Project.toml. Neura is the
 // kernel itself, not something a turn loads.
 function projectPackages(projectDir: string | undefined): string[] {
@@ -304,12 +300,16 @@ function neurajlDescription(options: NeurajlToolOptions | undefined): string {
 	const packages = projectPackages(options?.projectDir ?? process.env.NEURAJL_PROJECT_DIR);
 	const loadable = ["the Julia standard library", ...packages].join(", ");
 	return [
-		"Execute Julia in this session's persistent NeuraJL kernel. The working directory is the task workspace; read and edit files with Julia's file I/O and run shell commands with run(`...`) or read(`...`, String). State survives across calls. Printed output and the last expression's value are returned.",
+		`Execute Julia in this session's persistent NeuraJL kernel. The working directory is the task workspace; read and edit files with Julia's file I/O. run(\`...\`) and read(\`...\`, String) start a program without a shell; for pipes, globs, redirects or &&, call bash("..."), which prints the output and returns the exit code. State survives across calls. Printed output and the last expression's value are returned.`,
 		`Each call may run for ${timeout}s. A call that runs longer or is aborted stops the kernel; the next call starts a fresh one and says so.`,
 		`Loadable packages: ${loadable}.${options?.network ? "" : " There is no network access, so Pkg.add cannot install more."}`,
 	].join(" ");
 }
 
+/**
+ * `SessionBaseToolsFactory` for NeuraJL: one kernel per agent session,
+ * including each RLM child, started lazily on the first call.
+ */
 export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlToolOptions): SessionBaseToolsFactory {
 	return (_sessionId: string) => {
 		let kernelPromise: Promise<NeurajlKernel> | undefined;
