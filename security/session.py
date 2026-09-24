@@ -105,11 +105,19 @@ class NeuraSession:
         network_enabled: bool = False,
         receipts_dir: str | None = None,
         turn_timeout: float = 60.0,
+        task_workspace_dir: str | None = None,
+        startup_timeout: float = 180.0,
     ):
+        """`workspace_dir` is this session's own scratch root: created here
+        and deleted on close. `task_workspace_dir` is a directory the caller
+        owns (an agent's task checkout): bound writable as the worker's
+        working directory and never deleted. Without it the worker works in
+        a private scratch workspace under the scratch root."""
         self.session_id = f"neurajl-{uuid.uuid4().hex[:16]}"
         self.project_dir = project_dir
         self.repo_dir = repo_dir
         self.turn_timeout = turn_timeout
+        self._stderr_tail = ""
         self._lock = threading.Lock()
         self._closed = False
         self._next_request_id = 0
@@ -124,8 +132,17 @@ class NeuraSession:
         # call here no matter how early the failure happened.
         try:
             self._tmp_root = Path(workspace_dir or Path.home() / ".neurajl-sessions" / self.session_id)
-            self.workspace_dir = str(self._tmp_root / "workspace")
-            Path(self.workspace_dir).mkdir(parents=True, exist_ok=True)
+            self._tmp_root.mkdir(parents=True, exist_ok=True)
+            if task_workspace_dir is not None:
+                task_workspace = Path(task_workspace_dir).resolve(strict=True)
+                if not task_workspace.is_dir():
+                    raise ValueError(f"task workspace is not a directory: {task_workspace}")
+                if task_workspace == self._tmp_root.resolve() or self._tmp_root.resolve().is_relative_to(task_workspace):
+                    raise ValueError("the session scratch root must not be the task workspace or inside it")
+                self.workspace_dir = str(task_workspace)
+            else:
+                self.workspace_dir = str(self._tmp_root / "workspace")
+                Path(self.workspace_dir).mkdir(parents=True, exist_ok=True)
 
             self.depot_clone_dir = create_session_depot()
 
@@ -156,16 +173,21 @@ class NeuraSession:
                 argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, bufsize=1,
             )
+            # Nothing else reads the worker's stderr; left undrained, 64 KiB
+            # of warnings fills the pipe and blocks the worker mid-turn.
+            self._stderr_thread = threading.Thread(target=self._drain_stderr, daemon=True)
+            self._stderr_thread.start()
 
             try:
-                hello_line = _readline_with_timeout(self._proc.stdout, turn_timeout)
+                hello_line = _readline_with_timeout(self._proc.stdout, startup_timeout)
             except TimeoutError:
                 self._proc.kill()
                 self._proc.wait()
-                raise SessionDeadError(f"worker did not produce HELLO within {turn_timeout}s")
+                raise SessionDeadError(f"worker did not produce HELLO within {startup_timeout}s")
             if not hello_line:
-                stderr = self._proc.stderr.read()
-                raise SessionDeadError(f"worker exited before HELLO: {stderr[-2000:]}")
+                self._proc.wait()
+                self._stderr_thread.join(timeout=5)
+                raise SessionDeadError(f"worker exited before HELLO: {self._stderr_tail[-2000:]}")
             hello = json.loads(hello_line)
             if hello.get("kind") != "HELLO" or not isinstance(hello.get("epoch"), str):
                 raise SessionProtocolError(f"malformed HELLO: {hello_line!r}")
@@ -173,6 +195,13 @@ class NeuraSession:
         except BaseException:
             self._teardown()
             raise
+
+    def _drain_stderr(self):
+        try:
+            for chunk in iter(lambda: self._proc.stderr.read(4096), ""):
+                self._stderr_tail = (self._stderr_tail + chunk)[-8000:]
+        except (OSError, ValueError):
+            pass
 
     def is_alive(self) -> bool:
         return not self._closed and self._proc.poll() is None
@@ -229,9 +258,19 @@ class NeuraSession:
             except (BrokenPipeError, OSError) as e:
                 raise SessionDeadError(f"session {self.session_id} pipe broke: {e}") from e
             if not line:
-                stderr = self._proc.stderr.read()
-                raise SessionDeadError(f"session {self.session_id} worker closed stdout: {stderr[-2000:]}")
-            resp = json.loads(line)
+                self._proc.wait()
+                self._stderr_thread.join(timeout=5)
+                raise SessionDeadError(
+                    f"session {self.session_id} worker closed stdout: {self._stderr_tail[-2000:]}"
+                )
+            try:
+                resp = json.loads(line)
+            except json.JSONDecodeError as e:
+                # The channel is out of sync; nothing after this line can be
+                # trusted to answer this request.
+                self._proc.kill()
+                self._proc.wait()
+                raise SessionDeadError(f"session {self.session_id} sent a non-JSON protocol line: {line[:200]!r}") from e
             if resp.get("epoch") != self.epoch:
                 # Not expected to be reachable given one dedicated process
                 # per session and no respawning -- checked anyway, the same

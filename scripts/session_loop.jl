@@ -63,6 +63,23 @@ const UUIDs = Neura.UUIDs
 
 const EPOCH = string(UUIDs.uuid4())
 
+# The protocol gets its own duplicate of fd 1, and fd 1/fd 2 are then pointed
+# at a sink file. Turn code prints, `run` children inherit fd 1, and tasks
+# left running after a turn all write somewhere; none of it may reach the
+# protocol channel, where one stray `println` used to be parsed as a
+# response and kill the session.
+const PROTO = let fd = ccall(:dup, Cint, (Cint,), 1)
+    fd < 0 && error("dup(1) failed")
+    fdio(fd, true)
+end
+const SINK = open(joinpath(tempdir(), "neurajl-background-output.log"), "a")
+redirect_stdout(SINK)
+redirect_stderr(SINK)
+
+# Enough for any output a model can use; the host applies its own tighter cap.
+const MAX_OUTPUT_BYTES = 256 * 1024
+const MAX_DATA_JSON_BYTES = 256 * 1024
+
 function safe_json(x)
     try
         return JSON.json(x)
@@ -72,8 +89,54 @@ function safe_json(x)
 end
 
 function respond(resp::Dict{String,Any})
-    println(safe_json(resp))
-    flush(stdout)
+    println(PROTO, safe_json(resp))
+    flush(PROTO)
+end
+
+function read_capped(path::AbstractString)
+    open(path) do io
+        size = filesize(io)
+        text = String(read(io, min(size, MAX_OUTPUT_BYTES)))
+        size > MAX_OUTPUT_BYTES ? text * "\n[output truncated: $(size) bytes total]" : text
+    end
+end
+
+# Runs `f` with fd 1 and fd 2 both pointed at one file, so printed output and
+# errors keep their order the way a terminal shows them.
+function capture_output(f)
+    path, io = mktemp()
+    value = nothing
+    try
+        redirect_stdout(io) do
+            redirect_stderr(io) do
+                value = f()
+            end
+        end
+    finally
+        close(io)
+    end
+    output = read_capped(path)
+    rm(path; force=true)
+    return value, output
+end
+
+function text_display(value)
+    value === nothing && return nothing
+    try
+        return Base.invokelatest(sprint, show, MIME"text/plain"(), value; context=:limit => true)
+    catch e
+        return "<display failed: $(sprint(showerror, e))>"
+    end
+end
+
+# `data` stays the raw value for callers that read it structurally, unless
+# it cannot be serialized compactly; then the text rendering stands in.
+function bounded_data(value)
+    try
+        length(JSON.json(value)) <= MAX_DATA_JSON_BYTES && return value
+    catch
+    end
+    return text_display(value)
 end
 
 respond(Dict{String,Any}("kind" => "HELLO", "epoch" => EPOCH))
@@ -131,6 +194,7 @@ for line in eachline(stdin)
                 child_result = JSON.parse(last_line)
                 resp["success"] = get(child_result, "success", false)
                 resp["data"] = get(child_result, "data", nothing)
+                resp["output"] = idx === nothing ? "" : join(lines[1:idx-1], '\n')
                 resp["error"] = get(child_result, "error", nothing)
                 record_tool_capsule(
                     string(request_id), code,
@@ -143,9 +207,11 @@ for line in eachline(stdin)
                 resp["error"] = "spawn_child_worker denied: " * string(get(spawn_resp, "reason", "unknown"))
             end
         elseif kind == "EXECUTE"
-            receipt = execute(ExecuteCode(code))
+            receipt, output = capture_output(() -> execute(ExecuteCode(code)))
             resp["success"] = receipt.result.success
-            resp["data"] = receipt.result.data
+            resp["data"] = bounded_data(receipt.result.data)
+            resp["display"] = receipt.result.success ? text_display(receipt.result.data) : nothing
+            resp["output"] = output
             resp["error"] = receipt.result.error
         else
             # Fail closed on an unrecognized `kind` -- confirmed by direct
