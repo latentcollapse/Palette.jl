@@ -1,4 +1,6 @@
 import { spawn } from "child_process";
+import { readFileSync } from "fs";
+import { join } from "path";
 import { type Static, Type } from "typebox";
 import { getShellEnv, killProcessTree, trackDetachedChildPid, untrackDetachedChildPid } from "../../utils/shell.js";
 import type { SessionBaseToolsFactory } from "../agent-session.js";
@@ -283,6 +285,31 @@ function sleep(ms: number): Promise<void> {
  * `SessionBaseToolsFactory` for NeuraJL: one kernel per agent session,
  * including each RLM child, started lazily on the first call.
  */
+// Names under [deps] in the session project's Project.toml. Neura is the
+// kernel itself, not something a turn loads.
+function projectPackages(projectDir: string | undefined): string[] {
+	if (!projectDir) return [];
+	let text: string;
+	try {
+		text = readFileSync(join(projectDir, "Project.toml"), "utf8");
+	} catch {
+		return [];
+	}
+	const deps = /^\[deps\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(text)?.[1] ?? "";
+	return [...deps.matchAll(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/gm)].map((m) => m[1]).filter((name) => name !== "Neura");
+}
+
+function neurajlDescription(options: NeurajlToolOptions | undefined): string {
+	const timeout = options?.turnTimeout ?? 60;
+	const packages = projectPackages(options?.projectDir ?? process.env.NEURAJL_PROJECT_DIR);
+	const loadable = ["the Julia standard library", ...packages].join(", ");
+	return [
+		"Execute Julia in this session's persistent NeuraJL kernel. The working directory is the task workspace; read and edit files with Julia's file I/O and run shell commands with run(`...`) or read(`...`, String). State survives across calls. Printed output and the last expression's value are returned.",
+		`Each call may run for ${timeout}s. A call that runs longer or is aborted stops the kernel; the next call starts a fresh one and says so.`,
+		`Loadable packages: ${loadable}.${options?.network ? "" : " There is no network access, so Pkg.add cannot install more."}`,
+	].join(" ");
+}
+
 export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlToolOptions): SessionBaseToolsFactory {
 	return (_sessionId: string) => {
 		let kernelPromise: Promise<NeurajlKernel> | undefined;
@@ -308,8 +335,7 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 		const definition: ToolDefinition<typeof neurajlSchema, NeurajlToolDetails> = {
 			name: "neurajl",
 			label: "neurajl",
-			description:
-				"Execute Julia in this session's persistent NeuraJL kernel. The working directory is the task workspace; read and edit files with Julia's file I/O and run shell commands with run(`...`) or read(`...`, String). State survives across calls. Printed output and the last expression's value are returned. A call that exceeds the time limit or is aborted stops the kernel; the next call starts a fresh one and says so.",
+			description: neurajlDescription(options),
 			promptSnippet: "neurajl - persistent Julia kernel in the task workspace, OS-sandboxed",
 			executionMode: "sequential",
 			parameters: neurajlSchema,
