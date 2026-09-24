@@ -18,7 +18,8 @@ simple to spawn, simple to pipe, no new transport to build.
 Protocol (all newline-delimited JSON):
 
   Request:   {"request_id": "...", "code": "...", "ephemeral": bool?, "ceiling": {...}?}
-  Response:  {"request_id": "...", "success": bool, "data": ..., "error": ..., "epoch": "..."}
+  Response:  {"request_id": "...", "success": bool, "data": ..., "display": str?, "output": str?,
+              "error": ..., "epoch": "...", "session_dead": true?}
   HELLO:     {"kind": "HELLO", "epoch": "...", "session_id": "..."}  -- printed once, at startup
 
 `ephemeral`/`ceiling` map directly onto `NeuraSession.turn()`'s own
@@ -37,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import sys
 from pathlib import Path
 
@@ -55,7 +57,17 @@ def main() -> int:
     ap.add_argument("--ceiling", default="{}", help="JSON object, or a path to a JSON file")
     ap.add_argument("--network", action="store_true")
     ap.add_argument("--turn-timeout", type=float, default=60.0)
+    ap.add_argument("--startup-timeout", type=float, default=180.0)
+    ap.add_argument("--workspace-dir", help="Task directory the worker works in; bound writable, never deleted")
     args = ap.parse_args()
+
+    # Default SIGTERM handling exits without running `finally`, which leaked
+    # the session's depot clone every time a host killed this bridge.
+    def _terminate(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, _terminate)
+    signal.signal(signal.SIGHUP, _terminate)
 
     ceiling_arg = args.ceiling
     if Path(ceiling_arg).is_file():
@@ -64,7 +76,8 @@ def main() -> int:
         ceiling = json.loads(ceiling_arg)
 
     kwargs = {"project_dir": args.project_dir, "ceiling": ceiling,
-              "network_enabled": args.network, "turn_timeout": args.turn_timeout}
+              "network_enabled": args.network, "turn_timeout": args.turn_timeout,
+              "startup_timeout": args.startup_timeout, "task_workspace_dir": args.workspace_dir}
     if args.repo_dir:
         kwargs["repo_dir"] = args.repo_dir
 
@@ -116,11 +129,16 @@ def main() -> int:
                     "request_id": request_id,
                     "success": result.get("success", False),
                     "data": result.get("data"),
+                    "display": result.get("display"),
+                    "output": result.get("output"),
                     "error": result.get("error"),
                     "epoch": result.get("epoch"),
                 })
             except SessionDeadError as e:
-                _respond({"request_id": request_id, "success": False, "data": None, "error": str(e)})
+                # `session_dead` lets the host stop sending turns now, rather
+                # than racing this process's exit.
+                _respond({"request_id": request_id, "success": False, "data": None, "error": str(e),
+                          "session_dead": True})
                 # The underlying worker is gone; every subsequent turn would
                 # fail the same way. Nothing left to serve.
                 break

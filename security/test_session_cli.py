@@ -29,6 +29,8 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -54,8 +56,11 @@ class TestSessionCli(unittest.TestCase):
     def setUp(self):
         _skip_if_no_bwrap()
         _skip_if_no_project()
+        self.task_workspace = tempfile.mkdtemp(prefix="neurajl-cli-task-")
+        Path(self.task_workspace, "marker.txt").write_text("from-host")
         self.proc = subprocess.Popen(
-            [sys.executable, CLI, "--project-dir", PROJECT_DIR, "--ceiling", "{}"],
+            [sys.executable, CLI, "--project-dir", PROJECT_DIR, "--ceiling", "{}",
+             "--workspace-dir", self.task_workspace, "--turn-timeout", "20"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1,
         )
@@ -79,6 +84,7 @@ class TestSessionCli(unittest.TestCase):
                 pipe.close()
             except Exception:
                 pass
+        shutil.rmtree(self.task_workspace, ignore_errors=True)
 
     def _turn(self, code: str, request_id: str = "1", **extra) -> dict:
         req = {"request_id": request_id, "code": code, **extra}
@@ -137,6 +143,40 @@ class TestSessionCli(unittest.TestCase):
         r = self._turn("1 + 1")
         self.assertTrue(r["success"])
         self.assertEqual(r["data"], 2)
+
+    def test_printed_output_is_returned_and_does_not_corrupt_the_protocol(self):
+        """The worker's stdout used to be the protocol channel, so one
+        `println` in turn code was parsed as a response and killed the
+        session. Output from subprocesses and from tasks still running after
+        the turn must not reach the channel either."""
+        r1 = self._turn('println("hello"); @warn "careful"; run(`echo from-child`); @async (sleep(0.2); println("late")); 7')
+        self.assertTrue(r1["success"], r1)
+        self.assertEqual(r1["data"], 7)
+        for text in ("hello", "careful", "from-child"):
+            self.assertIn(text, r1["output"])
+        time.sleep(0.5)
+        r2 = self._turn("8", request_id="2")
+        self.assertEqual(r2["request_id"], "2")
+        self.assertEqual(r2["data"], 8)
+
+    def test_worker_works_in_the_task_workspace_and_writes_reach_the_host(self):
+        r1 = self._turn('read("marker.txt", String)')
+        self.assertEqual(r1["data"], "from-host")
+        self._turn('write("from-julia.txt", "written")', request_id="2")
+        # Checked from outside the sandbox, not from the worker's own view.
+        self.assertEqual(Path(self.task_workspace, "from-julia.txt").read_text(), "written")
+
+    def test_task_workspace_survives_session_close(self):
+        self._turn("1")
+        self.proc.stdin.close()
+        self.proc.wait(timeout=60)
+        self.assertTrue(Path(self.task_workspace, "marker.txt").is_file())
+
+    def test_timeout_reply_marks_the_session_dead(self):
+        r = self._turn("sleep(60)")
+        self.assertFalse(r["success"])
+        self.assertIn("turn_timeout", r["error"])
+        self.assertIs(r.get("session_dead"), True)
 
 
 if __name__ == "__main__":
