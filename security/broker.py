@@ -303,7 +303,7 @@ class Broker:
             # turn calls package_management.
             proc = subprocess.run(
                 ["julia", "--startup-file=no", "-e", f"using Pkg; Pkg.add(Pkg.PackageSpec({spec}))"],
-                env=env, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL,
+                env=env, capture_output=True, text=True, errors="replace", timeout=300, stdin=subprocess.DEVNULL,
             )
         if proc.returncode != 0:
             raise CapabilityDenied(f"Pkg.add({name!r}) failed: {proc.stderr[-800:]}")

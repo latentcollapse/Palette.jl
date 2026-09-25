@@ -177,7 +177,9 @@ class NeuraSession:
             argv += ["--", julia_bin, "--startup-file=no", SESSION_LOOP_SCRIPT]
             self._proc = subprocess.Popen(
                 argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, bufsize=1,
+                # Turn output is arbitrary bytes; one invalid byte used to
+                # raise UnicodeDecodeError here and take the bridge down.
+                text=True, errors="replace", bufsize=1,
             )
             # Nothing else reads the worker's stderr; left undrained, 64 KiB
             # of warnings fills the pipe and blocks the worker mid-turn.
@@ -266,8 +268,10 @@ class NeuraSession:
             if not line:
                 self._proc.wait()
                 self._stderr_thread.join(timeout=5)
+                tail = self._stderr_tail[-2000:].strip()
                 raise SessionDeadError(
-                    f"session {self.session_id} worker closed stdout: {self._stderr_tail[-2000:]}"
+                    f"session {self.session_id} kernel process exited during the turn "
+                    f"(exit code {self._proc.returncode})" + (f": {tail}" if tail else "")
                 )
             try:
                 resp = json.loads(line)

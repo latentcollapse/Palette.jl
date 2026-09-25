@@ -222,6 +222,60 @@ class TestSessionCli(unittest.TestCase):
         self.assertIn("no network", r["error"])
         self.assertIn("Loadable: the Julia standard library", r["error"])
 
+    def test_errors_name_the_failing_line_and_function(self):
+        self._turn("function f(x)\n    return g(x)\nend")
+        r = self._turn("a = 1\nb = f(a)", request_id="2")
+        self.assertFalse(r["success"])
+        self.assertIn("not defined in `Main`", r["error"])
+        self.assertIn("f(x::Int64) at an earlier call, line 2", r["error"])
+        self.assertIn("top-level code at this call, line 2", r["error"])
+
+    def test_invalid_utf8_output_does_not_kill_the_session(self):
+        """One invalid byte in turn output used to crash the bridge with a
+        UnicodeDecodeError, ending the session."""
+        r = self._turn('print(String(UInt8[0x61, 0xff, 0x62])); String(UInt8[0xfe])')
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["output"], "a�b")
+        r2 = self._turn("2 + 2", request_id="2")
+        self.assertEqual(r2["data"], 4)
+
+    def test_printing_many_lines_is_fast_and_ordered(self):
+        """Each println through a libuv pipe cost ~50us, so 10^6 lines outran
+        the turn limit; child output also has to stay in call order."""
+        r = self._turn('print("a "); run(`echo b`); println("c"); for i in 1:10^6; println(i); end; 1')
+        self.assertTrue(r["success"], r)
+        self.assertTrue(r["output"].startswith("a b\nc\n1\n2\n"), r["output"][:40])
+        self.assertIn("output truncated", r["output"])
+
+    def test_ephemeral_result_is_displayed_like_a_persistent_one(self):
+        """The child used to send struct internals as its result, and a
+        value with no JSON form (NaN) crashed it after the code succeeded."""
+        r = self._turn("[NaN, 1.0]", ephemeral=True)
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["display"], "2-element Vector{Float64}:\n NaN\n   1.0")
+        r2 = self._turn("x -> x", request_id="2", ephemeral=True)
+        self.assertIn("generic function", r2["display"])
+
+    def test_top_level_loops_use_soft_scope_like_the_repl(self):
+        """Turn code ran with script scope: assigning a global inside a
+        top-level loop warned and created a new local instead."""
+        r = self._turn("best = 0\nfor t in [3, 31, 18]\n    if t > best\n        best = t\n    end\nend\nbest")
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["data"], 31)
+        self.assertNotIn("Warning", r["output"])
+
+    def test_session_packages_stay_loadable_after_activating_another_project(self):
+        """A model's routine `Pkg.activate(".")` hid every session package."""
+        r = self._turn('using Pkg; Pkg.activate("."); using JSON; JSON.json([1])')
+        self.assertTrue(r["success"], r)
+        self.assertEqual(sorted(os.listdir(self.task_workspace)), ["marker.txt"])
+
+    def test_kernel_exit_reports_its_exit_code(self):
+        r = self._turn("exit(3)")
+        self.assertFalse(r["success"])
+        self.assertIs(r.get("session_dead"), True)
+        self.assertIn("exit code 3", r["error"])
+
     def test_timeout_reply_marks_the_session_dead(self):
         r = self._turn("sleep(60)")
         self.assertFalse(r["success"])

@@ -401,6 +401,66 @@ function register_operator!(state::KernelState, name::String, f::Function)
     return nothing
 end
 
+const MAX_ERROR_FRAMES = 12
+
+"""
+    softscope(ex)
+
+Marks each top-level statement for soft scope, as `REPL.softscope` does for
+the REPL and IJulia: a top-level `for` or `while` loop assigns to an
+existing global instead of warning and making a new local. Without it, turn
+code behaved like a script file, not an interactive session. The same
+transform, kept here so Neura does not depend on the REPL stdlib.
+"""
+function softscope(@nospecialize ex)
+    ex isa Expr || return ex
+    h = ex.head
+    h === :toplevel && return Expr(h, map(softscope, ex.args)...)
+    h in (:meta, :import, :using, :export, :module, :error, :incomplete, :thunk) && return ex
+    h === :global && all(x -> x isa Symbol, ex.args) && return ex
+    return Expr(:block, Expr(:softscope, true), ex)
+end
+
+"""
+    describe_error(e, bt, call_file, scope) -> String
+
+The error message plus the stack frames above the kernel's own `execute`,
+most recent first. Code from the failing call is labelled "this call";
+functions defined by earlier calls are labelled "an earlier call".
+"""
+function describe_error(e, bt, call_file::AbstractString, scope::Module)
+    # "./call 3" and "./boot.jl" are how stack frames spell these files.
+    clean(file) = replace(string(file), r"^\./" => "", r"^.*/packages/([^/]+)/[^/]+/" => s"\1/")
+    location(file) = file == call_file ? "this call" : startswith(file, "call ") ? "an earlier call" : file
+    msg = replace(sprint(showerror, e), "@ $call_file:" => "@ this call, line ", string(scope) => "Main")
+    e isa Meta.ParseError && return msg
+    frames = try
+        stacktrace(bt)
+    catch
+        return msg
+    end
+    boundary = findfirst(f -> f.func === :execute && endswith(string(f.file), "Neura.jl"), frames)
+    frames = boundary === nothing ? frames : frames[1:boundary-1]
+    filter!(f -> !(f.func === :eval && clean(f.file) == "boot.jl"), frames)
+    # No frame from the model's own code (a failed `using`, say): the rest is
+    # Julia internals and says nothing about where the code went wrong.
+    any(f -> startswith(clean(f.file), "call "), frames) || return msg
+    lines = String[]
+    for f in frames
+        name = f.func === Symbol("top-level scope") ? "top-level code" : try
+            sprint(Base.StackTraces.show_spec_linfo, f)
+        catch
+            string(f.func)
+        end
+        push!(lines, "  $name at $(location(clean(f.file))), line $(f.line)")
+    end
+    if length(lines) > MAX_ERROR_FRAMES
+        half = MAX_ERROR_FRAMES ÷ 2
+        lines = [lines[1:half]; "  ... $(length(lines) - 2half) frames omitted ..."; lines[end-half+1:end]]
+    end
+    return msg * "\nStacktrace, most recent call first:\n" * join(lines, "\n")
+end
+
 """
     execute(op::ExecuteCode)::OperationReceipt
 
@@ -414,13 +474,15 @@ function execute(op::ExecuteCode)::OperationReceipt
 
     result = OperationResult(nothing, true, nothing)
     error_msg = nothing
+    call_file = "call $(length(state.execution_history) + 1)"
 
     try
         # Meta.parse only parses a single top-level statement and throws on
         # anything after it; real code blocks are usually multi-statement, so
         # this needs parseall (a :toplevel Expr, evaluated statement-by-
         # statement, yielding the last statement's value -- REPL semantics).
-        parsed = Meta.parseall(op.code)
+        # A per-call file name gives every error a location the model can use.
+        parsed = softscope(Meta.parseall(op.code; filename=call_file))
         value = Core.eval(state.eval_module, parsed)
         result = OperationResult(value, true, nothing)
 
@@ -452,8 +514,8 @@ function execute(op::ExecuteCode)::OperationReceipt
             end
         end
     catch e
-        result = OperationResult(nothing, false, sprint(showerror, e))
-        error_msg = sprint(showerror, e)
+        error_msg = describe_error(e, catch_backtrace(), call_file, state.eval_module)
+        result = OperationResult(nothing, false, error_msg)
     end
 
     duration_ms = (time_ns() - start_time) / 1_000_000.0
@@ -1210,5 +1272,37 @@ export ErrorHandler, SafetyGuard, validate, check_patterns, safe_execute
 export demo_setup, run_demo
 export execute, mean
 export request_capability
+
+"""
+    ephemeral_main(code)
+
+Entry point of an ephemeral child worker. Runs `code` as a persistent turn
+would and prints one JSON line last: success, data, display and error. The
+display is the same `text/plain` rendering a persistent turn returns, and
+`data` falls back to it when the value has no JSON form (NaN, a function),
+which used to crash the child after the code had already succeeded.
+"""
+function ephemeral_main(code::AbstractString)
+    redirect_stderr(stdout)
+    r = execute(ExecuteCode(String(code)))
+    value = r.result.data
+    display = nothing
+    if r.result.success && value !== nothing
+        display = try
+            # invokelatest: `show` methods for types the code just loaded are
+            # newer than this function's world.
+            Base.invokelatest(sprint, show, MIME"text/plain"(), value; context=:limit => true)
+        catch e
+            "<display failed: $(sprint(showerror, e))>"
+        end
+    end
+    data = try
+        length(Base.invokelatest(JSON.json, value)) <= 256 * 1024 ? value : display
+    catch
+        display
+    end
+    println()
+    println(JSON.json(Dict("success" => r.result.success, "data" => data, "display" => display, "error" => r.result.error)))
+end
 
 end # module
