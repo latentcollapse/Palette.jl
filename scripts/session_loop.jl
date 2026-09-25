@@ -89,12 +89,17 @@ redirect_stderr(SINK)
 const MAX_OUTPUT_BYTES = 256 * 1024
 const MAX_DATA_JSON_BYTES = 256 * 1024
 
+# Output is whatever bytes the turn printed. JSON.jl copies invalid UTF-8
+# into the line as-is, and the reader rejected the whole line.
+valid_utf8(s::String) = isvalid(s) ? s : String(map(c -> isvalid(c) ? c : '\ufffd', collect(s)))
+
 function safe_json(x)
-    try
-        return JSON.json(x)
+    json = try
+        JSON.json(x)
     catch
-        return JSON.json(string(x))
+        JSON.json(string(x))
     end
+    return valid_utf8(json)
 end
 
 function respond(resp::Dict{String,Any})
@@ -102,36 +107,54 @@ function respond(resp::Dict{String,Any})
     flush(PROTO)
 end
 
-# Runs `f` with fd 1 and fd 2 both on one pipe. A pipe, not a file: Julia
-# buffers writes to a file stream, so a `run` child's output (written to the
-# fd directly) showed up before prints that came earlier in the turn.
-function capture_output(f)
-    pipe = Pipe()
-    Base.link_pipe!(pipe; reader_supports_async=true, writer_supports_async=true)
-    collected = IOBuffer()
-    total = Ref(0)
-    reader = @async while !eof(pipe)
-        chunk = readavailable(pipe)
-        total[] += length(chunk)
-        room = MAX_OUTPUT_BYTES - collected.size
-        room > 0 && write(collected, length(chunk) <= room ? chunk : chunk[1:room])
+# Julia-level stdout and stderr for a turn: every write is one write(2) to
+# the capture file, which fd 1 and fd 2 (and so every `run` child) also
+# point at. Writes land in the order they happen, with no buffering and no
+# task switch; through a libuv pipe each `println` cost ~50us, and printing
+# 10^6 lines outran the turn limit.
+struct FdWriter <: IO
+    fd::Cint
+end
+function Base.unsafe_write(w::FdWriter, p::Ptr{UInt8}, n::UInt)
+    done = 0
+    while done < n
+        r = ccall(:write, Cssize_t, (Cint, Ptr{UInt8}, Csize_t), w.fd, p + done, n - done)
+        if r < 0
+            Libc.errno() == Libc.EINTR && continue
+            throw(SystemError("write", Libc.errno()))
+        end
+        done += r
     end
+    return Int(n)
+end
+Base.write(w::FdWriter, b::UInt8) = (r = Ref(b); GC.@preserve r unsafe_write(w, Base.unsafe_convert(Ptr{UInt8}, r), UInt(1)))
+Base.isopen(::FdWriter) = true
+Base.flush(::FdWriter) = nothing
+
+const CAPTURE_PATH = joinpath(tempdir(), "neurajl-turn-output")
+
+# Runs `f` with fd 1 and fd 2 on a fresh append-only file. A process the
+# turn left running keeps its descriptor to that file, now unlinked, so its
+# later output reaches neither this turn nor the next one.
+function capture_output(f)
+    rm(CAPTURE_PATH; force=true)
+    file = open(CAPTURE_PATH, "a+")
     value = nothing
     try
-        redirect_stdout(pipe.in) do
-            redirect_stderr(pipe.in) do
+        redirect_stdout(file) do
+            redirect_stderr(file) do
+                Base._redirect_io_global(FdWriter(1), 1)
+                Base._redirect_io_global(FdWriter(2), 2)
                 value = f()
             end
         end
     finally
-        close(pipe.in)
-        # A background process the turn started still holds the write end, so
-        # EOF may never come; take what has arrived rather than hang the turn.
-        timedwait(() -> istaskdone(reader), 2.0)
-        istaskdone(reader) || close(pipe.out)
+        close(file)
     end
-    output = String(take!(collected))
-    total[] > MAX_OUTPUT_BYTES && (output *= "\n[output truncated: $(total[]) bytes total]")
+    total = filesize(CAPTURE_PATH)
+    output = String(open(io -> read(io, MAX_OUTPUT_BYTES), CAPTURE_PATH))
+    rm(CAPTURE_PATH; force=true)
+    total > MAX_OUTPUT_BYTES && (output *= "\n[output truncated: $total bytes total]")
     return value, output
 end
 
@@ -203,11 +226,7 @@ for line in eachline(PROTO_IN)
             # (that's what `repr` is for); this is textual generation of
             # trusted host-side code embedding untrusted content as DATA,
             # not string-building a shell command.
-            child_script = string(
-                "using Neura; r = execute(ExecuteCode(", repr(code), ")); ",
-                "println(Neura.JSON.json(Dict(\"success\"=>r.result.success, ",
-                "\"data\"=>r.result.data, \"error\"=>r.result.error)))",
-            )
+            child_script = string("using Neura; Neura.ephemeral_main(", repr(code), ")")
             # `child_workspace`/`child_project`/`child_repo` are no longer
             # part of this request: the broker now always allocates the
             # child's workspace itself and uses its own session-established
@@ -234,7 +253,8 @@ for line in eachline(PROTO_IN)
                 end
                 resp["success"] = get(child_result, "success", false)
                 resp["data"] = get(child_result, "data", nothing)
-                resp["output"] = idx === nothing ? "" : join(lines[1:idx-1], '\n')
+                resp["display"] = get(child_result, "display", nothing)
+                resp["output"] = idx === nothing ? "" : rstrip(join(lines[1:idx-1], '\n'))
                 resp["error"] = get(child_result, "error", nothing)
                 record_tool_capsule(
                     string(request_id), code,

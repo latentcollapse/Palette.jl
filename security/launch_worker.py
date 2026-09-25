@@ -162,6 +162,10 @@ def build_bwrap_argv(
         "--setenv", "HOME", "/run/neurajl/home",
         "--setenv", "JULIA_DEPOT_PATH", julia_depot,
         "--setenv", "JULIA_PROJECT", project_dir,
+        # The session project stays loadable after turn code activates
+        # another one; a model's routine `Pkg.activate(".")` used to hide
+        # every package it had. `@v#.#` is where package_management installs.
+        "--setenv", "JULIA_LOAD_PATH", f"@:{project_dir}:@v#.#:@stdlib",
         "--setenv", "NEURAJL_REPO_DIR", repo_dir,
         "--setenv", "PATH", f"{julia_toolchain_dir}/bin:/usr/bin:/bin",
         "--setenv", "LANG", "en_US.UTF-8",
@@ -243,7 +247,7 @@ def run_worker(
         # caller's own future stdin reads), reachable here via
         # spawn_child_worker's broker handler running inside a persistent
         # session's own process.
-        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        return subprocess.run(argv, capture_output=True, text=True, errors="replace", timeout=timeout, stdin=subprocess.DEVNULL)
     finally:
         if owns_clone:
             shutil.rmtree(depot_clone_dir, ignore_errors=True)
