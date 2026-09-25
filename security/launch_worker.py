@@ -111,6 +111,9 @@ def build_bwrap_argv(
     extra_ro_binds: list[str] | None = None,
 ) -> list[str]:
     julia_toolchain_dir = str(Path(julia_bin).parent.parent)  # .../julia-1.12.6+0.x64.linux.gnu
+    task_tools = os.environ.get("NIRA_TASK_TOOLS")
+    if task_tools and not Path(task_tools, "bin").is_dir():
+        raise RuntimeError(f"NIRA_TASK_TOOLS has no bin directory: {task_tools}")
 
     argv = [
         "bwrap",
@@ -160,6 +163,11 @@ def build_bwrap_argv(
         # bounded, writable workspace -- the sandbox-local effect envelope
         "--bind", workspace_dir, workspace_dir,
     ]
+    # A benchmark runner can supply the task's own tools (the task image's
+    # interpreter, bun, ...) as one read-only directory; it is mounted at the
+    # same path and put first on PATH, as it is for every other contestant.
+    if task_tools:
+        argv += ["--ro-bind", task_tools, task_tools]
     for path in extra_ro_binds or []:
         argv += ["--ro-bind", path, path]
     if broker_socket_dir:
@@ -173,7 +181,8 @@ def build_bwrap_argv(
         # every package it had. `@v#.#` is where package_management installs.
         "--setenv", "JULIA_LOAD_PATH", f"@:{project_dir}:@v#.#:@stdlib",
         "--setenv", "NEURAJL_REPO_DIR", repo_dir,
-        "--setenv", "PATH", f"{julia_toolchain_dir}/bin:/usr/bin:/bin",
+        "--setenv", "PATH", f"{task_tools}/bin:{julia_toolchain_dir}/bin:/usr/bin:/bin" if task_tools
+        else f"{julia_toolchain_dir}/bin:/usr/bin:/bin",
         "--setenv", "LANG", "en_US.UTF-8",
         "--chdir", workspace_dir,
     ]
