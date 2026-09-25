@@ -28,13 +28,12 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 const neurajlSchema = Type.Object({
 	code: Type.String({
-		description:
-			"Julia source to evaluate in this session's persistent NeuraJL kernel. The working directory is the task workspace. Bindings, functions and compiled methods survive across calls. Everything printed (println, @show, @warn, output of run(`cmd`)) is returned along with the value of the last expression. Full Julia runs inside an OS sandbox: Base, eval, ccall, run(`...`) for shell commands, file I/O in the workspace.",
+		description: `Julia source to evaluate in this session's persistent NeuraJL kernel. The working directory is the task workspace. Bindings, functions and compiled methods survive across calls. Everything printed (println, @show, @warn, output of run(\`cmd\`) and bash("...")) is returned along with the value of the last expression. Full Julia runs inside an OS sandbox.`,
 	}),
 	ephemeral: Type.Optional(
 		Type.Boolean({
 			description:
-				"Run this code in a disposable sandboxed child process instead of the persistent kernel, so it leaves no bindings behind. The child does not see the task workspace. Defaults to false.",
+				"Run this code in a fresh, disposable Julia process instead of the persistent kernel: it sees none of the kernel's bindings, leaves none behind, and cannot see the task workspace. Starting it takes several seconds. Defaults to false.",
 		}),
 	),
 });
@@ -277,6 +276,9 @@ async function startKernel(cwd: string, options: NeurajlToolOptions | undefined)
 	};
 }
 
+const KERNEL_STOPPED =
+	"[neurajl: the kernel stopped. Output printed during this call and every binding, function and loaded package are gone; files written to the workspace remain. The next call starts a new kernel.]";
+
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms).unref?.());
 }
@@ -352,9 +354,11 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 				try {
 					response = await kernel.turn(params.code, params.ephemeral, signal);
 				} catch (err) {
-					throw new Error(`${notice}${err instanceof Error ? err.message : String(err)}`);
+					const stopped = kernel.isDead() ? `\n${KERNEL_STOPPED}` : "";
+					throw new Error(`${notice}${err instanceof Error ? err.message : String(err)}${stopped}`);
 				}
 				const { text, truncated } = truncateMiddle(formatNeurajlResponse(response), options?.maxOutputChars);
+				if (response.session_dead === true) throw new Error(`${notice}${text}\n${KERNEL_STOPPED}`);
 				if (response.success !== true) throw new Error(`${notice}${text}`);
 				return {
 					content: [{ type: "text", text: `${notice}${text}` }],

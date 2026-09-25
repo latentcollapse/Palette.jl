@@ -16,7 +16,7 @@
  * being proven there. Here it is the point.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -154,7 +154,7 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 			try {
 				await tool.execute("t1", { code: "x = 1" }, undefined, undefined);
 				await expect(tool.execute("t2", { code: "sleep(30)" }, undefined, undefined)).rejects.toThrow(
-					/turn_timeout/,
+					/turn_timeout[\s\S]*the kernel stopped/,
 				);
 				const after = await tool.execute("t3", { code: "@isdefined(x)" }, undefined, undefined);
 				expect(textOf(after)).toMatch(/NEW kernel[\s\S]*false$/);
@@ -164,6 +164,50 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 			}
 		},
 		// test-policy: allow explicit-test-timeout -- starts a real sandboxed Julia kernel; a cold precompile alone takes ~40s
+		300_000,
+	);
+
+	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+	it.skipIf(skipIfNeurajlUnavailable())(
+		"REAL integration: an abort mid-call stops the kernel and says so; one before the call does not",
+		async () => {
+			const workspace = mkdtempSync(join(tmpdir(), "neurajl-abort-"));
+			const scope = createNeurajlBaseToolsFactory(workspace, {
+				sessionCliPath: SESSION_CLI_PATH,
+				projectDir: PROJECT_DIR,
+			})("abort-test-session");
+			const tool = scope.tools.neurajl!;
+			try {
+				await tool.execute("t1", { code: "x = 1" }, undefined, undefined);
+				const early = new AbortController();
+				early.abort();
+				const before = tool.execute("t2", { code: "x" }, early.signal, undefined);
+				await expect(before).rejects.toThrow(/aborted/);
+				await expect(before).rejects.not.toThrow(/kernel stopped/);
+				expect(textOf(await tool.execute("t3", { code: "x" }, undefined, undefined))).toBe("1");
+
+				// The code announces it is running; the abort follows that event.
+				const started = new Promise<void>((resolve) => {
+					const watcher = watch(workspace, (_event, name) => {
+						if (name === "started") {
+							watcher.close();
+							resolve();
+						}
+					});
+				});
+				const late = new AbortController();
+				const during = tool.execute("t4", { code: 'touch("started"); sleep(30)' }, late.signal, undefined);
+				await started;
+				late.abort();
+				await expect(during).rejects.toThrow(/the kernel stopped/);
+				const after = await tool.execute("t5", { code: "@isdefined(x)" }, undefined, undefined);
+				expect(textOf(after)).toMatch(/NEW kernel[\s\S]*false$/);
+			} finally {
+				await scope.dispose?.();
+				rmSync(workspace, { recursive: true, force: true });
+			}
+		},
+		// test-policy: allow explicit-test-timeout -- starts a real sandboxed Julia kernel twice
 		300_000,
 	);
 
