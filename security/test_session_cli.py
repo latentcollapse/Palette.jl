@@ -32,6 +32,7 @@ import sys
 import tempfile
 import time
 import unittest
+import uuid
 from pathlib import Path
 
 REPO_DIR = str(Path(__file__).resolve().parent.parent)
@@ -50,6 +51,52 @@ def _skip_if_no_bwrap():
 def _skip_if_no_project():
     if not Path(PROJECT_DIR).exists():
         raise unittest.SkipTest(f"no Julia dev project at {PROJECT_DIR}")
+
+
+def _host_processes_with(marker: str) -> list[str]:
+    """Command lines of every host process containing `marker`, read from the
+    host's own /proc, which sees into every sandbox's PID namespace."""
+    found = []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            cmd = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+        except OSError:
+            continue
+        if marker in cmd:
+            found.append(cmd)
+    return found
+
+
+# Assembles the marker at runtime, so the child's own command line (which
+# carries the turn source) never contains it; only descendants it spawns do.
+def _descendant_code(marker: str, body: str) -> str:
+    return f'mk = string("{marker[:6]}", "{marker[6:]}"); desc = "sleep 300; : $mk"; ' + body
+
+
+# A daemon in the classic shape: fork, setsid, fork again, ignore TERM and
+# HUP, close stdio, then exec the marked descendant.
+_DAEMON_PY = (
+    "import os, signal\n"
+    "if os.fork(): os._exit(0)\n"
+    "os.setsid()\n"
+    "if os.fork(): os._exit(0)\n"
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN); signal.signal(signal.SIGHUP, signal.SIG_IGN)\n"
+    "os.chdir('/')\n"
+    "for f in (0, 1, 2): os.close(f)\n"
+    "os.execvp('bash', ['bash', '-c', os.environ['D']])\n"
+)
+_ESCAPE_ATTEMPTS = (
+    'run(`bash -c $desc`; wait=false); '
+    'bash("(setsid nohup bash -c \\"trap \'\' TERM HUP INT; $desc\\" >/dev/null 2>&1 &)"); '
+    'run(pipeline(`bash -c $desc`; stdout=stdout, stderr=stderr); wait=false); '
+    f'write("d.py", {json.dumps(_DAEMON_PY)}); run(addenv(`python3 d.py`, "D" => desc)); '
+)
+_COUNT_INSIDE = (
+    'sleep(1.0); count(p -> occursin(mk, try read("/proc/$p/cmdline", String) catch; "" end), '
+    'filter(p -> all(isdigit, p), readdir("/proc")))'
+)
 
 
 class TestSessionCli(unittest.TestCase):
@@ -275,6 +322,47 @@ class TestSessionCli(unittest.TestCase):
         self.assertFalse(r["success"])
         self.assertIs(r.get("session_dead"), True)
         self.assertIn("exit code 3", r["error"])
+
+    def test_nothing_an_ephemeral_turn_starts_outlives_it(self):
+        """The child is PID 1 of its own PID namespace; when it exits the
+        kernel kills everything left in that namespace, however it was
+        detached. Four escape shapes are started and seen alive inside the
+        child, then none may remain on the host."""
+        marker = "NJL" + uuid.uuid4().hex[:10]
+        r = self._turn(_descendant_code(marker, _ESCAPE_ATTEMPTS + _COUNT_INSIDE), ephemeral=True)
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["data"], 4, "an escape attempt never started, so this test would prove nothing")
+        time.sleep(1.0)
+        self.assertEqual(_host_processes_with(marker), [])
+
+    def test_descendants_of_a_timed_out_ephemeral_child_die_with_it(self):
+        marker = "NJL" + uuid.uuid4().hex[:10]
+        code = _descendant_code(marker, _ESCAPE_ATTEMPTS + "sleep(600)")
+        self.proc.stdin.write(json.dumps({"request_id": "1", "code": code, "ephemeral": True}) + "\n")
+        self.proc.stdin.flush()
+        seen = 0
+        deadline = time.time() + 30
+        while time.time() < deadline and seen < 4:
+            seen = len(_host_processes_with(marker))
+            time.sleep(0.2)
+        self.assertEqual(seen, 4, "the escape attempts never all started")
+        r = json.loads(self.proc.stdout.readline())
+        self.assertIn("time limit", r["error"])
+        time.sleep(1.0)
+        self.assertEqual(_host_processes_with(marker), [])
+
+    def test_persistent_kernel_descendants_do_persist_until_the_session_ends(self):
+        """Control for the two tests above: the same scan does find a live
+        descendant, and the persistent kernel keeps its own."""
+        marker = "NJL" + uuid.uuid4().hex[:10]
+        r = self._turn(_descendant_code(marker, "run(`bash -c $desc`; wait=false); " + _COUNT_INSIDE))
+        self.assertEqual(r["data"], 1)
+        self._turn("1", request_id="2")
+        self.assertEqual(len(_host_processes_with(marker)), 1)
+        self.proc.stdin.close()
+        self.proc.wait(timeout=60)
+        time.sleep(1.0)
+        self.assertEqual(_host_processes_with(marker), [])
 
     def test_timeout_reply_marks_the_session_dead(self):
         r = self._turn("sleep(60)")

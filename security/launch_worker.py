@@ -116,6 +116,12 @@ def build_bwrap_argv(
         "bwrap",
         "--unshare-user", "--uid", "1000", "--gid", "1000",
         "--disable-userns", "--assert-userns-disabled",
+        # Process lifetime: julia runs as PID 1 of a new PID namespace, and
+        # when PID 1 exits the kernel SIGKILLs everything left in that
+        # namespace -- background runs, setsid double forks, daemons that
+        # ignore TERM and HUP. --die-with-parent (below) kills PID 1 if the
+        # supervising process dies first. Nothing a worker starts outlives
+        # it; security/test_session_cli.py proves it for ephemeral children.
         "--unshare-pid", "--as-pid-1",
         "--unshare-ipc",
     ]
