@@ -364,6 +364,36 @@ class TestSessionCli(unittest.TestCase):
         time.sleep(1.0)
         self.assertEqual(_host_processes_with(marker), [])
 
+    def test_task_tools_reach_the_kernel_and_ephemeral_children_read_only(self):
+        """A benchmark runner exposes the task image's tools (interpreter,
+        bun, ...) to every contestant as one read-only directory; NP2's worker
+        used to drop it, so a task's own runtime was unreachable."""
+        tools = tempfile.mkdtemp(prefix="neurajl-task-tools-")
+        Path(tools, "bin").mkdir()
+        tool = Path(tools, "bin", "task-tool")
+        tool.write_text("#!/bin/sh\necho task-tool-ran\n")
+        tool.chmod(0o755)
+        proc = subprocess.Popen(
+            [sys.executable, CLI, "--project-dir", PROJECT_DIR, "--ceiling", "{}",
+             "--workspace-dir", self.task_workspace, "--turn-timeout", "20"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, bufsize=1, env={**os.environ, "NIRA_TASK_TOOLS": tools},
+        )
+        try:
+            self.assertEqual(json.loads(proc.stdout.readline())["kind"], "HELLO")
+            code = 'readchomp(`task-tool`), (try; touch(joinpath(ENV["PATH"][1:findfirst(\':\', ENV["PATH"])-1], "x")); "writable"; catch; "read-only"; end)'
+            for i, ephemeral in enumerate((False, True)):
+                proc.stdin.write(json.dumps({"request_id": str(i), "code": code, "ephemeral": ephemeral}) + "\n")
+                proc.stdin.flush()
+                r = json.loads(proc.stdout.readline())
+                self.assertTrue(r["success"], r)
+                self.assertEqual(r["data"], ["task-tool-ran", "read-only"], f"ephemeral={ephemeral}")
+        finally:
+            proc.stdin.close()
+            proc.wait(timeout=60)
+            proc.stdout.close()
+            shutil.rmtree(tools, ignore_errors=True)
+
     def test_timeout_reply_marks_the_session_dead(self):
         r = self._turn("sleep(60)")
         self.assertFalse(r["success"])
