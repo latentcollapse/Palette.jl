@@ -528,6 +528,46 @@ class TestSessionCli(unittest.TestCase):
             proc.stdout.close()
             shutil.rmtree(tools, ignore_errors=True)
 
+    def test_workspace_package_loads_ahead_of_the_kernels_copy(self):
+        """The kernel's environment has OrderedCollections (DataFrames needs
+        it). A model working on OrderedCollections appended the workspace to
+        LOAD_PATH, and its whole test suite passed against the kernel's copy."""
+        ws = tempfile.mkdtemp(prefix="neurajl-cli-pkg-")
+        Path(ws, "src").mkdir()
+        Path(ws, "Project.toml").write_text(
+            'name = "OrderedCollections"\nuuid = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"\nversion = "2.0.1"\n')
+        Path(ws, "src", "OrderedCollections.jl").write_text("module OrderedCollections\nconst WORKSPACE_COPY = true\nend\n")
+        proc = subprocess.Popen(
+            [sys.executable, CLI, "--project-dir", PROJECT_DIR, "--ceiling", "{}",
+             "--workspace-dir", ws, "--turn-timeout", "60"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1,
+        )
+        try:
+            self.assertEqual(json.loads(proc.stdout.readline())["kind"], "HELLO")
+            code = ('push!(LOAD_PATH, pwd()); using OrderedCollections; '
+                    '(isdefined(OrderedCollections, :WORKSPACE_COPY), startswith(pathof(OrderedCollections), pwd()))')
+            proc.stdin.write(json.dumps({"request_id": "1", "code": code}) + "\n")
+            proc.stdin.flush()
+            r = json.loads(proc.stdout.readline())
+            self.assertEqual(r["data"], [True, True], r)
+        finally:
+            proc.stdin.close()
+            proc.wait(timeout=60)
+            proc.stdout.close()
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_quote_that_ends_sh_early_is_explained(self):
+        """A `"` inside sh"..." made the next word a string-macro suffix, and
+        Julia reported only a MethodError for @sh_str."""
+        r = self._turn('sh"printf %s \\"quoted\\""')
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["output"], "quoted")
+        r = self._turn('sh"echo "hello')
+        self.assertFalse(r["success"])
+        self.assertIn("a quote inside sh", r["error"])
+        self.assertIn("`hello`", r["error"])
+        self.assertIn("bash(PAYLOAD)", r["error"])
+
     def test_timeout_interrupts_waiting_work_and_keeps_the_kernel(self):
         """A timeout used to kill the kernel even when the call was only
         waiting. Processes an earlier call started keep running; processes the

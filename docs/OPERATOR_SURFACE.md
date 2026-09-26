@@ -17,6 +17,7 @@ The result is everything printed during the call, then `=> ` and the rendered va
 - Bindings, functions, types and loaded packages persist until the kernel stops. Julia 1.12 also allows a `struct` to be redefined.
 - `ans` holds the last successful call's value.
 - Files written to the workspace outlive the kernel.
+- When the workspace is itself a package (its `Project.toml` has a `name` and `uuid`), the workspace comes first in `LOAD_PATH`, so `using` that package loads the workspace's code. The kernel's environment has packages of its own, such as OrderedCollections for DataFrames. Before this change, a model that appended the workspace to `LOAD_PATH` tested the kernel's copy of the package instead of its own.
 - A package loaded from the workspace (its `pathof` lies under the workspace) is reloaded when any `.jl` file under its source directory changes. The reload happens before the next call runs, and before an `include` in the same call, so edited code and tests run in the kernel see the edits. The call's output then begins with `[reloaded Pkg from the workspace: files changed]`. If the edited source does not parse or load, the output says so and the package keeps its previous code. A reload re-evaluates the package's module body in place: methods deleted from the source stay defined, and `__init__` does not run again.
 - The kernel keeps no value that nothing refers to. Only `ans` and your own bindings hold memory.
 
@@ -24,8 +25,8 @@ The result is everything printed during the call, then `=> ` and the rendered va
 
 | Name | What it does |
 |---|---|
-| `sh"cmd"` | Runs `cmd` with bash. `$` belongs to the shell; there is no Julia interpolation. It prints stdout, then stderr, and returns a `ShellResult`. |
-| `bash("cmd")` | The same, but in an ordinary Julia string, so `$x` interpolates Julia values and a literal shell `$` must be written `\$`. |
+| `sh"cmd"` | Runs `cmd` with bash. `$` belongs to the shell; there is no Julia interpolation. It prints stdout, then stderr, and returns a `ShellResult`. A quote inside is written `\"`. A bare `"` ends the command early, and the error says so. |
+| `bash("cmd")` | The same, but in an ordinary Julia string, so `$x` interpolates Julia values and a literal shell `$` must be written `\$`. `bash(PAYLOAD)` runs a script passed as the call's payload, with no quoting at all. |
 | `ShellResult` | Fields `exitcode` (a process killed by a signal reports 128 + signal), `stdout` and `stderr`. `success(r)` is true for status 0. It displays as one line, because the output was already printed. |
 | `run(`prog args`)`, `read(`...`, String)` | Standard Julia: one program, no shell, and they throw on a nonzero exit. |
 | `include("file.jl")` | Loads a workspace file into the session; relative paths resolve against the workspace. Edited workspace packages are reloaded first. |
