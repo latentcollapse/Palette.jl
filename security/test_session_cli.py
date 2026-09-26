@@ -428,6 +428,17 @@ class TestSessionCli(unittest.TestCase):
         self.assertFalse(r["success"])
         self.assertIn("call 3 printed nothing", r["error"])
 
+    def test_testset_value_is_shown_as_its_counts(self):
+        """A passing test run returned its DefaultTestSet, displayed as every
+        nested testset down to each one's RNG state: 14,000 to 25,000
+        characters per run, all of it elided by the host."""
+        r = self._turn('using Test; @testset "outer" begin; @test 1 == 1; '
+                       '@testset "inner" begin; @test true; @test_broken false; end; end')
+        self.assertTrue(r["success"], r)
+        self.assertRegex(r["display"], r'^Test\.DefaultTestSet "outer": 2 passed, 0 failed, 0 errored, 1 broken \(.*s\)$')
+        r = self._turn("(ans.description, length(ans.results))")
+        self.assertEqual(r["data"], ["outer", 1])
+
     def test_ephemeral_result_is_displayed_like_a_persistent_one(self):
         """The child used to send struct internals as its result, and a
         value with no JSON form (NaN) crashed it after the code succeeded."""
