@@ -1,0 +1,4 @@
+[{"code":"t = @async (sleep(0.3); println(\"late print\"); error(\"late boom\")); :ok"},
+ {"code":"p = joinpath(tempdir(),\"neurajl-background-output.log\"); (filesize(p), sh\"df -h /tmp | tail -1\"; nothing)","pause":1},
+ {"code":"flush(stdout); 1"},
+ {"code":"sh\"cat /tmp/neurajl-background-output.log; mount | grep ' /tmp '\""}]
