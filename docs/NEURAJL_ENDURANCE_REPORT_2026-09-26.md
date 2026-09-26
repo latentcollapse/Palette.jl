@@ -51,3 +51,28 @@ For short tasks none of this matters. For 72 hours it is certain to happen.
 | 3 | C, list only | Cheap |
 | 4 | D | Needs the harness |
 | 5 | E | Low priority |
+
+## Rerun after B → A → C-list → D (lab `ea309d0`, NP2 `ec6d6af9e`)
+
+| # | Result now | Evidence |
+|---|---|---|
+| 3 | **Fixed (A).** A workspace file a call named (string literal, `sh` command, `include`) that later changes on disk without a call naming it is reported once at the next call: `[changed on disk since the call that used it: data.csv (call 1), h.jl (call 1). …]`. A call that names the file it changes is not told about its own change. | `test_file_changed_since_a_call_used_it_is_reported` |
+| 4 | **Fixed (B).** Output from background tasks, from processes given `stdout=stdout`, and failures of bound tasks now open the next call as `[background output since the last call]` and `[background: task \`t\` failed: …]`, each reported once. | `test_background_output_and_failures_reach_the_next_call` |
+| 5 | **Listed (C).** Every reply carries `bindings` (name, type, the call that last set it). When the kernel dies, NP2 names them: `Lost bindings: x (Int64, call 1).` | NP2 timeout test; `test_each_reply_lists_the_bindings_and_the_call_that_set_them` |
+| 7 | **Wired (D).** After compaction, NP2 injects `[neurajl-state] … These bindings are defined (with the call that last set each): …`. The IPython arm already received a `[python-state]` note; this is parity. | NP2 compaction test; Luna trial below |
+
+All three new CLI tests fail without the change.
+
+**Luna compaction trial.** S8 run twice with `ABC_CONTEXT_WINDOW=60000` and `ABC_MAX_OUTPUT_TOKENS=16000`, so compaction fires at about 40k tokens. S3 was also run, but it finished before compaction triggered.
+
+- Compaction fired once in each S8 run, and the `[neurajl-state]` note arrived both times.
+- In its first 1–2 calls after compaction, Luna used exactly the bindings the note listed: `tests` in k1, `old` and `src` in k2.
+- **This is not proof that the note caused it.** Compaction keeps the most recent 16k tokens, which can include the call that defined those bindings. The mechanism is verified; its effect on the model is consistent with helping but not isolated.
+- A clean test would compact at a point where the defining calls fall outside the kept window, with and without the note.
+- In both runs, S8 held very little state in the kernel (1–2 bindings). A state-heavy task is needed to measure how much reorientation matters.
+
+**New findings from this pass:**
+
+- **Julia's own semantics.** `run(cmd; wait=false)` sends the child's output to `devnull`. The output of a background process is only reportable when it is given `stdout=stdout` or a file. This is not a NeuraJL defect.
+- **`sh"cmd &"` without redirection waits for the background job,** because `bash()` reads the pipes to EOF. It is open and small; a model backgrounding a long job this way blocks the call until the job ends or the call times out.
+- **Parity with the IPython control arm.** The steelmanned IPython arm already has snapshot and revive of kernel state across sessions (`_onIpythonStateRestored`). NeuraJL deliberately stops at listing what was lost. On reorientation after a restart, the control arm is ahead.
