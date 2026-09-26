@@ -159,7 +159,7 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 				expect(textOf(await tool.execute("t3", { code: "x" }, undefined, undefined))).toBe("1");
 				await expect(
 					tool.execute("t4", { code: "s = 0; while true; s += 1; end" }, undefined, undefined),
-				).rejects.toThrow(/the kernel stopped/);
+				).rejects.toThrow(/the kernel stopped[\s\S]*Lost bindings: x \(Int64, call 1\)\./);
 				const after = await tool.execute("t5", { code: "@isdefined(x)" }, undefined, undefined);
 				expect(textOf(after)).toMatch(/NEW kernel[\s\S]*false$/);
 			} finally {
@@ -239,6 +239,30 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 					undefined,
 				);
 				expect(textOf(back)).toBe("(500, true)");
+			} finally {
+				await scope.dispose?.();
+				rmSync(workspace, { recursive: true, force: true });
+			}
+		},
+		// test-policy: allow explicit-test-timeout -- starts a real sandboxed Julia kernel
+		300_000,
+	);
+
+	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+	it.skipIf(skipIfNeurajlUnavailable())(
+		"REAL integration: after compaction the model is told what the live kernel holds",
+		async () => {
+			const workspace = mkdtempSync(join(tmpdir(), "neurajl-compact-"));
+			const scope = createNeurajlBaseToolsFactory(workspace, {
+				sessionCliPath: SESSION_CLI_PATH,
+				projectDir: PROJECT_DIR,
+			})("compact-test-session");
+			const tool = scope.tools.neurajl!;
+			try {
+				await tool.execute("t1", { code: "rows = [1, 2, 3]; total(v) = sum(v)" }, undefined, undefined);
+				const state = await scope.stateAfterCompaction?.();
+				expect(state?.customType).toBe("neurajl_state");
+				expect(state?.content).toContain("rows (Vector{Int64}, call 1), total (function, call 1)");
 			} finally {
 				await scope.dispose?.();
 				rmSync(workspace, { recursive: true, force: true });

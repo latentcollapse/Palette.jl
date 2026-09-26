@@ -335,6 +335,11 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 		let kernelPromise: Promise<NeurajlKernel> | undefined;
 		let lastEpoch: string | undefined;
 		let disposed = false;
+		// The kernel lists its bindings in every reply. When it dies, the
+		// model is told which ones were lost, so it can rebuild what it needs
+		// instead of relying on its own memory of the session.
+		let lastBindings: string[] = [];
+		const lostBindings = () => (lastBindings.length === 0 ? "" : ` Lost bindings: ${lastBindings.join(", ")}.`);
 
 		// Returns the live kernel, starting one if none exists or the last one
 		// died. `restartedFrom` names the dead kernel's epoch.
@@ -372,7 +377,7 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 				const notice =
 					restartedFrom === undefined
 						? ""
-						: `[neurajl: the previous kernel (epoch ${restartedFrom}) stopped; this call ran in a NEW kernel (epoch ${kernel.epoch}). All earlier bindings, functions and loaded packages are gone. Files written to the workspace remain.]\n`;
+						: `[neurajl: the previous kernel (epoch ${restartedFrom}) stopped; this call ran in a NEW kernel (epoch ${kernel.epoch}). All earlier bindings, functions and loaded packages are gone.${lostBindings()} Files written to the workspace remain.]\n`;
 				let response: Record<string, unknown>;
 				try {
 					response = await kernel.turn(
@@ -381,7 +386,7 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 						signal,
 					);
 				} catch (err) {
-					const stopped = kernel.isDead() ? `\n${KERNEL_STOPPED}` : "";
+					const stopped = kernel.isDead() ? `\n${KERNEL_STOPPED}${lostBindings()}` : "";
 					throw new Error(`${notice}${err instanceof Error ? err.message : String(err)}${stopped}`);
 				}
 				// The kernel keeps what each call printed, so elided output can be
@@ -395,7 +400,8 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 					options?.maxOutputChars,
 					fullText,
 				);
-				if (response.session_dead === true) throw new Error(`${notice}${text}\n${KERNEL_STOPPED}`);
+				if (response.session_dead === true) throw new Error(`${notice}${text}\n${KERNEL_STOPPED}${lostBindings()}`);
+				if (Array.isArray(response.bindings)) lastBindings = response.bindings.map(String);
 				if (response.success !== true) throw new Error(`${notice}${text}`);
 				return {
 					content: [{ type: "text", text: `${notice}${text}` }],
@@ -412,6 +418,20 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 
 		return {
 			tools: { neurajl: wrapToolDefinition(definition) },
+			// Compaction drops the calls that built the kernel's state; the
+			// kernel keeps it. Without this the model no longer knew what it had.
+			stateAfterCompaction: async () => {
+				const kernel = kernelPromise ? await kernelPromise.catch(() => undefined) : undefined;
+				if (!kernel || kernel.isDead()) return null;
+				const detail =
+					lastBindings.length > 0
+						? ` These bindings are defined (with the call that last set each): ${lastBindings.join(", ")}.`
+						: " You have not defined any bindings yet.";
+				return {
+					customType: "neurajl_state",
+					content: `[neurajl-state]\n\nYour NeuraJL kernel persisted through compaction; its bindings, functions, types and loaded packages are still available.${detail}`,
+				};
+			},
 			dispose: async () => {
 				disposed = true;
 				if (!kernelPromise) return;

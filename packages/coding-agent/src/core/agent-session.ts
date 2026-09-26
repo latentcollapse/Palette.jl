@@ -509,6 +509,11 @@ export type SessionBaseToolsFactory = (sessionId: string) => {
 	tools: Record<string, AgentTool>;
 	/** Release resources owned by this specific agent session. */
 	dispose?: () => void | Promise<void>;
+	/**
+	 * What the tools' own persistent state holds, told to the model after
+	 * compaction the way the IPython kernel's names are. Null says nothing.
+	 */
+	stateAfterCompaction?: () => Promise<{ customType: string; content: string } | null>;
 };
 
 export interface AgentSessionConfig {
@@ -1696,6 +1701,7 @@ export class AgentSession {
 	private _mcpManager?: McpManager;
 	private _baseToolsOverride?: Record<string, AgentTool>;
 	private _baseToolsFactory?: SessionBaseToolsFactory;
+	private _baseToolsStateAfterCompaction?: ReturnType<SessionBaseToolsFactory>["stateAfterCompaction"];
 	private _modelRequestBudget?: ModelRequestBudget;
 	private _sessionStartEvent: SessionStartEvent;
 	private _extensionUIContext?: ExtensionUIContext;
@@ -1830,6 +1836,7 @@ export class AgentSession {
 		const baseToolsScope = config.baseToolsFactory?.(this.sessionId);
 		this._baseToolsOverride = baseToolsScope?.tools ?? config.baseToolsOverride;
 		if (baseToolsScope?.dispose) this.registerDisposeCallback(baseToolsScope.dispose);
+		this._baseToolsStateAfterCompaction = baseToolsScope?.stateAfterCompaction;
 		this._sessionStartEvent = config.sessionStartEvent ?? { type: "session_start", reason: "startup" };
 		const headerRlmDepth = this.sessionManager.getHeader()?.rlmDepth;
 		this._rlmDepth =
@@ -8631,6 +8638,8 @@ export class AgentSession {
 	}
 
 	private async _syncKernelStateAfterCompaction(): Promise<void> {
+		const toolsState = await this._baseToolsStateAfterCompaction?.().catch(() => null);
+		if (toolsState) this._appendStateMessageAfterCompaction(toolsState.customType, toolsState.content);
 		const provisioner = this._ipythonKernelProvisioner;
 		if (!provisioner?.hasRunningKernel) return;
 		const pruned = await provisioner.pruneOversizedVariables().catch(() => null);
@@ -8659,9 +8668,13 @@ export class AgentSession {
 			"",
 			`Your Python kernel persisted through compaction; its remaining variables, imports, and helpers are still available.${prunedDetail}${detail}`,
 		].join("\n");
+		this._appendStateMessageAfterCompaction("ipython_state", content);
+	}
+
+	private _appendStateMessageAfterCompaction(customType: string, content: string): void {
 		const message = {
 			role: "custom" as const,
-			customType: "ipython_state",
+			customType,
 			content,
 			display: false,
 			timestamp: Date.now(),
