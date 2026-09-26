@@ -12,6 +12,7 @@ type FakeAssistantMessage = { role: "assistant"; stopReason: string };
 type FakeSession = {
 	_autonomousState: AutonomousRuntimeState;
 	_autonomousContinuationAwaitsRlmWork: boolean;
+	_outputLimitContinuations: number;
 	_autonomousSubagentKeepAliveTimer: ReturnType<typeof setTimeout> | undefined;
 	_autonomousContinuationResumeTask: Promise<void> | undefined;
 	_lastAssistantMessage: { role: "assistant"; stopReason: string } | undefined;
@@ -96,6 +97,7 @@ function fakeSession(overrides: Partial<FakeSession> = {}): FakeSession {
 		),
 		_snapshotAutonomousRuntimeState: () => undefined,
 		_restoreAutonomousRuntimeSnapshot: () => undefined,
+		_outputLimitContinuations: 0,
 		...overrides,
 	};
 	// The gate, resume, and keep-alive methods run for real: assign the
@@ -113,6 +115,7 @@ function fakeSession(overrides: Partial<FakeSession> = {}): FakeSession {
 		"_disarmAutonomousSubagentKeepAlive",
 		"_clearAutonomousContinuationAwait",
 		"_fireAutonomousSubagentKeepAlive",
+		"_outputLimitContinuation",
 	] as const;
 	for (const method of realMethods) {
 		(session as unknown as Record<string, unknown>)[method] = Reflect.get(AgentSession.prototype, method);

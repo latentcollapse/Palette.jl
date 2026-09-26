@@ -11,7 +11,12 @@ import type { FauxModelDefinition, FauxProviderRegistration, FauxResponseStep, M
 import { getApiProvider, registerFauxProvider, unregisterApiProviders } from "@earendil-works/pi-ai";
 import type { AgentSessionMessageController } from "../../src/core/agent-messages.js";
 import type { AgentObserveController } from "../../src/core/agent-observe.js";
-import { AgentSession, type AgentSessionEvent, type AutoRefineReviewer } from "../../src/core/agent-session.js";
+import {
+	AgentSession,
+	type AgentSessionEvent,
+	type AutoRefineReviewer,
+	type SessionBaseToolsFactory,
+} from "../../src/core/agent-session.js";
 import { AuthStorage } from "../../src/core/auth-storage.js";
 import type { AgentAutonomousConfig } from "../../src/core/autonomous.js";
 import type { ExtensionRunner } from "../../src/core/extensions/index.js";
@@ -88,6 +93,8 @@ export interface HarnessOptions {
 	autoRefineReviewer?: AutoRefineReviewer;
 	serializedRefine?: boolean;
 	initialGoal?: { objective: string; tokenBudget?: number };
+	/** Used instead of `tools` when set: per-session tools with their own state, like NeuraJL's kernel. */
+	baseToolsFactory?: SessionBaseToolsFactory;
 }
 
 export interface Harness {
@@ -212,7 +219,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		agentObserveController: options.agentObserveController,
 		agentMessageController: options.agentMessageController,
 		subagentRuntimeHost: options.subagentRuntimeHost,
-		baseToolsOverride: toolMap,
+		baseToolsOverride: options.baseToolsFactory ? undefined : toolMap,
+		baseToolsFactory: options.baseToolsFactory,
 		extensionRunnerRef,
 		rlmDepth: options.rlmDepth,
 		rlmMaxDepth: options.rlmMaxDepth,

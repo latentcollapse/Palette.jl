@@ -505,6 +505,10 @@ export class CompactionSkippedError extends Error {}
 /** Thrown when a session_before_refine extension skips the refinement round. */
 export class RefineSkippedError extends Error {}
 
+const MAX_OUTPUT_LIMIT_CONTINUATIONS = 3;
+const OUTPUT_LIMIT_CONTINUATION_TEXT =
+	"[output limit] Your previous reply was cut off at the output token limit before you finished. Continue the task from where you stopped.";
+
 export type SessionBaseToolsFactory = (sessionId: string) => {
 	tools: Record<string, AgentTool>;
 	/** Release resources owned by this specific agent session. */
@@ -1793,6 +1797,8 @@ export class AgentSession {
 	private _queuedAutonomousContinuationSnapshots = new WeakMap<AgentMessage, AutonomousRuntimeSnapshot>();
 	private _pendingThresholdCompactionAutonomousMessages: AgentMessage[] = [];
 	private _queuedGoalThresholdContinuation: AgentMessage | undefined;
+	// Consecutive continuations sent because the model's reply hit the output limit.
+	private _outputLimitContinuations = 0;
 	private _pendingAutoRefineReview: { reason: AutoRefineReason; review: AutoRefineReview } | undefined;
 	private _autoRefineBranchVersion = 0;
 	private _autoRefineReviewAbort?: AbortController;
@@ -3304,6 +3310,19 @@ export class AgentSession {
 		if (this._pendingRequestedCompaction === undefined && !(await this._thresholdCompactionNeeded(context))) {
 			return false;
 		}
+		// A reply cut off at the output limit is not the end of the task, but stopping
+		// for compaction here bypasses the continuation hook that would resume it.
+		if (!this._continueAfterThresholdCompaction && this._goalState.status !== "active") {
+			const continuation = this._outputLimitContinuation(context.message);
+			if (continuation) {
+				this._admitSessionInput(
+					this._createPreparedTurnAction("followUp", OUTPUT_LIMIT_CONTINUATION_TEXT, undefined, {
+						message: continuation,
+					}),
+				);
+				this._continueAfterThresholdCompaction = true;
+			}
+		}
 
 		const lastMessage = this.agent.state.messages[this.agent.state.messages.length - 1];
 		// A queued continuation disproves the assistant-last "task finished" heuristic, so preserve a true set above.
@@ -4400,6 +4419,10 @@ export class AgentSession {
 			}
 			return goalMessages;
 		}
+		const outputLimitContinuation = this._outputLimitContinuation(context.message);
+		if (outputLimitContinuation) {
+			return [outputLimitContinuation];
+		}
 		if (
 			this._autonomousContinuationSuppressionDepth > 0 ||
 			context.newMessages.some((message) => this._autonomousContinuationSuppressedMessages.has(message))
@@ -4425,6 +4448,28 @@ export class AgentSession {
 	}
 
 	private _lastAssistantMessage: AssistantMessage | undefined = undefined;
+
+	/**
+	 * A reply cut off at the output token limit, with no tool call, ended the whole
+	 * run as if the model had finished; one resume prompt is owed instead, at most
+	 * MAX_OUTPUT_LIMIT_CONTINUATIONS times in a row.
+	 */
+	private _outputLimitContinuation(message: AssistantMessage): CustomMessage | undefined {
+		const truncated = message.stopReason === "length" && !message.content.some((block) => block.type === "toolCall");
+		if (!truncated) {
+			this._outputLimitContinuations = 0;
+			return undefined;
+		}
+		if (this._outputLimitContinuations >= MAX_OUTPUT_LIMIT_CONTINUATIONS) return undefined;
+		this._outputLimitContinuations += 1;
+		return {
+			role: "custom",
+			customType: "output_limit_continuation",
+			content: OUTPUT_LIMIT_CONTINUATION_TEXT,
+			display: true,
+			timestamp: Date.now(),
+		};
+	}
 
 	private _agentMessageOutcome(agentMessageId: string): AgentMessageOutcome {
 		let outcome = this._agentMessageOutcomes.get(agentMessageId);
