@@ -1,0 +1,2 @@
+This repository is the textkit Python package (text wrapping and shell lexing) with a unittest suite in tests/. The tests fail.
+Find and fix the bugs in textkit/ without changing the tests. Then add a function textkit.wrap_paragraphs(text, width) that splits text into paragraphs on blank lines, wraps each paragraph to the width, and joins the wrapped paragraphs with one blank line between them. Export it from the package and add tests for it to tests/test_textkit.py. All tests must pass at the end; run them with python3 -m unittest.
