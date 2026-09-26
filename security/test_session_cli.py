@@ -269,6 +269,19 @@ class TestSessionCli(unittest.TestCase):
         self.assertIn("no network", r["error"])
         self.assertIn("Loadable: the Julia standard library", r["error"])
 
+    def test_pkg_add_read_only_failure_says_there_is_no_network(self):
+        """A package install can fail after Julia reaches the read-only
+        project/depot boundary instead of producing the usual resolver text.
+        Keep that failure actionable without relabeling unrelated writes."""
+        r = self._turn('error("Pkg.add failed: Read-only file system")')
+        self.assertFalse(r["success"])
+        self.assertIn("no network", r["error"])
+        self.assertIn("Loadable: the Julia standard library", r["error"])
+
+        unrelated = self._turn('error("write failed: Read-only file system")', request_id="2")
+        self.assertFalse(unrelated["success"])
+        self.assertNotIn("no network", unrelated["error"])
+
     def test_errors_name_the_failing_line_and_function(self):
         self._turn("function f(x)\n    return g(x)\nend")
         r = self._turn("a = 1\nb = f(a)", request_id="2")
