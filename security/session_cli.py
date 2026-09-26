@@ -60,6 +60,8 @@ def main() -> int:
     ap.add_argument("--turn-timeout", type=float, default=60.0)
     ap.add_argument("--startup-timeout", type=float, default=180.0)
     ap.add_argument("--workspace-dir", help="Task directory the worker works in; bound writable, never deleted")
+    ap.add_argument("--state-dir", help="Where the kernel saves its state after each completed call, and where a "
+                    "new kernel revives it from; created if missing, never deleted")
     args = ap.parse_args()
 
     # Default SIGTERM handling exits without running `finally`, which leaked
@@ -83,12 +85,26 @@ def main() -> int:
         kwargs["repo_dir"] = args.repo_dir
 
     try:
+        revival = False
+        if args.state_dir:
+            Path(args.state_dir).mkdir(parents=True, exist_ok=True)
+            kwargs["state_dir"] = str(Path(args.state_dir).resolve())
+            manifest = Path(args.state_dir) / "manifest.json"
+            # The kernel revives only a state saved in this same workspace, and
+            # reports an unreadable one itself.
+            workspace = str(Path(args.workspace_dir).resolve()) if args.workspace_dir else None
+            try:
+                saved = json.loads(manifest.read_text()) if manifest.is_file() else {}
+            except (OSError, ValueError):
+                saved = {"workspace": workspace}
+            revival = manifest.is_file() and workspace is not None and saved.get("workspace") == workspace
         session = NeuraSession(**kwargs)
     except Exception as e:
         _respond({"kind": "ERROR", "error": f"failed to start NeuraSession: {e}"})
         return 1
 
-    _respond({"kind": "HELLO", "epoch": session.epoch, "session_id": session.session_id})
+    _respond({"kind": "HELLO", "epoch": session.epoch, "session_id": session.session_id,
+              "revival": revival})
 
     try:
         while True:

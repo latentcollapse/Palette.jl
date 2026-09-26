@@ -1,0 +1,370 @@
+#!/usr/bin/env python3
+"""
+Tests for state revival (src/revival.jl): a kernel that replaces a stopped
+one revives the state at the end of the last completed call, and says
+exactly what was restored, rebuilt, stale, different or lost.
+
+The point of most tests here is the opposite of restoring: a revival that
+looks continuous but is wrong is worse than reporting state lost, so each
+adversarial case checks that the report does NOT claim what is not true.
+
+Run:
+    JULIA_DEPOT_PATH=~/.neurajl-trial/depot NEURAJL_TEST_PROJECT_DIR=~/.neurajl-trial/project \\
+        python3 security/test_revival.py
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+CLI = str(Path(__file__).resolve().parent / "session_cli.py")
+PROJECT_DIR = os.environ.get("NEURAJL_TEST_PROJECT_DIR", str(Path.home() / ".neurajl-trial/project"))
+
+
+class Kernel:
+    """One session_cli process: one kernel, over the given workspace and state directory."""
+
+    def __init__(self, workspace: str, state: str, timeout: float = 20, env: dict | None = None):
+        self.proc = subprocess.Popen(
+            [sys.executable, CLI, "--project-dir", PROJECT_DIR, "--ceiling", "{}", "--workspace-dir", workspace,
+             "--turn-timeout", str(timeout), "--state-dir", state],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1,
+            env={**os.environ, **(env or {})},
+        )
+        self.hello = json.loads(self.proc.stdout.readline())
+        self.n = 0
+
+    def turn(self, code: str) -> dict:
+        self.n += 1
+        self.proc.stdin.write(json.dumps({"request_id": str(self.n), "code": code}) + "\n")
+        self.proc.stdin.flush()
+        line = self.proc.stdout.readline()
+        assert line, "no reply"
+        return json.loads(line)
+
+    def close(self):
+        try:
+            self.proc.stdin.close()
+            self.proc.wait(timeout=60)
+        finally:
+            self.proc.stdout.close()
+
+
+def section(report: str, heading: str) -> str:
+    m = re.search(rf"^  {re.escape(heading)}: (.*)$", report, re.M)
+    return m.group(1) if m else ""
+
+
+class RevivalTest(unittest.TestCase):
+    def setUp(self):
+        if shutil.which("bwrap") is None or not Path(PROJECT_DIR).exists():
+            raise unittest.SkipTest("needs bwrap and the trial project")
+        self.ws = tempfile.mkdtemp(prefix="neurajl-revival-ws-")
+        self.state = tempfile.mkdtemp(prefix="neurajl-revival-state-")
+
+    def tearDown(self):
+        shutil.rmtree(self.ws, ignore_errors=True)
+        shutil.rmtree(self.state, ignore_errors=True)
+
+    def session(self, *codes: str, env: dict | None = None, timeout: float = 20, may_fail: bool = False) -> list[dict]:
+        k = Kernel(self.ws, self.state, timeout=timeout, env=env)
+        try:
+            results = [k.turn(c) for c in codes]
+        finally:
+            k.close()
+        if not may_fail:
+            for r in results:
+                self.assertTrue(r["success"], r)
+        return results
+
+    def revive(self, code: str = "nothing", env: dict | None = None) -> tuple[str, dict]:
+        k = Kernel(self.ws, self.state, env=env)
+        try:
+            r = k.turn(code)
+            return r["output"], r
+        finally:
+            k.close()
+
+    def manifest(self) -> dict:
+        return json.loads(Path(self.state, "manifest.json").read_text())
+
+    # --- what should come back ------------------------------------------
+
+    def test_plain_data_and_containers_are_restored_exactly(self):
+        self.session('n = 42; x = 1.5; s = "héllo"; sym = :k; c = \'z\'; nothing_ = nothing; m = missing; '
+                     'bg = big(2)^100; v = [1, 2, 3]; mat = rand(3, 3); d = Dict("a" => [1, 2], "b" => Dict(:c => 3)); '
+                     'st = Set([1, 2]); tup = (1, "two", 3.0); nt = (a = 1, b = [2]); rng = collect(1:5); sub = SubString("hello", 1, 3)')
+        out, r = self.revive("(n, x, s, sym, c, nothing_ === nothing, ismissing(m), bg == big(2)^100, v, size(mat), "
+                             "d[\"b\"][:c], st == Set([1, 2]), tup, nt.b, rng, sub)")
+        self.assertTrue(r["success"], r)
+        self.assertIn("end of call 1", out)
+        exact = section(out, "restored exactly")
+        for name in ("n", "x", "s", "sym", "d", "st", "tup", "nt", "bg", "mat", "sub"):
+            self.assertIn(f"{name} (", exact)
+        self.assertTrue(r["display"].startswith('(42, 1.5, "héllo", :k, \'z\', true, true, true, [1, 2, 3], (3, 3), 3, true, (1, "two", 3.0), [2], [1, 2, 3, 4, 5], "hel")'), r["display"])
+        self.assertNotIn("not revived", out)
+
+    def test_dataframes_and_parsed_structures(self):
+        self.session('using DataFrames; df = DataFrame(a = 1:3, b = ["x", "y", "z"]); '
+                     'ex = Meta.parse("f(x) = x + 1"); tree = Meta.parseall("a = 1\\nb = a + 2")')
+        out, r = self.revive("(size(df), df.b, ex.head, length(tree.args), eval(Meta.parse(\"1 + 2\")))")
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["data"], [[3, 2], ["x", "y", "z"], "=", 4, 3])
+        self.assertIn("df (DataFrames.DataFrame, call 1)", section(out, "restored exactly"))
+
+    def test_shared_references_stay_shared_and_cycles_survive(self):
+        self.session('mutable struct Node; name::String; next::Union{Nothing, Node}; end\n'
+                     'a = Node("a", nothing); b = Node("b", a); a.next = b; ring = [a, b]\n'
+                     'v = [1, 2]; p = (v, v); w = v; holder = Dict(:v => v)')
+        out, r = self.revive("(p[1] === p[2] === w === holder[:v], ring[1].next === ring[2], a.next.next === a, "
+                             "ring[1] === a)")
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["data"], [True, True, True, True])
+
+    def test_functions_methods_types_and_macros_are_rebuilt_from_source(self):
+        self.session('abstract type Shape end\n'
+                     'struct Circle <: Shape; r::Float64; end\n'
+                     'Base.@kwdef struct Opts; n::Int = 3; end\n'
+                     '"doc for area"\narea(c::Circle) = pi * c.r^2\n'
+                     'area(x::Number) = x\n'
+                     'function scale(s::Shape, k); Circle(s.r * k); end\n'
+                     'macro twice(ex) :($(esc(ex)) * 2) end\n'
+                     '@enum Color red green\n'
+                     'Base.show(io::IO, c::Circle) = print(io, "Circle(", c.r, ")")\n'
+                     'const LIMIT = 10\n'
+                     'c = Circle(2.0)')
+        out, r = self.revive('(area(c), area(3), repr(scale(c, 2)), @twice(4), Opts().n, Int(green), LIMIT, '
+                             'string(@doc area), c isa Shape)')
+        self.assertTrue(r["success"], r)
+        self.assertAlmostEqual(r["data"][0], 3.14159265 * 4, places=5)
+        self.assertEqual(r["data"][1:7], [3, "Circle(4.0)", 8, 3, 1, 10])
+        self.assertIn("doc for area", r["data"][7])
+        self.assertTrue(r["data"][8])
+        rebuilt = section(out, "rebuilt from source")
+        for name in ("Circle (type", "Shape (type", "area (function", "scale (function", "Opts (type", "Color (type"):
+            self.assertIn(name, rebuilt)
+        self.assertIn("c (Circle, call 1)", section(out, "restored exactly"))
+        self.assertIn("LIMIT (Int64, call 1)", section(out, "restored exactly"))
+        # Definitions are never serialized.
+        blobs = b"".join(p.read_bytes() for p in Path(self.state).glob("data-*.jls"))
+        self.assertNotIn(b"area", blobs)
+
+    def test_packages_load_path_env_and_cwd_come_back(self):
+        pkg = Path(self.ws, "Wp", "src")
+        pkg.mkdir(parents=True)
+        Path(self.ws, "Wp", "Project.toml").write_text('name = "Wp"\nuuid = "0f5c2a5e-9a44-4c3b-8f2e-6c1d8e7b9a03"\n')
+        Path(pkg, "Wp.jl").write_text("module Wp\nf() = 7\nend\n")
+        self.session('pushfirst!(LOAD_PATH, joinpath(pwd(), "Wp")); using Wp; using Statistics: median; import JSON; '
+                     'ENV["MY_SETTING"] = "on"; mkdir("sub"); cd("sub"); r = median([1, 2, 3])')
+        out, r = self.revive('(Wp.f(), median([4, 5, 6]), JSON.json([1]), ENV["MY_SETTING"], basename(pwd()), r)')
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["data"], [7, 5.0, "[1]", "on", "sub", 2.0])
+
+    # --- what must be marked, not restored silently --------------------
+
+    def test_value_computed_from_a_file_that_changed_is_marked_stale(self):
+        Path(self.ws, "data.csv").write_text("a\n1\n2\n")
+        # Staleness is tracked per call: a value set by the call that read the
+        # file counts as computed from it. `unrelated` comes from its own call.
+        self.session('using CSV, DataFrames; d = CSV.read("data.csv", DataFrame); total = sum(d.a)', "unrelated = 5")
+        Path(self.ws, "data.csv").write_text("a\n10\n20\n")
+        out, r = self.revive("total")
+        stale = section(out, "restored but stale (a file it was computed from changed)")
+        self.assertIn("d (DataFrames.DataFrame, call 1): data.csv changed since", stale)
+        self.assertIn("total (Int64, call 1): data.csv changed since", stale)
+        self.assertIn("unrelated (", section(out, "restored exactly"))
+        self.assertNotIn("total (", section(out, "restored exactly"))
+
+    def test_definitions_from_a_changed_include_are_not_called_the_same(self):
+        Path(self.ws, "lib.jl").write_text("helper(x) = 10x\nstruct Box; v::Int; end\n")
+        self.session('include("lib.jl"); b = Box(1)')
+        Path(self.ws, "lib.jl").write_text("helper(x) = 20x\nstruct Box; v::Float64; end\n")
+        out, r = self.revive("(helper(1), @isdefined(b))")
+        self.assertNotIn("helper (", section(out, "rebuilt from source"))
+        self.assertIn("helper (function, call 1): rebuilt from a file that changed since", section(out, "not the same as before"))
+        self.assertIn("Box (type, call 1): rebuilt, but its methods or fields differ", section(out, "not the same as before"))
+        # A Box saved with an Int field is not poured into a Box with a Float64 field.
+        self.assertIn("b (Box, call 1): type Box is defined differently now", section(out, "not revived"))
+        self.assertEqual(r["data"], [20, False])
+
+    def test_a_value_of_a_replaced_struct_definition_is_not_revived(self):
+        self.session('struct P; x::Int; end\nold = P(1)',
+                     'struct P; x::Int; y::Int; end\nnew = P(1, 2)')
+        out, r = self.revive("(@isdefined(old), new.y)")
+        self.assertIn("old (P, an earlier definition, call 1): its type P is an earlier definition", section(out, "not revived"))
+        self.assertIn("new (P, call 2)", section(out, "restored exactly"))
+        self.assertEqual(r["data"], [False, 2])
+
+    def test_a_method_the_failed_call_never_reached_is_reported_different(self):
+        self.session('h(x) = 1\nerror("stop")\nh(x::Int) = 2', "1", may_fail=True)
+        out, r = self.revive("length(methods(h))")
+        self.assertIn("h (function, call 1): rebuilt, but its methods or fields differ", section(out, "not the same as before"))
+
+    def test_data_referring_to_a_changed_definition_is_not_called_exact(self):
+        Path(self.ws, "lib.jl").write_text("helper(x) = 10x\n")
+        self.session('include("lib.jl"); ops = [helper, sin]', "y = 1")
+        Path(self.ws, "lib.jl").write_text("helper(x) = 20x\n")
+        out, r = self.revive("ops[1](1)")
+        self.assertIn("ops (Vector{Function}, call 1): restored, but it refers to helper, which is not the same as before",
+                      section(out, "not the same as before"))
+        self.assertNotIn("ops (", section(out, "restored exactly"))
+        self.assertIn("y (Int64, call 2)", section(out, "restored exactly"))
+
+    def test_changed_workspace_package_is_not_called_rebuilt(self):
+        pkg = Path(self.ws, "Wq", "src")
+        pkg.mkdir(parents=True)
+        Path(self.ws, "Wq", "Project.toml").write_text('name = "Wq"\nuuid = "0f5c2a5e-9a44-4c3b-8f2e-6c1d8e7b9a04"\n')
+        Path(pkg, "Wq.jl").write_text("module Wq\nf() = 1\nend\n")
+        self.session('pushfirst!(LOAD_PATH, joinpath(pwd(), "Wq")); using Wq; v = Wq.f()')
+        Path(pkg, "Wq.jl").write_text("module Wq\nf() = 2\nend\n")
+        out, r = self.revive("Wq.f()")
+        self.assertIn("Wq (workspace package): loaded again from sources that changed since", section(out, "not the same as before"))
+        self.assertEqual(r["data"], 2)
+
+    def test_a_foreign_method_that_cannot_be_rebuilt_is_reported(self):
+        self.session('struct T1; x::Int; end\nBase.show(io::IO, t::T1) = print(io, "T1:", t.x)\nv = T1(1)')
+        m = self.manifest()
+        for e in m["definitions"]:
+            if "Base.show" in e["code"]:
+                e["code"] = e["code"].replace("t.x", "undefined_helper(t.x)").replace("Base.show(io::IO", "Base.show(io::IO, extra::UndefinedType")
+        Path(self.state, "manifest.json").write_text(json.dumps(m))
+        out, r = self.revive("1")
+        self.assertIn("`Base.show(", section(out, "not revived"))
+        self.assertIn("rebuilding it failed", section(out, "not revived"))
+
+    def test_the_report_does_not_claim_runtime_settings_came_back(self):
+        self.session("using Random; Random.seed!(1); a = 1")
+        out, r = self.revive("a")
+        self.assertIn("Other runtime state starts fresh: random number streams", out)
+
+    # --- what cannot come back -------------------------------------------
+
+    def test_runtime_objects_are_lost_with_their_recipe(self):
+        self.session('t = @async sleep(1000); ch = Channel{Int}(1); lk = ReentrantLock(); io = open("f.txt", "w"); '
+                     'p = run(`sleep 1000`; wait=false); ptr = pointer([1]); fn = x -> x + 1; '
+                     'holds = Dict(:f => fn); closure_in_struct = (1, fn); buf = IOBuffer("abc"); cmd = `ls -l`\n'
+                     'let; global letdef(x) = x; end')
+        out, r = self.revive("(@isdefined(t), @isdefined(fn), String(take!(buf)), cmd)")
+        lost = section(out, "not revived")
+        for name, why in (("t", "a Task cannot be revived"), ("ch", "a Channel"), ("lk", "a ReentrantLock"),
+                          ("io", "an open IOStream"), ("p", "a Process"), ("ptr", "it holds a pointer"),
+                          ("fn", "anonymous function"), ("holds", "anonymous function"),
+                          ("closure_in_struct", "anonymous function"),
+                          ("letdef", "not defined by top-level code")):
+            self.assertRegex(lost, rf"(^|; ){name} \([^)]*\): [^;]*{re.escape(why)}", f"{name}: {lost}")
+        self.assertIn("it came from `t = ", lost)
+        self.assertEqual(r["display"], '(false, false, "abc", `ls -l`)')
+
+    def test_package_object_holding_a_c_pointer_is_not_revived(self):
+        self.session('using EzXML; doc = parsexml("<a><b/></a>"); names_ = [nodename(n) for n in eachelement(root(doc))]')
+        out, r = self.revive("names_")
+        self.assertIn("doc (", section(out, "not revived"))
+        self.assertIn("pointer", section(out, "not revived"))
+        self.assertEqual(r["data"], ["b"])
+
+    # --- kernel death, restart, environment changes, damage, limits ----
+
+    def test_kernel_death_mid_call_revives_the_last_completed_call(self):
+        k = Kernel(self.ws, self.state, timeout=4)
+        k.turn("v = [1, 2, 3]; count_ = 1")
+        r = k.turn("v[1] = 100; count_ = 2; s = 0; while true; s += 1; end")
+        self.assertTrue(r.get("session_dead") or r.get("kernel_exit") or not r["success"], r)
+        k.close()
+        out, r = self.revive("(v, count_, @isdefined(s))")
+        self.assertIn("end of call 1", out)
+        self.assertEqual(r["data"], [[1, 2, 3], 1, False])
+
+    def test_normal_restart_continues_call_numbers_and_revives_again(self):
+        self.session("a = 1", "b = 2")
+        out, r = self.revive("c = 3")
+        self.assertIn("end of call 2", out)
+        self.assertEqual(r.get("call"), 3)
+        out, r = self.revive("(a, b, c)")
+        self.assertIn("end of call 3", out)
+        self.assertIn("c (Int64, call 3)", section(out, "restored exactly"))
+        self.assertEqual(r["data"], [1, 2, 3])
+
+    def test_a_different_julia_or_package_environment_restores_no_data(self):
+        self.session("f(x) = x + 1; v = [1, 2]")
+        m = self.manifest()
+        m["environment"]["julia"] = "1.11.0"
+        Path(self.state, "manifest.json").write_text(json.dumps(m))
+        out, r = self.revive("(f(1), @isdefined(v))")
+        self.assertIn("its data could not be restored because it was saved by Julia 1.11.0", out)
+        self.assertIn("f (function, call 1)", section(out, "rebuilt from source"))
+        self.assertIn("v (Vector{Int64}, call 1): it was saved by Julia 1.11.0", section(out, "not revived"))
+        self.assertEqual(r["data"], [2, False])
+        m["environment"]["julia"] = self.manifest()["environment"]["julia"]
+        m["environment"]["manifest"] = "0" * 64
+        self.session("v = [1, 2]")
+        m2 = self.manifest()
+        m2["environment"]["manifest"] = "0" * 64
+        Path(self.state, "manifest.json").write_text(json.dumps(m2))
+        out, r = self.revive("@isdefined(v)")
+        self.assertIn("the package environment changed since it was saved", out)
+        self.assertFalse(r["data"])
+
+    def test_damaged_or_missing_data_loses_only_its_own_group(self):
+        self.session("a = [1, 2]; b = a; c = 3")
+        m = self.manifest()
+        group = next(g for g in m["data"] if "a" in g["names"])
+        path = Path(self.state, group["file"])
+        path.write_bytes(path.read_bytes()[:-3] + b"xyz")
+        out, r = self.revive("(@isdefined(a), @isdefined(b), c)")
+        self.assertIn("a (Vector{Int64}, call 1): its data file is damaged", section(out, "not revived"))
+        self.assertIn("b (Vector{Int64}, call 1): its data file is damaged", section(out, "not revived"))
+        self.assertEqual(r["data"], [False, False, 3])
+        self.session("a = [1, 2]; c = 3")
+        for g in self.manifest()["data"]:
+            Path(self.state, g["file"]).unlink()
+        out, r = self.revive("@isdefined(c)")
+        self.assertIn("its data file is missing", out)
+        self.assertFalse(r["data"])
+
+    def test_unreadable_manifest_revives_nothing_and_says_so(self):
+        self.session("a = 1")
+        Path(self.state, "manifest.json").write_text('{"format": 1, "call": 1, "bin')
+        out, r = self.revive("@isdefined(a)")
+        self.assertIn("its snapshot could not be read", out)
+        self.assertIn("Nothing was revived", out)
+        self.assertFalse(r["data"])
+
+    def test_leftover_temporary_files_are_ignored(self):
+        self.session("a = 1")
+        Path(self.state, "manifest.json.tmp").write_text("garbage")
+        Path(self.state, "data-9-9-1.jls.tmp").write_bytes(b"garbage")
+        out, r = self.revive("a")
+        self.assertEqual(r["data"], 1)
+
+    def test_state_of_another_workspace_is_not_revived(self):
+        self.session("secret = 1")
+        other = tempfile.mkdtemp(prefix="neurajl-revival-other-")
+        try:
+            k = Kernel(other, self.state)
+            r = k.turn("@isdefined(secret)")
+            k.close()
+            self.assertFalse(k.hello["revival"])
+            self.assertEqual(r["output"], "")
+            self.assertFalse(r["data"])
+        finally:
+            shutil.rmtree(other, ignore_errors=True)
+
+    def test_size_limits_skip_and_report(self):
+        env = {"NEURAJL_STATE_MAX_BINDING_BYTES": str(1_000_000), "NEURAJL_STATE_MAX_BYTES": str(1_500_000)}
+        self.session("huge = zeros(200_000); a = zeros(100_000); b = zeros(100_000); small = 1", env=env)
+        out, r = self.revive("(@isdefined(huge), @isdefined(small))", env=env)
+        lost = section(out, "not revived")
+        self.assertIn("huge (Vector{Float64}, call 1): not saved: 1.526 MiB is over the 976.562 KiB limit per binding", lost)
+        self.assertRegex(lost, r"(a|b) \(Vector\{Float64\}, call 1\): not saved: the snapshot reached its 1.431 MiB limit")
+        self.assertEqual(r["data"], [False, True])
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

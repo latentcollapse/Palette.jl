@@ -94,7 +94,7 @@ end
 # The last few are kept, renamed, and what grows in them after their call is
 # reported as background output at the start of the next call.
 const LATE_FILES = Tuple{String, Int}[]
-const KEEP_LATE_FILES = 8
+const KEEP_LATE_FILES = 32
 const LATE_SEQ = Ref(0)
 
 function keep_for_late_output!(path::String, total::Int)
@@ -316,6 +316,7 @@ function note_file!(path::AbstractString, call::Int)
     startswith(full, root * "/") && isfile(full) || return
     (haskey(USED_FILES, full) || length(USED_FILES) < MAX_USED_FILES) || return
     USED_FILES[full] = (file_stamp(full), call)
+    push!(get!(CALL_FILES, call, Tuple{String, Tuple{Float64, Int}}[]), (full, USED_FILES[full][1]))
     return
 end
 
@@ -381,8 +382,11 @@ function short_type(v)
     v isa Function && return "function"
     v isa Module && return "module"
     v isa Type && return "type"
-    t = scrub(string(typeof(v)))
-    return length(t) > 40 ? string(nameof(typeof(v))) : t
+    T = typeof(v)
+    T isa DataType && parentmodule(T) === get_kernel_state().eval_module && !current_definition(T) &&
+        return "$(nameof(T)), an earlier definition"
+    t = scrub(string(T))
+    return length(t) > 40 ? string(nameof(T)) : t
 end
 
 """
@@ -419,12 +423,14 @@ function execute_turn(code::String, timeout_s::Union{Nothing, Float64})
     state = get_kernel_state()
     call = length(state.execution_history) + 1
     return capture_output() do
+        isempty(REVIVAL_REPORT[]) || (println(REVIVAL_REPORT[]); REVIVAL_REPORT[] = "")
         report_background(state.eval_module)
         report_changed_files()
         refresh_workspace_packages!()
         turn = run_turn(() -> execute(ExecuteCode(code)), timeout_s)
         refresh_workspace_packages!(reload=false)
         note_files_named!(code, call)
+        log_definitions!(code, call)
         turn
     end
 end

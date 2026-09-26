@@ -214,6 +214,8 @@ mutable struct KernelState
         # be loaded into the persistent mind's own module, not just Main.
         # It first reloads edited workspace packages, so a call that edits a
         # package and then includes its tests runs the edited code.
+        # Every ordinary module has `eval`; this one did not, and turn code calling it failed.
+        Core.eval(state.eval_module, :(eval(x) = Core.eval(@__MODULE__, x)))
         Core.eval(state.eval_module, :(include(path) = ($(refresh_workspace_packages!)(); $(note_file!)(path, length($(get_kernel_state)().execution_history) + 1); Base.include(@__MODULE__, path))))
         # Backtick commands start one program with no shell, so a pipe, glob
         # or `2>&1` inside them is a parse error; this is the explicit way
@@ -426,9 +428,19 @@ instead of throwing on a nonzero one. Turn code reaches it as `bash(script)`,
 or as `sh"..."`, which passes `\$` to the shell instead of interpolating it.
 """
 function run_bash(script::AbstractString)
-    out, err = IOBuffer(), IOBuffer()
-    p = run(pipeline(ignorestatus(`bash -c $script`); stdout=out, stderr=err))
-    o, e = String(take!(out)), String(take!(err))
+    # Files, not pipes: a command that puts a job in the background (`job &`)
+    # hands it the pipe, and reading a pipe to its end waited for the job,
+    # up to the call's time limit, which then killed it. Only bash is waited
+    # for; what the job writes later is reported at the start of a later call.
+    out, err = tempname(), tempname()
+    p = open(out, "w") do o
+        open(err, "w") do e
+            run(pipeline(ignorestatus(`bash -c $script`); stdout=o, stderr=e))
+        end
+    end
+    o, e = read(out, String), read(err, String)
+    keep_for_late_output!(out, ncodeunits(o))
+    keep_for_late_output!(err, ncodeunits(e))
     print(stdout, o)
     print(stderr, e)
     return ShellResult(p.termsignal > 0 ? 128 + p.termsignal : p.exitcode, o, e)
@@ -1590,6 +1602,7 @@ Exports
 ==============================================================================#
 
 include("turn.jl")
+include("revival.jl")
 include("precompile_workload.jl")
 
 export KernelState, ExecutionRecord
