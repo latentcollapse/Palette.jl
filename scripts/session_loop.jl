@@ -189,7 +189,10 @@ function with_hint(err)
     if occursin("must be quoted in commands", err)
         return err * "\nHint: backticks start one program without a shell. " *
                "Use bash(\"...\") for pipes, globs, redirects and &&."
-    elseif PKG_OFFLINE && occursin(r"not found in current path|has no known versions|Could not resolve host|name resolution", err)
+    elseif PKG_OFFLINE && (
+        occursin(r"not found in current path|has no known versions|Could not resolve host|name resolution", err) ||
+        (occursin("Pkg", err) &&
+            occursin(r"(?i)read-only file system|permission denied", err)))
         return err * "\nHint: this kernel has no network, so Pkg.add cannot install packages. Loadable: $LOADABLE."
     end
     return err
