@@ -14,9 +14,16 @@ Julia world that happens to share a session_id. See
 this mirrors (not copies) NeuraBash's own `RUNTIME_EPOCH` lesson
 (`Project-LIRA-NeuraBash/julia/bin/daemon.jl`).
 
-Request:  {"request_id": "...", "kind": "EXECUTE" | "EPHEMERAL", "code": "...", "ceiling": {...}?}
-Response: {"request_id": "...", "epoch": "...", "success": bool, "data": ..., "error": ...}
+Request:  {"request_id": "...", "kind": "EXECUTE" | "EPHEMERAL", "code": "...", "ceiling": {...}?,
+           "payload": "..."?, "timeout_s": number?}
+Response: {"request_id": "...", "epoch": "...", "success": bool, "data": ..., "display": ..., "output": ...,
+           "error": ..., "interrupted": true?, "kernel_exit": true?}
 HELLO:    {"kind": "HELLO", "epoch": "..."}
+
+`payload` is bound as `PAYLOAD` for that one EXECUTE turn. At `timeout_s` a
+turn still waiting is interrupted (`interrupted`) and the kernel keeps its
+state; one that ignores the interrupt for INTERRUPT_GRACE_S ends the process
+right after its reply (`kernel_exit`).
 
 `kind == "EXECUTE"` evaluates into this session's own persistent
 `eval_module` -- the durable "mind": real state, real bindings, real
@@ -84,6 +91,22 @@ redirect_stdin(open("/dev/null"))
 const SINK = open(joinpath(tempdir(), "neurajl-background-output.log"), "a")
 redirect_stdout(SINK)
 redirect_stderr(SINK)
+
+# `display(x)` goes through the display stack, whose TextDisplay was built at
+# startup around the original stdout, which is the protocol pipe: one
+# `display` in turn code wrote a matrix into the protocol and killed the
+# session. This display writes to whatever stdout is when it is called, which
+# during a turn is the turn's captured output.
+struct TurnDisplay <: AbstractDisplay end
+Base.display(::TurnDisplay, ::MIME"text/plain", @nospecialize(x)) = (show(stdout, MIME"text/plain"(), x); println(stdout))
+Base.display(d::TurnDisplay, @nospecialize(x)) = display(d, MIME"text/plain"(), x)
+Base.displayable(::TurnDisplay, ::MIME"text/plain") = true
+empty!(Base.Multimedia.displays)
+pushdisplay(TurnDisplay())
+
+# Without the REPL loaded, `@doc sum` returns a raw DocStr instead of the
+# rendered docstring.
+import REPL
 
 # Enough for any output a model can use; the host applies its own tighter cap.
 const MAX_OUTPUT_BYTES = 256 * 1024
@@ -158,21 +181,41 @@ function capture_output(f)
     return value, output
 end
 
+# The session module's name is an internal uuid, and types defined by turn
+# code print qualified with it (`Main.KernelScope_2d97….P(3)`).
+const KERNEL_NAME = string(nameof(Neura.get_kernel_state().eval_module))
+scrub(s::AbstractString) = replace(s, "Main.$KERNEL_NAME." => "", "$KERNEL_NAME." => "", "Main.$KERNEL_NAME" => "Main",
+                                   KERNEL_NAME => "Main")
+scrub(x) = x
+
 function text_display(value)
     value === nothing && return nothing
     try
-        return Base.invokelatest(sprint, show, MIME"text/plain"(), value; context=:limit => true)
+        return scrub(Base.invokelatest(sprint, show, MIME"text/plain"(), value; context=:limit => true))
     catch e
         return "<display failed: $(sprint(showerror, e))>"
     end
 end
 
-# `data` stays the raw value for callers that read it structurally, unless
-# it cannot be serialized compactly; then the text rendering stands in.
+# `data` carries the raw value only when it is a scalar or a short collection
+# of short things. The host renders `display`; encoding a large value just to
+# learn its size took 14.7s for a 400 MB array and 4.6s for a million-entry
+# Dict, and `Base.summarysize` of that Dict alone takes 4.9s.
+const SCALAR = Union{Nothing, Bool, Number, AbstractString, Symbol}
+const MAX_DATA_ELEMENTS = 1000
+const COLLECTION = Union{AbstractArray, AbstractDict, AbstractSet, Tuple, NamedTuple}
+short(x) = x isa SCALAR ? !(x isa AbstractString && ncodeunits(x) > MAX_DATA_JSON_BYTES) :
+           x isa COLLECTION && length(x) <= MAX_DATA_ELEMENTS
 function bounded_data(value)
-    try
-        length(JSON.json(value)) <= MAX_DATA_JSON_BYTES && return value
-    catch
+    if value isa SCALAR
+        short(value) || return text_display(value)
+        return value isa Number && !isfinite(value) ? text_display(value) : value
+    end
+    if value isa COLLECTION && short(value) && all(short, value isa AbstractDict ? values(value) : value)
+        try
+            length(JSON.json(value)) <= MAX_DATA_JSON_BYTES && return value
+        catch
+        end
     end
     return text_display(value)
 end
@@ -184,21 +227,131 @@ const LOADABLE = let deps = get(Base.parsed_toml(Base.active_project()), "deps",
     join(["the Julia standard library"; sort!([String(k) for k in keys(deps) if k != "Neura"])], ", ")
 end
 
-function with_hint(err)
+# A reserved word where a name belongs: an argument (`quote::UInt8`), an
+# assignment (`end = 3`), a keyword argument or a loop variable. Julia's
+# parser reports these as "Expected `end`" several columns away.
+const RESERVED_AS_NAME = r"(?:^|[(,;\s])(quote|end|begin|let|local|global|module|baremodule|struct|macro|do|try|catch|finally|export|import|using|const|return|break|continue|function|if|elseif|else|while|for|abstract|primitive|mutable|public)\s*(?:::|=(?!=)|,\s*\w|\s+in\s)"
+function with_hint(err, code)
     err isa AbstractString || return err
     if occursin("must be quoted in commands", err)
         return err * "\nHint: backticks start one program without a shell. " *
-               "Use bash(\"...\") for pipes, globs, redirects and &&."
+               "Use sh\"...\" or bash(\"...\") for pipes, globs, redirects and &&."
+    elseif startswith(err, "ParseError") && occursin(r"after \$ in string|interpolat", err)
+        return err * "\nHint: in a Julia string \$ interpolates; write \\\$ for a literal dollar sign. sh\"...\" passes \$ to the shell " *
+               "unchanged, and a file's text passed as this call's payload needs no escaping: write(path, PAYLOAD)."
+    elseif startswith(err, "ParseError") && (m = match(RESERVED_AS_NAME, code)) !== nothing
+        return err * "\nHint: `$(m[1])` is a reserved word in Julia and cannot name a variable or argument."
+    elseif startswith(err, "ParseError") && occursin("\"\"\"", code)
+        return err * "\nHint: to write a file's text without Julia quoting, pass it as this call's payload and use write(path, PAYLOAD)."
     elseif PKG_OFFLINE && (
         occursin(r"not found in current path|has no known versions|Could not resolve host|name resolution", err) ||
         (occursin("Pkg", err) &&
             occursin(r"(?i)read-only file system|permission denied", err)))
-        return err * "\nHint: this kernel has no network, so Pkg.add cannot install packages. Loadable: $LOADABLE."
+        # First, not last: the Pkg error that follows runs to many lines.
+        return "This kernel has no network, so Pkg.add cannot install packages. Loadable: $LOADABLE.\n" * err
     end
     return err
 end
 
+# Processes in this sandbox, other than the kernel and bwrap's reaper (PID 1,
+# the kernel's parent). The sandbox has its own PID namespace, so /proc lists
+# exactly what turns started. Outside such a namespace (a bare test run) there
+# is no safe way to tell, and nothing is reaped.
+const OWN_NAMESPACE = getpid() == 1 ||
+    (ccall(:getppid, Cint, ()) == 1 && isfile("/proc/1/comm") && strip(read("/proc/1/comm", String)) == "bwrap")
+function sandbox_pids()
+    OWN_NAMESPACE || return Set{Int}()
+    pids = Set{Int}()
+    self = getpid()
+    for d in readdir("/proc")
+        pid = tryparse(Int, d)
+        pid === nothing || pid == 1 || pid == self || push!(pids, pid)
+    end
+    return pids
+end
+# Kills what a turn started, so a wait on it returns, and nothing it began
+# keeps running after the turn is reported interrupted. Processes earlier
+# turns started are left alone.
+function reap(before::Set{Int})
+    for pid in setdiff(sandbox_pids(), before)
+        ccall(:kill, Cint, (Cint, Cint), pid, 9)
+    end
+end
+
+# How long after the deadline a turn has to finish once interrupted. Turn code
+# that catches the InterruptException gets it again every second.
+const INTERRUPT_GRACE_S = 5.0
+
+"""
+    run_turn(f, timeout_s) -> (value, interrupted, stuck)
+
+Runs `f` in its own task. At `timeout_s` the task gets an InterruptException
+and the processes it started are killed; waiting work (sleep, run, read, I/O)
+ends there with the kernel and every binding intact. The deadline is noticed
+only when the task yields: compute that never yields runs until the host
+kills the kernel. `stuck` means the task was still running when the grace
+period ended.
+"""
+function run_turn(f, timeout_s)
+    t = Task(f)
+    t.sticky = true
+    schedule(t)
+    timeout_s === nothing && return (fetch(t), false, false)
+    before = sandbox_pids()
+    interrupted = Ref(false)
+    outcome = Channel{Symbol}(2)
+    @async (try wait(t) catch end; put!(outcome, :done))
+    deadline = Timer(timeout_s)
+    watchdog = @async begin
+        try
+            wait(deadline)
+        catch
+            return  # closed: the turn finished in time
+        end
+        istaskdone(t) && return
+        interrupted[] = true
+        giveup = time() + INTERRUPT_GRACE_S
+        while !istaskdone(t) && time() < giveup
+            try
+                schedule(t, InterruptException(); error=true)
+            catch
+            end
+            reap(before)
+            timedwait(() -> istaskdone(t), 1.0; pollint=0.05)
+        end
+        istaskdone(t) || put!(outcome, :stuck)
+    end
+    result = take!(outcome)
+    close(deadline)
+    result === :stuck && return (nothing, true, true)
+    interrupted[] && reap(before)
+    # An interrupt that lands after the turn's own error handling, while its
+    # bookkeeping runs, fails the task itself.
+    value = try
+        fetch(t)
+    catch e
+        e isa TaskFailedException ? e.task.exception : e
+    end
+    return (value, interrupted[], false)
+end
+
 respond(Dict{String,Any}("kind" => "HELLO", "epoch" => EPOCH))
+
+# This script is not precompiled, so its turn machinery compiled during the
+# first call and doubled its latency (0.8s to 1.6s). Compiling it here, after
+# HELLO, overlaps with the host deciding what to send first. The one warm-up
+# call leaves no history, receipt or binding behind.
+let state = Neura.get_kernel_state()
+    Core.eval(state.eval_module, Expr(:global, Expr(:(=), :PAYLOAD, nothing)))
+    (r, _, _), out = capture_output(() -> run_turn(() -> execute(ExecuteCode("print(\"\"); [1 2]")), 60.0))
+    (e, _, _), _ = capture_output(() -> run_turn(() -> execute(ExecuteCode("error(\"warm-up\")")), 60.0))
+    with_hint(e.result.error, "")
+    text_display(r.result.data); bounded_data(r.result.data); bounded_data(Dict("a" => [1]))
+    scrub(out); with_hint("x", "y"); safe_json(Dict{String,Any}("a" => 1))
+    empty!(state.execution_history)
+    empty!(state.receipt_log)
+    Core.eval(state.eval_module, Expr(:global, Expr(:(=), :ans, nothing)))
+end
 
 for line in eachline(PROTO_IN)
     isempty(strip(line)) && continue
@@ -214,10 +367,14 @@ for line in eachline(PROTO_IN)
     request_id = get(req, "request_id", nothing)
     kind = get(req, "kind", nothing)
     code = get(req, "code", nothing)
+    timeout_s = get(req, "timeout_s", nothing)
     resp = Dict{String,Any}("kind" => "RESULT", "epoch" => EPOCH, "request_id" => request_id)
 
     try
         code isa String || error("request 'code' must be a string")
+        timeout_s === nothing || timeout_s isa Real && timeout_s > 0 || error("request 'timeout_s' must be a positive number")
+        payload = get(req, "payload", nothing)
+        payload === nothing || payload isa String || error("request 'payload' must be a string")
         if kind == "EPHEMERAL"
             requested_ceiling = get(req, "ceiling", Dict{String,Any}())
             requested_ceiling isa AbstractDict || error("request 'ceiling' must be an object")
@@ -270,12 +427,37 @@ for line in eachline(PROTO_IN)
                 resp["error"] = "spawn_child_worker denied: " * string(get(spawn_resp, "reason", "unknown"))
             end
         elseif kind == "EXECUTE"
-            receipt, output = capture_output(() -> execute(ExecuteCode(code)))
-            resp["success"] = receipt.result.success
-            resp["data"] = bounded_data(receipt.result.data)
-            resp["display"] = receipt.result.success ? text_display(receipt.result.data) : nothing
-            resp["output"] = output
-            resp["error"] = receipt.result.error
+            mod = Neura.get_kernel_state().eval_module
+            # A file's text arrives as a JSON string and is bound as it is,
+            # so it needs no Julia quoting: `write("x.py", PAYLOAD)`.
+            Core.eval(mod, Expr(:global, Expr(:(=), :PAYLOAD, payload)))
+            (receipt, interrupted, stuck), output = capture_output(
+                () -> run_turn(() -> execute(ExecuteCode(code)), timeout_s))
+            resp["output"] = scrub(output)
+            if stuck
+                resp["success"] = false
+                resp["data"] = nothing
+                resp["error"] = "The call exceeded its $(timeout_s)s limit and kept running after being interrupted " *
+                                "for $(Int(INTERRUPT_GRACE_S))s, so the kernel stopped. Every binding is gone; files written to the workspace remain."
+                resp["kernel_exit"] = true
+                respond(resp)
+                ccall(:_exit, Cvoid, (Cint,), 3)
+            end
+            if !(receipt isa Neura.OperationReceipt)
+                receipt = Neura.OperationReceipt(UUIDs.uuid4(), Neura.Dates.now(), "ExecuteCode",
+                                                 Neura.OperationResult(nothing, false, sprint(showerror, receipt)),
+                                                 0.0, Neura.get_kernel_state().id)
+            end
+            resp["success"] = receipt.result.success && !interrupted
+            resp["data"] = resp["success"] ? bounded_data(receipt.result.data) : nothing
+            resp["display"] = resp["success"] ? text_display(receipt.result.data) : nothing
+            resp["error"] = scrub(something(receipt.result.error, ""))
+            if interrupted
+                resp["interrupted"] = true
+                resp["error"] = "Interrupted: the call exceeded its $(timeout_s)s limit. The kernel and every binding are intact; " *
+                                "processes this call started were stopped. Output printed before the interrupt is above.\n" * resp["error"]
+            end
+            isempty(resp["error"]) && (resp["error"] = nothing)
         else
             # Fail closed on an unrecognized `kind` -- confirmed by direct
             # testing that an earlier version of this branch ran ANY
@@ -292,6 +474,6 @@ for line in eachline(PROTO_IN)
         resp["error"] = sprint(showerror, e)
     end
 
-    resp["error"] = with_hint(get(resp, "error", nothing))
+    resp["error"] = with_hint(get(resp, "error", nothing), code isa String ? code : "")
     respond(resp)
 end

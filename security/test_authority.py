@@ -512,8 +512,9 @@ class TestNestedChildWorker(SandboxTestCase):
         ceiling_is_subset branch for the category at all. Both fixed;
         this proves a real two-level nesting end to end, not just the
         ceiling-logic unit case -- the grandchild reports its own real,
-        independent PID namespace (pid=1), the same independent evidence
-        the one-level case already used."""
+        independent PID namespace (pid=2: the only process under that
+        namespace's own bwrap reaper, where a host pid would be large), the
+        same independent evidence the one-level case already used."""
         stop = self._serve({"spawn_child_worker": {}})
         try:
             grandchild_script = 'println("grandchild pid=", getpid())'
@@ -530,7 +531,7 @@ class TestNestedChildWorker(SandboxTestCase):
             r = self.run_script(top_script, broker_socket_dir=self.broker_socket_dir, timeout=120)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn('"approved" => true', r.stdout)
-            self.assertIn("grandchild pid=1", r.stdout)
+            self.assertIn("grandchild pid=2", r.stdout)
         finally:
             stop.set()
 

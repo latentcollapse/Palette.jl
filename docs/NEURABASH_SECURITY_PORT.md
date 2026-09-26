@@ -18,7 +18,7 @@ Julia.
 - **`--clearenv`, no ambient credentials.** Directly reused in
   `security/launch_worker.py`'s bwrap invocation -- an explicit, minimal
   environment, nothing inherited from the host process by default.
-- **`--unshare-user --disable-userns --assert-userns-disabled`, `--unshare-pid --as-pid-1`, `--cap-drop ALL`, `--new-session`, `--die-with-parent`.**
+- **`--unshare-user --disable-userns --assert-userns-disabled`, `--unshare-pid` (NeuraBash also passes `--as-pid-1`; NeuraJL does not, so that bwrap's reaper collects orphaned processes), `--cap-drop ALL`, `--new-session`, `--die-with-parent`.**
   The exact same flag set NeuraBash's `scripts/security_launcher.py` uses,
   for the same reasons. Not reinvented, copied because it's already correct.
 - **Bounded filesystem view via explicit bind mounts, read-only by default.**

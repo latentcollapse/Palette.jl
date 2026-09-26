@@ -55,6 +55,12 @@ class SessionDeadError(Exception):
     pipe, a dead poll() result, or an explicit close())."""
 
 
+# How much longer than turn_timeout the host waits for a reply: the worker's
+# own interrupt grace period plus slack. Only a turn that never yields gets
+# here.
+HARD_TIMEOUT_MARGIN_S = 12.0
+
+
 class SessionTimeoutError(SessionDeadError):
     """A turn exceeded turn_timeout waiting for a response. Deliberately a
     SessionDeadError subclass, not a separate, recoverable condition: a
@@ -174,6 +180,8 @@ class NeuraSession:
             # Ephemeral-turn provenance goes to the sandbox's private home; the
             # working directory may be the caller's task workspace.
             argv += ["--setenv", "NEURAJL_PROVENANCE_DIR", "/run/neurajl/home/.neurajl"]
+            # kernelinfo() reports the limit a call runs under.
+            argv += ["--setenv", "NEURAJL_TURN_TIMEOUT", f"{turn_timeout:g}"]
             argv += ["--", julia_bin, "--startup-file=no", SESSION_LOOP_SCRIPT]
             self._proc = subprocess.Popen(
                 argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -214,7 +222,8 @@ class NeuraSession:
     def is_alive(self) -> bool:
         return not self._closed and self._proc.poll() is None
 
-    def turn(self, code: str, *, ephemeral: bool = False, ephemeral_ceiling: dict | None = None) -> dict:
+    def turn(self, code: str, *, ephemeral: bool = False, ephemeral_ceiling: dict | None = None,
+             payload: str | None = None) -> dict:
         """Send one script to the persistent worker and block for its one
         response. Raises SessionDeadError if the process is gone -- never
         silently relaunches; a new process would mean a new epoch, i.e. a
@@ -228,6 +237,15 @@ class NeuraSession:
         request. Defaults to `{}`: full, unbounded Julia language power
         inside the child, zero broker-mediated authority, the safer
         default for code whose actual needs aren't known ahead of time.
+
+        `payload` is bound as `PAYLOAD` for this turn: text, such as a file's
+        contents, that the turn uses without it passing through Julia's
+        string syntax.
+
+        The worker enforces `turn_timeout` itself: it interrupts a turn that
+        is waiting (sleep, a subprocess, I/O) and keeps the kernel. This call
+        waits `HARD_TIMEOUT_MARGIN_S` longer before killing the worker, which
+        only compute that never yields should reach.
         """
         with self._lock:
             if self._closed:
@@ -239,13 +257,16 @@ class NeuraSession:
                 )
             self._next_request_id += 1
             request_id = str(self._next_request_id)
-            req = {"request_id": request_id, "kind": "EPHEMERAL" if ephemeral else "EXECUTE", "code": code}
+            req = {"request_id": request_id, "kind": "EPHEMERAL" if ephemeral else "EXECUTE", "code": code,
+                   "timeout_s": self.turn_timeout}
             if ephemeral and ephemeral_ceiling is not None:
                 req["ceiling"] = ephemeral_ceiling
+            if payload is not None:
+                req["payload"] = payload
             try:
                 self._proc.stdin.write(json.dumps(req) + "\n")
                 self._proc.stdin.flush()
-                line = _readline_with_timeout(self._proc.stdout, self.turn_timeout)
+                line = _readline_with_timeout(self._proc.stdout, self.turn_timeout + HARD_TIMEOUT_MARGIN_S)
             except TimeoutError:
                 # TimeoutError IS-A OSError in Python's builtin hierarchy --
                 # this branch must come before the (BrokenPipeError, OSError)
@@ -261,7 +282,9 @@ class NeuraSession:
                 self._proc.kill()
                 self._proc.wait()
                 raise SessionTimeoutError(
-                    f"session {self.session_id} turn exceeded turn_timeout={self.turn_timeout}s -- worker killed"
+                    f"The call exceeded its {self.turn_timeout:g}s limit and did not respond to the interrupt: "
+                    f"compute that never yields cannot be interrupted, so the kernel was stopped. "
+                    f"Every binding is gone; files written to the workspace remain."
                 )
             except (BrokenPipeError, OSError) as e:
                 raise SessionDeadError(f"session {self.session_id} pipe broke: {e}") from e
@@ -291,6 +314,15 @@ class NeuraSession:
                 )
             if resp.get("request_id") != request_id:
                 raise SessionProtocolError(f"response request_id {resp.get('request_id')!r} != sent {request_id!r}")
+            if resp.get("kernel_exit"):
+                # The worker answered and then exited on purpose; waiting here
+                # means the next turn cannot race that exit.
+                try:
+                    self._proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self._proc.kill()
+                    self._proc.wait()
+                raise SessionDeadError(resp.get("error") or "the kernel stopped")
             return resp
 
     def _teardown(self):
