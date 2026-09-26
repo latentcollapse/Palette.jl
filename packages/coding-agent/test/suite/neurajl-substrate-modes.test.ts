@@ -149,6 +149,7 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 				sessionCliPath: SESSION_CLI_PATH,
 				projectDir: PROJECT_DIR,
 				turnTimeout: 5,
+				stateRoot: false,
 			})("timeout-test-session");
 			const tool = scope.tools.neurajl!;
 			try {
@@ -168,6 +169,42 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 			}
 		},
 		// test-policy: allow explicit-test-timeout -- starts a real sandboxed Julia kernel; a cold precompile alone takes ~40s
+		300_000,
+	);
+
+	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+	it.skipIf(skipIfNeurajlUnavailable())(
+		"REAL integration: a kernel that never yields is replaced by one that revives the last completed call's state",
+		async () => {
+			const workspace = mkdtempSync(join(tmpdir(), "neurajl-revive-"));
+			const stateRoot = mkdtempSync(join(tmpdir(), "neurajl-revive-state-"));
+			const scope = createNeurajlBaseToolsFactory(workspace, {
+				sessionCliPath: SESSION_CLI_PATH,
+				projectDir: PROJECT_DIR,
+				turnTimeout: 5,
+				stateRoot,
+			})("revive-test-session");
+			const tool = scope.tools.neurajl!;
+			try {
+				await tool.execute("t1", { code: "x = [1, 2]; y = x; double(v) = 2v" }, undefined, undefined);
+				await expect(
+					tool.execute("t2", { code: "x[1] = 99; s = 0; while true; s += 1; end" }, undefined, undefined),
+				).rejects.toThrow(/revives what it can of the state at the end of the last completed call/);
+				const after = textOf(
+					await tool.execute("t3", { code: "(x, y === x, double(x))" }, undefined, undefined),
+				);
+				expect(after).toMatch(/NEW kernel .*which revived the state/);
+				expect(after).toMatch(/\[revival\].*end of call 1/);
+				expect(after).toMatch(/restored exactly: x \(Vector\{Int64\}, call 1\), y \(Vector\{Int64\}, call 1\)/);
+				expect(after).toMatch(/rebuilt from source: double \(function, call 1\)/);
+				expect(after).toMatch(/=> \(\[1, 2\], true, \[2, 4\]\)$/);
+			} finally {
+				await scope.dispose?.();
+				rmSync(workspace, { recursive: true, force: true });
+				rmSync(stateRoot, { recursive: true, force: true });
+			}
+		},
+		// test-policy: allow explicit-test-timeout -- starts two real sandboxed Julia kernels
 		300_000,
 	);
 
@@ -204,8 +241,9 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 				await started;
 				late.abort();
 				await expect(during).rejects.toThrow(/the kernel stopped/);
+				// The new kernel revives x from the state saved after t1/t3.
 				const after = await tool.execute("t5", { code: "@isdefined(x)" }, undefined, undefined);
-				expect(textOf(after)).toMatch(/NEW kernel[\s\S]*false$/);
+				expect(textOf(after)).toMatch(/NEW kernel[\s\S]*which revived the state[\s\S]*true$/);
 			} finally {
 				await scope.dispose?.();
 				rmSync(workspace, { recursive: true, force: true });

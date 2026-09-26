@@ -1,5 +1,6 @@
 import { spawn } from "child_process";
 import { readFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 import { type Static, Type } from "typebox";
 import { getShellEnv, killProcessTree, trackDetachedChildPid, untrackDetachedChildPid } from "../../utils/shell.js";
@@ -76,6 +77,12 @@ export interface NeurajlToolOptions {
 	startupTimeoutMs?: number;
 	/** Model-visible characters per result; the middle of longer output is elided. Default: unlimited. */
 	maxOutputChars?: number;
+	/**
+	 * Directory under which each session's kernel saves its state after every completed call, one
+	 * subdirectory per session id, so a kernel that replaces it (after a crash, a kill, or a resumed
+	 * session) revives it. Default: `neurajl-state` in the OS temp directory. `false` turns saving off.
+	 */
+	stateRoot?: string | false;
 }
 
 interface PendingTurn {
@@ -85,6 +92,8 @@ interface PendingTurn {
 
 interface NeurajlKernel {
 	epoch: string;
+	/** This kernel found a saved state and revives it; its first reply says what it could and could not. */
+	revival: boolean;
 	isDead: () => boolean;
 	turn: (
 		code: string,
@@ -131,7 +140,11 @@ export function formatNeurajlResponse(response: Record<string, unknown>): string
 	return parts.join("\n") || "(no output)";
 }
 
-async function startKernel(cwd: string, options: NeurajlToolOptions | undefined): Promise<NeurajlKernel> {
+async function startKernel(
+	cwd: string,
+	options: NeurajlToolOptions | undefined,
+	stateDir: string | undefined,
+): Promise<NeurajlKernel> {
 	const cliPath = requiredSetting(options?.sessionCliPath ?? process.env.NEURAJL_SESSION_CLI, "session_cli.py path");
 	const projectDir = requiredSetting(
 		options?.projectDir ?? process.env.NEURAJL_PROJECT_DIR,
@@ -155,6 +168,7 @@ async function startKernel(cwd: string, options: NeurajlToolOptions | undefined)
 	if (options?.repoDir) args.push("--repo-dir", options.repoDir);
 	if (options?.network) args.push("--network");
 	if (options?.turnTimeout) args.push("--turn-timeout", String(options.turnTimeout));
+	if (stateDir) args.push("--state-dir", stateDir);
 
 	const child = spawn(pythonBin, args, { cwd, env: getShellEnv(), stdio: ["pipe", "pipe", "pipe"] });
 	if (child.pid) trackDetachedChildPid(child.pid);
@@ -256,6 +270,7 @@ async function startKernel(cwd: string, options: NeurajlToolOptions | undefined)
 
 	return {
 		epoch: String(hello.epoch),
+		revival: hello.revival === true,
 		isDead: () => deadReason !== undefined,
 		turn: (code, { ephemeral, payload }, signal) => {
 			if (deadReason !== undefined) return Promise.reject(new Error(deadReason));
@@ -292,6 +307,8 @@ async function startKernel(cwd: string, options: NeurajlToolOptions | undefined)
 
 const KERNEL_STOPPED =
 	"[neurajl: the kernel stopped. Output printed during this call and every binding, function and loaded package are gone; files written to the workspace remain. The next call starts a new kernel.]";
+const KERNEL_STOPPED_REVIVING =
+	"[neurajl: the kernel stopped. Output printed during this call is gone; files written to the workspace remain. The next call starts a new kernel, which revives what it can of the state at the end of the last completed call and says what it could not.]";
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms).unref?.());
@@ -331,7 +348,9 @@ function neurajlDescription(options: NeurajlToolOptions | undefined): string {
  * that its startup overlaps the model's first request.
  */
 export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlToolOptions): SessionBaseToolsFactory {
-	return (_sessionId: string) => {
+	return (sessionId: string) => {
+		const stateRoot = options?.stateRoot ?? join(tmpdir(), "neurajl-state");
+		const stateDir = stateRoot === false ? undefined : join(stateRoot, sessionId.replace(/[^A-Za-z0-9._-]/g, "_"));
 		let kernelPromise: Promise<NeurajlKernel> | undefined;
 		let lastEpoch: string | undefined;
 		let disposed = false;
@@ -340,6 +359,7 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 		// instead of relying on its own memory of the session.
 		let lastBindings: string[] = [];
 		const lostBindings = () => (lastBindings.length === 0 ? "" : ` Lost bindings: ${lastBindings.join(", ")}.`);
+		const stoppedNotice = () => (stateDir ? KERNEL_STOPPED_REVIVING : `${KERNEL_STOPPED}${lostBindings()}`);
 
 		// Returns the live kernel, starting one if none exists or the last one
 		// died. `restartedFrom` names the dead kernel's epoch.
@@ -351,7 +371,7 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 				if (current) await current.dispose();
 			}
 			const restartedFrom = lastEpoch;
-			kernelPromise = startKernel(cwd, options);
+			kernelPromise = startKernel(cwd, options, stateDir);
 			const kernel = await kernelPromise;
 			lastEpoch = kernel.epoch;
 			return { kernel, restartedFrom };
@@ -377,7 +397,9 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 				const notice =
 					restartedFrom === undefined
 						? ""
-						: `[neurajl: the previous kernel (epoch ${restartedFrom}) stopped; this call ran in a NEW kernel (epoch ${kernel.epoch}). All earlier bindings, functions and loaded packages are gone.${lostBindings()} Files written to the workspace remain.]\n`;
+						: kernel.revival
+							? `[neurajl: the previous kernel (epoch ${restartedFrom}) stopped; this call ran in a NEW kernel (epoch ${kernel.epoch}), which revived the state saved at the end of the last completed call. Its report below says what was restored, rebuilt, or lost.]\n`
+							: `[neurajl: the previous kernel (epoch ${restartedFrom}) stopped; this call ran in a NEW kernel (epoch ${kernel.epoch}). All earlier bindings, functions and loaded packages are gone.${lostBindings()} Files written to the workspace remain.]\n`;
 				let response: Record<string, unknown>;
 				try {
 					response = await kernel.turn(
@@ -386,7 +408,7 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 						signal,
 					);
 				} catch (err) {
-					const stopped = kernel.isDead() ? `\n${KERNEL_STOPPED}${lostBindings()}` : "";
+					const stopped = kernel.isDead() ? `\n${stoppedNotice()}` : "";
 					throw new Error(`${notice}${err instanceof Error ? err.message : String(err)}${stopped}`);
 				}
 				// The kernel keeps what each call printed, so elided output can be
@@ -400,7 +422,7 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 					options?.maxOutputChars,
 					fullText,
 				);
-				if (response.session_dead === true) throw new Error(`${notice}${text}\n${KERNEL_STOPPED}${lostBindings()}`);
+				if (response.session_dead === true) throw new Error(`${notice}${text}\n${stoppedNotice()}`);
 				if (Array.isArray(response.bindings)) lastBindings = response.bindings.map(String);
 				if (response.success !== true) throw new Error(`${notice}${text}`);
 				return {
@@ -421,6 +443,8 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 			// Compaction drops the calls that built the kernel's state; the
 			// kernel keeps it. Without this the model no longer knew what it had.
 			stateAfterCompaction: async () => {
+				// Experiment switch: suppresses the note for an A/B of its effect.
+				if (process.env.NEURAJL_COMPACTION_NOTE === "0") return null;
 				const kernel = kernelPromise ? await kernelPromise.catch(() => undefined) : undefined;
 				if (!kernel || kernel.isDead()) return null;
 				const detail =
