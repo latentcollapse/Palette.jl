@@ -439,6 +439,45 @@ class TestSessionCli(unittest.TestCase):
         r = self._turn("(ans.description, length(ans.results))")
         self.assertEqual(r["data"], ["outer", 1])
 
+    def test_background_output_and_failures_reach_the_next_call(self):
+        """Output a task or process wrote after its call ended, and a bound
+        task's failure, reached nobody."""
+        r = self._turn('t_err = @async (sleep(0.5); error("background boom")); '
+                       '@async (sleep(0.5); println("printed after the call")); '
+                       'run(pipeline(`bash -c "sleep 0.5; echo from a process"`; stdout=stdout); wait=false); :started')
+        self.assertTrue(r["success"], r)
+        time.sleep(2)
+        r = self._turn("1")
+        self.assertTrue(r["output"].startswith("[background output since the last call]\n"), r["output"])
+        self.assertIn("printed after the call", r["output"])
+        self.assertIn("from a process", r["output"])
+        self.assertIn("[background: task `t_err` failed: background boom]", r["output"])
+        r = self._turn("2")
+        self.assertEqual(r["output"], "", "each event is reported once")
+
+    def test_file_changed_since_a_call_used_it_is_reported(self):
+        """A binding computed from a workspace file kept the old contents
+        after the file changed outside the call, with nothing to say so."""
+        r = self._turn('write("data.csv", "a\\n1\\n"); d = read("data.csv", String); write("h.jl", "h() = 1"); include("h.jl")')
+        self.assertTrue(r["success"], r)
+        # Changed by a call that does not name the files: reported once.
+        r = self._turn('for f in readdir(); endswith(f, ".csv") || endswith(f, ".jl") || continue; '
+                       'open(io -> write(io, "\\n"), f, "a"); end')
+        self.assertEqual(r["output"], "", r)
+        r = self._turn("1")
+        self.assertIn("[changed on disk since the call that used it: data.csv (call 1), h.jl (call 1).", r["output"])
+        self.assertEqual(self._turn("2")["output"], "")
+        # A call that names the file it changes is not told about its own change.
+        self._turn('write("data.csv", "a\\n2\\n")')
+        self.assertEqual(self._turn("3")["output"], "")
+
+    def test_each_reply_lists_the_bindings_and_the_call_that_set_them(self):
+        """When the kernel dies the host can only say which bindings were
+        lost if it was told what they were."""
+        self._turn("x = [1, 2]; y = 3; f(z) = z")
+        r = self._turn("x = [5]; nothing")
+        self.assertEqual(r["bindings"], ["f (function, call 1)", "x (Vector{Int64}, call 2)", "y (Int64, call 1)"])
+
     def test_ephemeral_result_is_displayed_like_a_persistent_one(self):
         """The child used to send struct internals as its result, and a
         value with no JSON form (NaN) crashed it after the code succeeded."""

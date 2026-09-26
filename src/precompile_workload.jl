@@ -27,6 +27,7 @@ if ccall(:jl_generating_output, Cint, ()) == 1
                 "success" => receipt.result.success, "data" => bounded_data(value), "display" => text_display(value),
                 "output" => scrub(output), "error" => receipt.result.error, "call" => 1, "interrupted" => interrupted))
             retain_output!(1, output)
+            binding_list!(WorkloadScope, 1)
         end
         execute_turn("1", nothing)
     catch
@@ -34,6 +35,10 @@ if ccall(:jl_generating_output, Cint, ()) == 1
         GLOBAL_STATE[] = nothing
         empty!(OUTPUTS)
         empty!(WORKSPACE_PACKAGES)
+        empty!(USED_FILES)
+        foreach(f -> rm(f[1]; force=true), LATE_FILES)
+        empty!(LATE_FILES)
+        empty!(BINDING_SEEN)
     end
     precompile(Base.open, (Base.RawFD,))
 end

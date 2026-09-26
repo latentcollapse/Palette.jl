@@ -92,6 +92,10 @@ redirect_stdin(open("/dev/null"))
 const SINK = open(joinpath(tempdir(), "neurajl-background-output.log"), "a")
 redirect_stdout(SINK)
 redirect_stderr(SINK)
+# Read back at the start of each call (Neura.report_background).
+Neura.SINK[] = SINK
+Neura.SINK_PATH[] = joinpath(tempdir(), "neurajl-background-output.log")
+Neura.SINK_READ[] = filesize(Neura.SINK_PATH[])
 
 # `display(x)` goes through the display stack, whose TextDisplay was built at
 # startup around the original stdout, which is the protocol pipe: one
@@ -254,6 +258,7 @@ for line in eachline(PROTO_IN)
             (receipt, interrupted, stuck), output = execute_turn(code, timeout_s === nothing ? nothing : Float64(timeout_s))
             resp["output"] = scrub(output)
             resp["call"] = call
+            resp["bindings"] = Neura.binding_list!(Neura.get_kernel_state().eval_module, call)
             Neura.retain_output!(call, resp["output"])
             if stuck
                 resp["success"] = false
