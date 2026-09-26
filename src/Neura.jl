@@ -223,6 +223,10 @@ mutable struct KernelState
         # and `$(...)` reach bash. In `bash("...")` they are Julia syntax and a
         # parse error.
         Core.eval(state.eval_module, :(macro sh_str(script) :($$(run_bash)($script)) end))
+        # A `"` inside sh"..." ends the literal early, and the word right after
+        # it becomes a string-macro suffix, which Julia reported as a
+        # MethodError for @sh_str that did not say what happened.
+        Core.eval(state.eval_module, :(macro sh_str(script, suffix) $(sh_suffix_error)(suffix) end))
         Core.eval(state.eval_module, :(const ShellResult = $(ShellResult)))
         # The InteractiveUtils varinfo() lists Main, not this module, and is not
         # loaded here at all; this one lists the session's own bindings.
@@ -428,6 +432,34 @@ function run_bash(script::AbstractString)
     print(stdout, o)
     print(stderr, e)
     return ShellResult(p.termsignal > 0 ? 128 + p.termsignal : p.exitcode, o, e)
+end
+
+function sh_suffix_error(suffix::AbstractString)
+    throw(ArgumentError("a quote inside sh\"...\" ended the command early, and the text right after it " *
+        "(`$(first(suffix, 40))`) was read as a suffix. Write \\\" for a quote inside sh\"...\", or put the whole " *
+        "script in this call's payload and run bash(PAYLOAD): the payload needs no escaping."))
+end
+
+"""
+    workspace_package_first!(root)
+
+Puts the workspace ahead of the kernel's own environment in `LOAD_PATH` when
+the workspace is itself a package. The kernel's environment holds packages of
+its own (DataFrames brings OrderedCollections, for one), and a model that
+appended the workspace to `LOAD_PATH` ran the package's whole test suite
+against the kernel's copy: every test passed, on code it had not written.
+"""
+function workspace_package_first!(root::AbstractString)
+    project = joinpath(root, "Project.toml")
+    isfile(project) || return nothing
+    toml = try
+        Base.parsed_toml(project)
+    catch
+        return nothing
+    end
+    haskey(toml, "name") && haskey(toml, "uuid") || return nothing
+    root in LOAD_PATH || pushfirst!(LOAD_PATH, root)
+    return toml["name"]
 end
 
 """
@@ -646,7 +678,8 @@ function kernelinfo()
                    ans: the last call's value.  varinfo(): your bindings.  include("file.jl") loads a workspace file
                    Neura.output(n): everything call n printed, in full, when the result you saw was elided
         reloading  a package loaded from the workspace is reloaded when its source changes, before the next
-                   call or include runs, so `using` it again is not needed""")
+                   call or include runs, so `using` it again is not needed. When the workspace is itself a
+                   package, it comes first in LOAD_PATH, ahead of the kernel's own packages""")
     return nothing
 end
 

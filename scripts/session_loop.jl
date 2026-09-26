@@ -151,6 +151,7 @@ end
 
 
 Neura.WORKSPACE_ROOT[] = pwd()
+Neura.workspace_package_first!(pwd())
 respond(Dict{String,Any}("kind" => "HELLO", "epoch" => EPOCH))
 
 # Whatever the package image does not hold (the closures below, lowering of
