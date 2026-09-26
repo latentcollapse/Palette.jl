@@ -98,9 +98,27 @@ function scrub(s::AbstractString)
 end
 scrub(x) = x
 
+const TEST_PKG = Base.PkgId(Base.UUID("8dfed614-e22c-5e08-85e1-65c5234f0b40"), "Test")
+
+# A passing `include("test/runtests.jl")` returns its DefaultTestSet, whose
+# default display dumps every nested testset down to each one's RNG state:
+# 14,000 to 25,000 characters a run in the traces, all of it elided. It is
+# shown as its counts, and the testset itself stays in `ans`.
+function testset_summary(value)
+    test = get(Base.loaded_modules, TEST_PKG, nothing)
+    test === nothing && return nothing
+    value isa test.DefaultTestSet || return nothing
+    c = Base.invokelatest(test.get_test_counts, value)
+    return "Test.DefaultTestSet \"$(value.description)\": $(c.passes + c.cumulative_passes) passed, " *
+           "$(c.fails + c.cumulative_fails) failed, $(c.errors + c.cumulative_errors) errored, " *
+           "$(c.broken + c.cumulative_broken) broken ($(c.duration))"
+end
+
 function text_display(value)
     value === nothing && return nothing
     try
+        summary = testset_summary(value)
+        summary === nothing || return summary
         return scrub(Base.invokelatest(sprint, show, MIME"text/plain"(), value; context=:limit => true))
     catch e
         return "<display failed: $(sprint(showerror, e))>"
