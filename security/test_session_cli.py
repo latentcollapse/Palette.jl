@@ -455,6 +455,16 @@ class TestSessionCli(unittest.TestCase):
         r = self._turn("2")
         self.assertEqual(r["output"], "", "each event is reported once")
 
+    def test_background_job_in_sh_does_not_hold_the_call(self):
+        """`sh"job &"` handed the job the output pipe, and reading it to its
+        end waited for the job until the call's time limit killed it."""
+        r = self._turn('t = time(); r = sh"(sleep 2; echo late) & echo started"; (round(time() - t), r.stdout)')
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["data"], [0, "started\n"])
+        time.sleep(3)
+        r = self._turn("1")
+        self.assertIn("[background output since the last call]\nlate\n", r["output"])
+
     def test_file_changed_since_a_call_used_it_is_reported(self):
         """A binding computed from a workspace file kept the old contents
         after the file changed outside the call, with nothing to say so."""

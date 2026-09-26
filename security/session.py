@@ -113,6 +113,7 @@ class NeuraSession:
         turn_timeout: float = 60.0,
         task_workspace_dir: str | None = None,
         startup_timeout: float = 180.0,
+        state_dir: str | None = None,
     ):
         """`workspace_dir` is this session's own scratch root: created here
         and deleted on close. `task_workspace_dir` is a directory the caller
@@ -176,12 +177,18 @@ class NeuraSession:
                 julia_depot=os.environ.get("JULIA_DEPOT_PATH", str(Path.home() / ".julia")).split(":")[-1],
                 depot_clone_dir=self.depot_clone_dir,
                 network_enabled=network_enabled,
+                state_dir=state_dir,
             )
             # Ephemeral-turn provenance goes to the sandbox's private home; the
             # working directory may be the caller's task workspace.
             argv += ["--setenv", "NEURAJL_PROVENANCE_DIR", "/run/neurajl/home/.neurajl"]
             # kernelinfo() reports the limit a call runs under.
             argv += ["--setenv", "NEURAJL_TURN_TIMEOUT", f"{turn_timeout:g}"]
+            # The sandbox starts with a clear environment; the limits on saved
+            # state pass through when the host sets them (src/revival.jl).
+            for name in ("NEURAJL_STATE_MAX_BINDING_BYTES", "NEURAJL_STATE_MAX_BYTES"):
+                if name in os.environ:
+                    argv += ["--setenv", name, os.environ[name]]
             argv += ["--", julia_bin, "--startup-file=no", SESSION_LOOP_SCRIPT]
             self._proc = subprocess.Popen(
                 argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -342,8 +349,11 @@ class NeuraSession:
                         self._proc.stdin.close()
                     except Exception:
                         pass
+                    # EOF lets the kernel finish saving the last call's state
+                    # (src/revival.jl), which for a new data type means
+                    # compiling its serializer: several seconds, once.
                     try:
-                        self._proc.wait(timeout=5)
+                        self._proc.wait(timeout=30)
                     except subprocess.TimeoutExpired:
                         self._proc.kill()
                         self._proc.wait()

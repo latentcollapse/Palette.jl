@@ -156,6 +156,16 @@ end
 
 Neura.WORKSPACE_ROOT[] = pwd()
 Neura.workspace_package_first!(pwd())
+# The host's state directory, where each completed call's state is saved for
+# a kernel that replaces this one. A revived kernel takes the old eval
+# module's name: values of kernel-defined types deserialize only into it.
+Neura.STATE_DIR[] = get(ENV, "NEURAJL_STATE_DIR", "")
+Neura.INITIAL_ENV[] = Dict{String,String}(ENV)
+let name = Neura.revival_module_name()
+    name === nothing || (Neura.GLOBAL_STATE[] = Neura.KernelState(Module(Symbol(name))))
+    mod = Neura.get_kernel_state().eval_module
+    Core.eval(Main, Expr(:(=), nameof(mod), mod))
+end
 respond(Dict{String,Any}("kind" => "HELLO", "epoch" => EPOCH))
 
 # Whatever the package image does not hold (the closures below, lowering of
@@ -173,7 +183,14 @@ let state = Neura.get_kernel_state()
     scrub(out); with_hint("x", "y"); safe_json(Dict{String,Any}("a" => 1))
     empty!(state.execution_history)
     empty!(state.receipt_log)
+    empty!(Neura.DEFINITION_LOG); empty!(Neura.CALL_FILES); empty!(Neura.USED_FILES); empty!(Neura.BINDING_SEEN)
     Core.eval(state.eval_module, Expr(:global, Expr(:(=), :ans, nothing)))
+    Neura.REVIVAL_REPORT[] = try
+        Base.invokelatest(Neura.revive_state!)
+    catch e
+        "[revival] The previous kernel stopped, and reviving its state failed ($(first(sprint(showerror, e), 200))). " *
+        "Treat every earlier binding as lost; files in the workspace remain."
+    end
 end
 
 for line in eachline(PROTO_IN)
@@ -192,6 +209,7 @@ for line in eachline(PROTO_IN)
     code = get(req, "code", nothing)
     timeout_s = get(req, "timeout_s", nothing)
     resp = Dict{String,Any}("kind" => "RESULT", "epoch" => EPOCH, "request_id" => request_id)
+    snapshot_call = nothing
 
     try
         code isa String || error("request 'code' must be a string")
@@ -264,7 +282,9 @@ for line in eachline(PROTO_IN)
                 resp["success"] = false
                 resp["data"] = nothing
                 resp["error"] = "The call exceeded its $(timeout_s)s limit and kept running after being interrupted " *
-                                "for $(Int(INTERRUPT_GRACE_S))s, so the kernel stopped. Every binding is gone; files written to the workspace remain."
+                                "for $(Int(INTERRUPT_GRACE_S))s, so the kernel stopped. " *
+                                (isempty(Neura.STATE_DIR[]) ? "Every binding is gone; files written to the workspace remain." :
+                                 "The next call starts a new kernel, which revives what it can of the state at the end of the last completed call and says what it could not.")
                 resp["kernel_exit"] = true
                 respond(resp)
                 ccall(:_exit, Cvoid, (Cint,), 3)
@@ -284,6 +304,7 @@ for line in eachline(PROTO_IN)
                                 "processes this call started were stopped. Output printed before the interrupt is above.\n" * resp["error"]
             end
             isempty(resp["error"]) && (resp["error"] = nothing)
+            resp["success"] && (snapshot_call = call)
         else
             # Fail closed on an unrecognized `kind` -- confirmed by direct
             # testing that an earlier version of this branch ran ANY
@@ -302,4 +323,14 @@ for line in eachline(PROTO_IN)
 
     resp["error"] = with_hint(get(resp, "error", nothing), code isa String ? code : "")
     respond(resp)
+    # The model is reading the reply: save the state this call ended with.
+    # A request already waiting goes first; the next idle point saves the state.
+    if snapshot_call !== nothing && bytesavailable(PROTO_IN) == 0
+        try
+            # Latest world: turn code defined methods (show, ==, enum names) since this loop began.
+            Base.invokelatest(Neura.snapshot_state!, snapshot_call)
+        catch e
+            println(stderr, "[saving the state after call $snapshot_call failed: ", first(sprint(showerror, e), 300), "]")
+        end
+    end
 end

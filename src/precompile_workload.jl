@@ -30,12 +30,26 @@ if ccall(:jl_generating_output, Cint, ()) == 1
             binding_list!(WorkloadScope, 1)
         end
         execute_turn("1", nothing)
+        # Saving and reviving state: the first snapshot of a new kernel ran
+        # this code cold, and a harness closing the session right after the
+        # reply killed it before it finished.
+        STATE_DIR[] = mktempdir()
+        # No definitions: replaying them would redefine WorkloadScope's
+        # methods, which precompilation forbids.
+        empty!(DEFINITION_LOG)
+        snapshot_state!(6)
+        revive_state!()
     catch
     finally
+        isempty(STATE_DIR[]) || rm(STATE_DIR[]; recursive=true, force=true)
+        STATE_DIR[] = ""
+        REVIVAL_REPORT[] = ""
         GLOBAL_STATE[] = nothing
         empty!(OUTPUTS)
         empty!(WORKSPACE_PACKAGES)
         empty!(USED_FILES)
+        empty!(DEFINITION_LOG)
+        empty!(CALL_FILES)
         foreach(f -> rm(f[1]; force=true), LATE_FILES)
         empty!(LATE_FILES)
         empty!(BINDING_SEEN)

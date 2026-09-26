@@ -109,6 +109,7 @@ def build_bwrap_argv(
     network_enabled: bool,
     depot_clone_dir: str | None = None,
     extra_ro_binds: list[str] | None = None,
+    state_dir: str | None = None,
 ) -> list[str]:
     julia_toolchain_dir = str(Path(julia_bin).parent.parent)  # .../julia-1.12.6+0.x64.linux.gnu
     task_tools = os.environ.get("NIRA_TASK_TOOLS")
@@ -176,6 +177,11 @@ def build_bwrap_argv(
         argv += ["--ro-bind", path, path]
     if broker_socket_dir:
         argv += ["--ro-bind", broker_socket_dir, broker_socket_dir]
+    # The persistent kernel's saved state (src/revival.jl), outside the task
+    # workspace so it never shows up among the task's files. Ephemeral
+    # children are never given it.
+    if state_dir:
+        argv += ["--bind", state_dir, state_dir, "--setenv", "NEURAJL_STATE_DIR", state_dir]
     argv += [
         "--setenv", "HOME", "/run/neurajl/home",
         "--setenv", "JULIA_DEPOT_PATH", julia_depot,
