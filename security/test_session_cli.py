@@ -297,6 +297,40 @@ class TestSessionCli(unittest.TestCase):
         self.assertTrue(r["success"], r)
         self.assertEqual(r["data"], 42)
 
+    def test_edited_workspace_package_is_reloaded(self):
+        """`using` a loaded package does nothing, so the kernel ran a
+        workspace package's old code after the model edited it, and in-kernel
+        tests checked code that no longer existed."""
+        pkg = Path(self.task_workspace, "Wp")
+        (pkg / "src").mkdir(parents=True)
+        (pkg / "Project.toml").write_text('name = "Wp"\nuuid = "0f5c2a5e-9a44-4c3b-8f2e-6c1d8e7b9a01"\n')
+        (pkg / "src" / "Wp.jl").write_text('module Wp\nexport f\n"f doc"\nf(x) = x + 1\ninclude("g.jl")\nend\n')
+        (pkg / "src" / "g.jl").write_text("g(x) = 10x\n")
+        r = self._turn('pushfirst!(LOAD_PATH, joinpath(pwd(), "Wp")); using Wp; (f(1), Wp.g(1))')
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["data"], [2, 10])
+
+        # Edited in a turn of its own: reloaded when the next turn starts.
+        r = self._turn('write("Wp/src/g.jl", "g(x) = 20x\\n"); 1')
+        self.assertTrue(r["success"], r)
+        r = self._turn("Wp.g(1)")
+        self.assertEqual(r["data"], 20, r)
+        self.assertIn("[reloaded Wp from the workspace: Wp/src/g.jl changed]", r["output"])
+        self.assertNotIn("Replacing docs", r["output"])
+
+        # Edited and then included in one call: include reloads first.
+        Path(self.task_workspace, "t.jl").write_text("h_result = (f(1), Wp.h())\n")
+        r = self._turn('write("Wp/src/Wp.jl", replace(read("Wp/src/Wp.jl", String), "x + 1" => "x + 2", '
+                       '"include(\\"g.jl\\")" => "include(\\"g.jl\\")\\nh() = :new")); include("t.jl")')
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["data"], [3, "new"])
+
+        # A syntax error keeps the old code and says so.
+        r = self._turn('write("Wp/src/g.jl", "g(x) = (\\n"); 1')
+        r = self._turn("Wp.g(1)")
+        self.assertEqual(r["data"], 20, r)
+        self.assertIn("reloading Wp failed, so it still runs the code from before the change to Wp/src/g.jl", r["output"])
+
     def test_neura_handle_cannot_reset_the_kernel(self):
         """Neura.reset_kernel_state() used to erase every binding silently."""
         self._turn("keep = 1")
@@ -370,6 +404,29 @@ class TestSessionCli(unittest.TestCase):
         self.assertTrue(r["success"], r)
         self.assertTrue(r["output"].startswith("a b\nc\n1\n2\n"), r["output"][:40])
         self.assertIn("output truncated", r["output"])
+
+    def test_redirecting_stdout_inside_a_turn_restores_the_capture(self):
+        """Base could not restore stdout to the turn's writer: the devnull
+        idiom threw, and a redirect to a file kept fd 1 on that file, so the
+        rest of the turn's output was lost."""
+        r = self._turn('redirect_stdout(devnull) do; println("hidden"); run(`echo hidden`); end; '
+                       'open("log.txt", "w") do io; redirect_stdout(io) do; println("logged"); end; end; '
+                       'println("visible"); run(`echo child`); read("log.txt", String)')
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["output"], "visible\nchild\n")
+        self.assertIn("logged", r["display"])
+
+    def test_what_each_call_printed_is_kept(self):
+        """The host elides the middle of long results; the kernel keeps the
+        whole text, failed calls included, under the call's number."""
+        r1 = self._turn('for i in 1:3000; println("row ", i); end', request_id="1")
+        r2 = self._turn('println("before the error"); error("boom")', request_id="2")
+        self.assertEqual((r1["call"], r2["call"]), (1, 2))
+        r = self._turn('(count("\\n", Neura.output(1)), Neura.output(2))', request_id="3")
+        self.assertEqual(r["data"], [3000, "before the error\n"], r)
+        r = self._turn("Neura.output(3)", request_id="4")
+        self.assertFalse(r["success"])
+        self.assertIn("call 3 printed nothing", r["error"])
 
     def test_ephemeral_result_is_displayed_like_a_persistent_one(self):
         """The child used to send struct internals as its result, and a

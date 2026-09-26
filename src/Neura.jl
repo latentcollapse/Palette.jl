@@ -26,6 +26,7 @@ using UUIDs
 using Sockets
 using JSON
 using SHA
+using Base.CoreLogging: AbstractLogger, with_logger, current_logger
 using Statistics: mean as stdlib_mean
 
 #==============================================================================
@@ -184,15 +185,17 @@ mutable struct KernelState
     operator_registry::Dict{String, Function}
     receipt_log::Vector{OperationReceipt}
 
-    function KernelState()
+    function KernelState(eval_module::Union{Module, Nothing}=nothing)
         now = Dates.now()
         state = new()
         state.id = uuid4()
         state.created_at = now
         state.last_accessed = now
         # A fresh anonymous module per kernel state: real, isolated eval scope,
-        # not shared global mutable state across sessions.
-        state.eval_module = Module(Symbol("KernelScope_$(replace(string(state.id), '-' => '_'))"))
+        # not shared global mutable state across sessions. The precompile
+        # workload passes a module of this package's own instead, because
+        # precompilation refuses evaluation into any other module.
+        state.eval_module = something(eval_module, Module(Symbol("KernelScope_$(replace(string(state.id), '-' => '_'))")))
         # `Core.eval`'d code lands in this fresh module, not Main -- `using
         # Neura` at Main scope (e.g. in scripts/session_loop.jl) does not
         # make `Neura` visible here (confirmed by direct testing: a real
@@ -209,7 +212,9 @@ mutable struct KernelState
         # scope code (written to disk via a real broker-mediated
         # external_fs_write, then loaded back with `include`) can actually
         # be loaded into the persistent mind's own module, not just Main.
-        Core.eval(state.eval_module, :(include(path) = Base.include(@__MODULE__, path)))
+        # It first reloads edited workspace packages, so a call that edits a
+        # package and then includes its tests runs the edited code.
+        Core.eval(state.eval_module, :(include(path) = ($(refresh_workspace_packages!)(); Base.include(@__MODULE__, path))))
         # Backtick commands start one program with no shell, so a pipe, glob
         # or `2>&1` inside them is a parse error; this is the explicit way
         # to reach a shell from turn code.
@@ -426,6 +431,111 @@ function run_bash(script::AbstractString)
 end
 
 """
+    WORKSPACE_PACKAGES
+
+Packages loaded from the workspace, with the modification time and size of
+every source file under their `src` directory as of their last load. `using`
+a package that is already loaded does nothing, so after the model edited a
+workspace package the kernel kept running the old code and in-kernel tests
+passed or failed against it. Every model we watched then moved its tests to a
+`julia` subprocess that recompiles the whole suite on each run.
+"""
+const WORKSPACE_PACKAGES = Dict{Module, Dict{String, Tuple{Float64, Int}}}()
+const WORKSPACE_ROOT = Ref{String}("")
+
+function source_snapshot(dir::AbstractString)
+    snap = Dict{String, Tuple{Float64, Int}}()
+    for (d, _, files) in walkdir(dir), f in files
+        endswith(f, ".jl") || continue
+        path = joinpath(d, f)
+        st = stat(path)
+        snap[path] = (st.mtime, Int(st.size))
+    end
+    return snap
+end
+
+function workspace_packages()
+    root = WORKSPACE_ROOT[]
+    isempty(root) && return Pair{Module, String}[]
+    mods = Pair{Module, String}[]
+    for mod in collect(values(Base.loaded_modules))
+        path = pathof(mod)
+        path !== nothing && startswith(path, root * "/") && push!(mods, mod => path)
+    end
+    return mods
+end
+
+# Evaluates the root file's module body again inside the loaded module, so
+# every file it includes is re-read and each method is redefined in place.
+# Definitions deleted from the source stay defined, and `__init__` does not run.
+function reload_package!(mod::Module, rootfile::String)
+    ex = Meta.parseall(read(rootfile, String); filename=rootfile)
+    i = findfirst(a -> a isa Expr && a.head === :module, ex.args)
+    i === nothing && error("$rootfile has no module block")
+    body = ex.args[i].args[3]
+    task_local_storage(:SOURCE_PATH, rootfile) do
+        with_logger(DocReplacementFilter(current_logger())) do
+            Core.eval(mod, Expr(:toplevel, body.args...))
+        end
+    end
+    return nothing
+end
+
+# A reload defines every docstring a second time, and Base.Docs warns once per
+# docstring ("Replacing docs for ..."): a dozen lines of noise per reload.
+struct DocReplacementFilter <: AbstractLogger
+    parent::AbstractLogger
+end
+Base.CoreLogging.min_enabled_level(f::DocReplacementFilter) = Base.CoreLogging.min_enabled_level(f.parent)
+Base.CoreLogging.shouldlog(f::DocReplacementFilter, level, _module, group, id) =
+    _module !== Base.Docs && Base.CoreLogging.shouldlog(f.parent, level, _module, group, id)
+Base.CoreLogging.handle_message(f::DocReplacementFilter, args...; kwargs...) = Base.CoreLogging.handle_message(f.parent, args...; kwargs...)
+
+"""
+    refresh_workspace_packages!(; reload=true)
+
+Reloads each workspace package whose sources changed since it was loaded or
+last reloaded, and prints one line saying so. With `reload=false` it only
+starts tracking packages loaded since the last call.
+"""
+function refresh_workspace_packages!(; reload::Bool=true)
+    for (mod, rootfile) in workspace_packages()
+        old = get(WORKSPACE_PACKAGES, mod, nothing)
+        old === nothing || reload || continue
+        snap = source_snapshot(dirname(rootfile))
+        WORKSPACE_PACKAGES[mod] = snap
+        (old === nothing || old == snap) && continue
+        changed = sort!([relpath(f, WORKSPACE_ROOT[]) for f in union(keys(old), keys(snap))
+                         if get(old, f, nothing) != get(snap, f, nothing)])
+        try
+            Base.invokelatest(reload_package!, mod, rootfile)
+            println("[reloaded $(nameof(mod)) from the workspace: $(join(changed, ", ")) changed]")
+        catch e
+            println("[reloading $(nameof(mod)) failed, so it still runs the code from before the change to ",
+                    join(changed, ", "), ":\n", sprint(showerror, e isa LoadError ? e.error : e), "]")
+        end
+    end
+    return nothing
+end
+
+"""
+    OUTPUTS
+
+Everything each recent call printed, by call number. The host shows the model
+a bounded slice of a result and elides the middle of anything longer, and that
+text was then gone: models re-ran a 50-second test suite only to read the
+failures its first run had printed.
+"""
+const OUTPUTS = Dict{Int, String}()
+const KEEP_OUTPUTS = 64
+
+function retain_output!(call::Int, text::String)
+    isempty(text) || (OUTPUTS[call] = text)
+    filter!(kv -> kv.first > call - KEEP_OUTPUTS, OUTPUTS)
+    return nothing
+end
+
+"""
     Api
 
 What turn code sees as `Neura`: the one entry point to broker-mediated
@@ -437,6 +547,16 @@ module Api
 import ..Neura
 request_capability(category::String, params::Dict=Dict{String,Any}(); kwargs...) =
     Neura.request_capability(category, params; kwargs...)
+
+"""
+    Neura.output(n) -> String
+
+Everything call `n` printed, in full, for the last $(Neura.KEEP_OUTPUTS) calls.
+"""
+function output(n::Integer)
+    haskey(Neura.OUTPUTS, n) && return Neura.OUTPUTS[n]
+    error("call $n printed nothing, or is older than the last $(Neura.KEEP_OUTPUTS) calls")
+end
 end
 
 # Bindings the kernel creates in every session module. They are not the
@@ -523,7 +643,10 @@ function kernelinfo()
                    loaded: $(isempty(loaded) ? "none" : join(loaded, ", "))
         helpers    bash("cmd") or sh"cmd" -> ShellResult(exitcode, stdout, stderr); sh"..." keeps \$ for the shell
                    PAYLOAD: this call's payload text, raw; write(path, PAYLOAD) writes a file with no Julia quoting
-                   ans: the last call's value.  varinfo(): your bindings.  include("file.jl") loads a workspace file""")
+                   ans: the last call's value.  varinfo(): your bindings.  include("file.jl") loads a workspace file
+                   Neura.output(n): everything call n printed, in full, when the result you saw was elided
+        reloading  a package loaded from the workspace is reloaded when its source changes, before the next
+                   call or include runs, so `using` it again is not needed""")
     return nothing
 end
 
@@ -1432,6 +1555,9 @@ end
 #==============================================================================
 Exports
 ==============================================================================#
+
+include("turn.jl")
+include("precompile_workload.jl")
 
 export KernelState, ExecutionRecord
 export get_kernel_state, reset_kernel_state
