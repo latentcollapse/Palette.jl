@@ -10,13 +10,14 @@ This file describes what a model driving NeuraJL through NIRA-Prime's `neurajl` 
 | `payload` | Optional text, bound as `PAYLOAD` for this call only. It is never parsed as Julia, so it carries the complete text of a file (Python, JSON, a Julia file with triple quotes) without escaping: `write("f.py", PAYLOAD)`. It is `nothing` in calls that send none. |
 | `ephemeral` | Optional. Run in a disposable child process that sees no bindings and no workspace (about 10s to start). |
 
-The result is everything printed during the call, then `=> ` and the rendered value of the last expression.
+The result is everything printed during the call, then `=> ` and the rendered value of the last expression. NIRA-Prime shows the model at most 12,000 characters of it. When a result is longer, the middle is elided, and the elision notice names the call: `Neura.output(n)` returns everything that call printed, up to 256 KiB, for the last 64 calls.
 
 ## What persists
 
 - Bindings, functions, types and loaded packages persist until the kernel stops. Julia 1.12 also allows a `struct` to be redefined.
 - `ans` holds the last successful call's value.
 - Files written to the workspace outlive the kernel.
+- A package loaded from the workspace (its `pathof` lies under the workspace) is reloaded when any `.jl` file under its source directory changes. The reload happens before the next call runs, and before an `include` in the same call, so edited code and tests run in the kernel see the edits. The call's output then begins with `[reloaded Pkg from the workspace: files changed]`. If the edited source does not parse or load, the output says so and the package keeps its previous code. A reload re-evaluates the package's module body in place: methods deleted from the source stay defined, and `__init__` does not run again.
 - The kernel keeps no value that nothing refers to. Only `ans` and your own bindings hold memory.
 
 ## Helpers bound in the session
@@ -27,8 +28,9 @@ The result is everything printed during the call, then `=> ` and the rendered va
 | `bash("cmd")` | The same, but in an ordinary Julia string, so `$x` interpolates Julia values and a literal shell `$` must be written `\$`. |
 | `ShellResult` | Fields `exitcode` (a process killed by a signal reports 128 + signal), `stdout` and `stderr`. `success(r)` is true for status 0. It displays as one line, because the output was already printed. |
 | `run(`prog args`)`, `read(`...`, String)` | Standard Julia: one program, no shell, and they throw on a nonzero exit. |
-| `include("file.jl")` | Loads a workspace file into the session; relative paths resolve against the workspace. |
+| `include("file.jl")` | Loads a workspace file into the session; relative paths resolve against the workspace. Edited workspace packages are reloaded first. |
 | `varinfo()` | Your bindings, with their size and a summary. |
+| `Neura.output(n)` | Everything call `n` printed, in full, for the last 64 calls. The call number appears in each elision notice. |
 | `kernelinfo()` | The kernel card: Julia version, workspace, what persists, the time limit, the network, loadable and loaded packages, and these helpers. |
 | `Neura.request_capability(category, params)` | The only way to reach broker-mediated authority (see `CAPABILITY_MODEL.md`). The session's ceiling decides. |
 | `@doc f` | Rendered documentation. |
