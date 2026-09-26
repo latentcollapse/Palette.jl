@@ -28,8 +28,14 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 const neurajlSchema = Type.Object({
 	code: Type.String({
-		description: `Julia source to evaluate in this session's persistent NeuraJL kernel. The working directory is the task workspace. Bindings, functions and compiled methods survive across calls. Everything printed (println, @show, @warn, output of run(\`cmd\`) and bash("...")) is returned along with the value of the last expression. Full Julia runs inside an OS sandbox.`,
+		description: `Julia source to evaluate in this session's persistent NeuraJL kernel. The working directory is the task workspace. Bindings, functions and compiled methods survive across calls. Everything printed (println, @show, @warn, display, output of run(\`cmd\`) and sh"cmd") is returned along with the value of the last expression. To write a file's full text (source code, JSON, CSV), put the text in payload and call write(path, PAYLOAD) instead of embedding it in a Julia string literal.`,
 	}),
+	payload: Type.Optional(
+		Type.String({
+			description:
+				"Text bound as PAYLOAD for this call only, such as the complete contents of a file to write with write(path, PAYLOAD). It is not parsed as Julia, so quotes, triple quotes, $ and backslashes need no escaping.",
+		}),
+	),
 	ephemeral: Type.Optional(
 		Type.Boolean({
 			description:
@@ -61,7 +67,10 @@ export interface NeurajlToolOptions {
 	ceiling?: Record<string, unknown>;
 	/** Give the worker raw network access. Default: false. */
 	network?: boolean;
-	/** Per-turn timeout in seconds, enforced by NeuraSession; the worker is killed when it expires. Default: 60. */
+	/**
+	 * Per-turn limit in seconds. The worker interrupts a call still waiting at the limit and keeps the kernel;
+	 * NeuraSession kills a worker that has not answered 12s later (compute that never yields). Default: 60.
+	 */
 	turnTimeout?: number;
 	/** How long to wait for the kernel's HELLO. Default: 180s, since a cold `using Neura` precompile takes ~40s. */
 	startupTimeoutMs?: number;
@@ -79,7 +88,7 @@ interface NeurajlKernel {
 	isDead: () => boolean;
 	turn: (
 		code: string,
-		ephemeral: boolean | undefined,
+		options: { ephemeral?: boolean; payload?: string },
 		signal: AbortSignal | undefined,
 	) => Promise<Record<string, unknown>>;
 	dispose: () => Promise<void>;
@@ -244,12 +253,13 @@ async function startKernel(cwd: string, options: NeurajlToolOptions | undefined)
 	return {
 		epoch: String(hello.epoch),
 		isDead: () => deadReason !== undefined,
-		turn: (code, ephemeral, signal) => {
+		turn: (code, { ephemeral, payload }, signal) => {
 			if (deadReason !== undefined) return Promise.reject(new Error(deadReason));
 			if (signal?.aborted) return Promise.reject(new Error("neurajl: aborted"));
 			const requestId = String(++nextRequestId);
 			const request: Record<string, unknown> = { request_id: requestId, code };
 			if (ephemeral) request.ephemeral = true;
+			if (payload !== undefined) request.payload = payload;
 			return new Promise<Record<string, unknown>>((resolve, reject) => {
 				// The protocol is one request, one response, in order. A turn
 				// abandoned mid-flight leaves the kernel busy with no way to
@@ -302,9 +312,11 @@ function neurajlDescription(options: NeurajlToolOptions | undefined): string {
 	const packages = projectPackages(options?.projectDir ?? process.env.NEURAJL_PROJECT_DIR);
 	const loadable = ["the Julia standard library", ...packages].join(", ");
 	return [
-		`Execute Julia in this session's persistent NeuraJL kernel. The working directory is the task workspace; read and edit files with Julia's file I/O. run(\`...\`) and read(\`...\`, String) start a program without a shell; for pipes, globs, redirects or &&, call bash("..."), which prints the output and returns the exit code. State survives across calls. Printed output and the last expression's value are returned.`,
-		`Each call may run for ${timeout}s. A call that runs longer or is aborted stops the kernel; the next call starts a fresh one and says so.`,
-		`Loadable packages: ${loadable}.${options?.network ? "" : " There is no network access, so Pkg.add cannot install more."}`,
+		"Execute Julia in this session's persistent NeuraJL kernel. The working directory is the task workspace; read and edit files with Julia's file I/O. Bindings, functions, types and loaded packages persist across calls, and ans is the last call's value. Printed output and the last expression's value are returned.",
+		'Shell: sh"cmd" (or bash("cmd")) runs bash, so pipes, globs, redirects and && work, and returns ShellResult(exitcode, stdout, stderr) after printing the output. In sh"..." the $ belongs to the shell; in an ordinary "..." string it is Julia interpolation. run(`prog args`) starts one program without a shell.',
+		"To write a file's text, put the text in payload and call write(path, PAYLOAD): the payload is not parsed as Julia, so it needs no escaping.",
+		`Each call may run for ${timeout}s. Waiting work (sleep, run, reading a process or file) is then interrupted and the kernel keeps every binding; compute that never yields cannot be interrupted, so the kernel stops and the next call starts a fresh one and says so.`,
+		`Loadable packages: ${loadable}.${options?.network ? "" : " There is no network access, so Pkg.add cannot install more."} kernelinfo() describes the kernel; varinfo() lists your bindings.`,
 	].join(" ");
 }
 
@@ -352,7 +364,11 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 						: `[neurajl: the previous kernel (epoch ${restartedFrom}) stopped; this call ran in a NEW kernel (epoch ${kernel.epoch}). All earlier bindings, functions and loaded packages are gone. Files written to the workspace remain.]\n`;
 				let response: Record<string, unknown>;
 				try {
-					response = await kernel.turn(params.code, params.ephemeral, signal);
+					response = await kernel.turn(
+						params.code,
+						{ ephemeral: params.ephemeral, payload: params.payload },
+						signal,
+					);
 				} catch (err) {
 					const stopped = kernel.isDead() ? `\n${KERNEL_STOPPED}` : "";
 					throw new Error(`${notice}${err instanceof Error ? err.message : String(err)}${stopped}`);
