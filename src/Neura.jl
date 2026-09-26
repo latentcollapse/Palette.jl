@@ -214,7 +214,7 @@ mutable struct KernelState
         # be loaded into the persistent mind's own module, not just Main.
         # It first reloads edited workspace packages, so a call that edits a
         # package and then includes its tests runs the edited code.
-        Core.eval(state.eval_module, :(include(path) = ($(refresh_workspace_packages!)(); Base.include(@__MODULE__, path))))
+        Core.eval(state.eval_module, :(include(path) = ($(refresh_workspace_packages!)(); $(note_file!)(path, length($(get_kernel_state)().execution_history) + 1); Base.include(@__MODULE__, path))))
         # Backtick commands start one program with no shell, so a pipe, glob
         # or `2>&1` inside them is a parse error; this is the explicit way
         # to reach a shell from turn code.

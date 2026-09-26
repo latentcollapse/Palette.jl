@@ -85,9 +85,38 @@ function capture_output(@nospecialize(f))
     end
     total = filesize(path)
     output = String(open(io -> read(io, MAX_OUTPUT_BYTES), path))
-    rm(path; force=true)
+    keep_for_late_output!(path, total)
     total > MAX_OUTPUT_BYTES && (output *= "\n[output truncated: $total bytes total]")
     return value, output
+end
+
+# A process a call left running keeps writing to that call's capture file.
+# The last few are kept, renamed, and what grows in them after their call is
+# reported as background output at the start of the next call.
+const LATE_FILES = Tuple{String, Int}[]
+const KEEP_LATE_FILES = 8
+const LATE_SEQ = Ref(0)
+
+function keep_for_late_output!(path::String, total::Int)
+    late = "$path-$(LATE_SEQ[] += 1)"
+    mv(path, late; force=true)
+    push!(LATE_FILES, (late, total))
+    while length(LATE_FILES) > KEEP_LATE_FILES
+        rm(popfirst!(LATE_FILES)[1]; force=true)
+    end
+    return
+end
+
+function late_output()
+    parts = String[]
+    for (i, (path, read_to)) in enumerate(LATE_FILES)
+        total = isfile(path) ? filesize(path) : 0
+        total > read_to || continue
+        skip = max(read_to, total - MAX_BACKGROUND_BYTES)
+        push!(parts, open(f -> (seek(f, skip); String(read(f))), path))
+        LATE_FILES[i] = (path, total)
+    end
+    return join(parts)
 end
 
 # The session module's name is an internal uuid, and types defined by turn
@@ -230,17 +259,172 @@ function run_turn(@nospecialize(f), timeout_s)
     return (value, interrupted[], false)
 end
 
+# Between calls, stdout and stderr (and fd 1 and 2 of every child) point at
+# this file. A task still running after its call printed into it, and nothing
+# read it back, so its output and its failure reached nobody.
+const SINK = Ref{Union{Nothing, IOStream}}(nothing)
+const SINK_PATH = Ref("")
+const SINK_READ = Ref(0)
+const MAX_BACKGROUND_BYTES = 16 * 1024
+const REPORTED_TASKS = WeakKeyDict{Task, Nothing}()
+
+"""
+    report_background(mod)
+
+Prints what happened since the last call: output that background tasks and
+processes wrote, and each failed task bound in `mod`, once.
+"""
+function report_background(mod::Module)
+    text = late_output()
+    io = SINK[]
+    if io !== nothing
+        flush(io)
+        total = filesize(SINK_PATH[])
+        if total > SINK_READ[]
+            skip = max(SINK_READ[], total - MAX_BACKGROUND_BYTES)
+            text *= open(f -> (seek(f, skip); String(read(f))), SINK_PATH[])
+            SINK_READ[] = total
+        end
+    end
+    if !isempty(text)
+        length(text) > MAX_BACKGROUND_BYTES && (text = "…" * last(text, MAX_BACKGROUND_BYTES))
+        print("[background output since the last call]\n", text, endswith(text, '\n') ? "" : "\n")
+    end
+    for sym in Base.invokelatest(names, mod; all=true)
+        Base.invokelatest(isdefined, mod, sym) || continue
+        t = Base.invokelatest(getglobal, mod, sym)
+        t isa Task && istaskfailed(t) && !haskey(REPORTED_TASKS, t) || continue
+        REPORTED_TASKS[t] = nothing
+        err = t.result isa Exception ? first(split(sprint(showerror, t.result), '\n')) : repr(t.result)
+        println("[background: task `$sym` failed: $err]")
+    end
+    return nothing
+end
+
+# Workspace files a call named, with their modification time and size then,
+# and the call. A binding computed from a file the model later changed
+# outside the kernel kept the old contents, with nothing to say so.
+const USED_FILES = Dict{String, Tuple{Tuple{Float64, Int}, Int}}()
+const MAX_USED_FILES = 500
+
+file_stamp(path) = (st = stat(path); (st.mtime, Int(st.size)))
+
+function note_file!(path::AbstractString, call::Int)
+    root = WORKSPACE_ROOT[]
+    isempty(root) && return
+    full = abspath(root, path)
+    startswith(full, root * "/") && isfile(full) || return
+    (haskey(USED_FILES, full) || length(USED_FILES) < MAX_USED_FILES) || return
+    USED_FILES[full] = (file_stamp(full), call)
+    return
+end
+
+function string_literals!(out::Vector{String}, ex)
+    if ex isa String
+        push!(out, ex)
+    elseif ex isa Expr
+        foreach(a -> string_literals!(out, a), ex.args)
+    end
+    return out
+end
+
+"""
+    note_files_named!(code, call)
+
+Records each workspace file that `code` names in a string literal, sh"..."
+commands included, as used by `call`.
+"""
+function note_files_named!(code::String, call::Int)
+    ex = try
+        Meta.parseall(code)
+    catch
+        return
+    end
+    for lit in string_literals!(String[], ex), tok in split(lit, (' ', '\t', '\n', '\'', '"', ';', '|', '<', '>', '(', ')', '=', ','))
+        isempty(tok) || length(tok) > 4096 || note_file!(tok, call)
+    end
+    return
+end
+
+# Package sources are reloaded, not reported.
+in_workspace_package(path) = any(m -> startswith(path, dirname(something(pathof(m), "/nonexistent/x")) * "/"),
+                                 keys(WORKSPACE_PACKAGES))
+
+"""
+    report_changed_files()
+
+Prints, once per change, the workspace files that changed on disk since the
+call that last named them.
+"""
+function report_changed_files()
+    changed = String[]
+    for (path, (stamp, call)) in collect(USED_FILES)
+        in_workspace_package(path) && (delete!(USED_FILES, path); continue)
+        now = isfile(path) ? file_stamp(path) : nothing
+        now == stamp && continue
+        push!(changed, "$(relpath(path, WORKSPACE_ROOT[])) ($(now === nothing ? "deleted; " : "")call $call)")
+        now === nothing ? delete!(USED_FILES, path) : (USED_FILES[path] = (now, call))
+    end
+    isempty(changed) && return
+    println("[changed on disk since the call that used it: ", join(sort!(changed), ", "),
+            ". Values computed from these files before the change are out of date.]")
+    return
+end
+
+# The binding each name held after the last call, and the call that set it.
+# The host keeps the list from each reply, so when the kernel dies it can say
+# which bindings were lost instead of only that they were.
+const BINDING_SEEN = Dict{Symbol, Tuple{UInt, Int}}()
+const MAX_LISTED_BINDINGS = 200
+
+function short_type(v)
+    v isa Function && return "function"
+    v isa Module && return "module"
+    v isa Type && return "type"
+    t = scrub(string(typeof(v)))
+    return length(t) > 40 ? string(nameof(typeof(v))) : t
+end
+
+"""
+    binding_list!(mod, call) -> Vector{String}
+
+`name (type, call n)` for each of the session's own bindings, where `n` is
+the last call that gave it a new value.
+"""
+function binding_list!(mod::Module, call::Int)
+    rows = String[]
+    live = Set{Symbol}()
+    for sym in sort!(Base.invokelatest(names, mod; all=true))
+        (sym === nameof(mod) || sym in KERNEL_BINDINGS || startswith(string(sym), '#')) && continue
+        Base.invokelatest(isdefined, mod, sym) || continue
+        v = Base.invokelatest(getglobal, mod, sym)
+        push!(live, sym)
+        id = objectid(v)
+        seen = get(BINDING_SEEN, sym, nothing)
+        seen === nothing || seen[1] != id ? (BINDING_SEEN[sym] = (id, call)) : nothing
+        length(rows) < MAX_LISTED_BINDINGS && push!(rows, "$sym ($(short_type(v)), call $(BINDING_SEEN[sym][2]))")
+    end
+    filter!(kv -> kv.first in live, BINDING_SEEN)
+    return rows
+end
+
 """
     execute_turn(code, timeout_s) -> ((receipt, interrupted, stuck), output)
 
-One persistent turn: reload edited workspace packages, run `code` under the
+One persistent turn: report what happened in the background and which used
+files changed, reload edited workspace packages, run `code` under the
 deadline, and capture everything it printed.
 """
 function execute_turn(code::String, timeout_s::Union{Nothing, Float64})
+    state = get_kernel_state()
+    call = length(state.execution_history) + 1
     return capture_output() do
+        report_background(state.eval_module)
+        report_changed_files()
         refresh_workspace_packages!()
         turn = run_turn(() -> execute(ExecuteCode(code)), timeout_s)
         refresh_workspace_packages!(reload=false)
+        note_files_named!(code, call)
         turn
     end
 end

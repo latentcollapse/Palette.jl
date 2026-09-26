@@ -19,7 +19,7 @@ Protocol (all newline-delimited JSON):
 
   Request:   {"request_id": "...", "code": "...", "ephemeral": bool?, "ceiling": {...}?, "payload": str?}
   Response:  {"request_id": "...", "success": bool, "data": ..., "display": str?, "output": str?,
-              "error": ..., "epoch": "...", "interrupted": bool, "call": int?, "session_dead": true?}
+              "error": ..., "epoch": "...", "interrupted": bool, "call": int?, "bindings": [str]?, "session_dead": true?}
              `call` numbers a persistent turn; Neura.output(call) returns everything it printed.
   HELLO:     {"kind": "HELLO", "epoch": "...", "session_id": "..."}  -- printed once, at startup
 
@@ -137,6 +137,7 @@ def main() -> int:
                     "epoch": result.get("epoch"),
                     "interrupted": bool(result.get("interrupted", False)),
                     "call": result.get("call"),
+                    "bindings": result.get("bindings"),
                 })
             except SessionDeadError as e:
                 # `session_dead` lets the host stop sending turns now, rather
