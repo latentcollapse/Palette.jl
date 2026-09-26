@@ -1,0 +1,148 @@
+{
+"plain data": {
+"restored": [
+"d",
+"n",
+"s",
+"st",
+"t"
+],
+"failed": [],
+"skipped": [],
+"check": "(42, 'hi', {'a': [1, 2]}, (1, 'x'), {1, 2})"
+},
+"DataFrame": {
+"restored": [
+"df",
+"pd"
+],
+"failed": [],
+"skipped": [],
+"check": "((3, 1), [1, 2, 3])"
+},
+"aliasing across names": {
+"restored": [
+"a",
+"b",
+"h"
+],
+"failed": [],
+"skipped": [],
+"check": "(False, False)"
+},
+"cycle within one value": {
+"restored": [
+"a"
+],
+"failed": [],
+"skipped": [],
+"check": "True"
+},
+"class identity": {
+"restored": [
+"P",
+"p"
+],
+"failed": [],
+"skipped": [],
+"check": "(False, False)"
+},
+"function / method": {
+"restored": [
+"f"
+],
+"failed": [],
+"skipped": [],
+"check": "2"
+},
+"closure / lambda": {
+"restored": [
+"K",
+"g"
+],
+"failed": [],
+"skipped": [],
+"check": "4"
+},
+"import": {
+"restored": [
+"json"
+],
+"failed": [],
+"skipped": [],
+"check": "'[1]'"
+},
+"data from a file that changed": {
+"restored": [
+"csv",
+"rows"
+],
+"failed": [],
+"skipped": [],
+"check": "[['a'], ['1'], ['2']]"
+},
+"function from a module file that changed": {
+"restored": [
+"sys"
+],
+"failed": [
+"helper"
+],
+"skipped": [],
+"check": "NameError: name 'helper' is not defined"
+},
+"open file": {
+"restored": [
+"fh"
+],
+"failed": [],
+"skipped": [],
+"check": "(False, 'f.txt')"
+},
+"thread": {
+"restored": [
+"th",
+"threading"
+],
+"failed": [],
+"skipped": [],
+"check": "<Thread(Thread-1 (<lambda>), initial)>"
+},
+"generator": {
+"restored": [],
+"failed": [],
+"skipped": [
+"gen"
+],
+"check": "NameError: name 'gen' is not defined"
+},
+"Python version tampered": {
+"restored": [
+"n"
+],
+"failed": [],
+"skipped": [],
+"check": "1"
+},
+"payload corrupted": {
+"restored": [
+"a"
+],
+"failed": [
+"c"
+],
+"skipped": [],
+"check": "NameError: name 'c' is not defined"
+},
+"per-variable size cap": {
+"restored": [
+"array",
+"small"
+],
+"failed": [],
+"skipped": [
+"big"
+],
+"check": "1"
+}
+}
