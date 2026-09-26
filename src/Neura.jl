@@ -201,7 +201,7 @@ mutable struct KernelState
         # `Neura.request_capability(...)` without re-importing it on every
         # single turn just to reach the one function that's the entire
         # point of the authority fence.
-        Core.eval(state.eval_module, :(const Neura = $(@__MODULE__)))
+        Core.eval(state.eval_module, :(const Neura = $(Api)))
         # A bare `Module(...)` never gets `include` for free (confirmed by
         # direct testing across all constructor flag combinations -- this
         # is not a Julia version regression, it never worked the way an
@@ -214,6 +214,15 @@ mutable struct KernelState
         # or `2>&1` inside them is a parse error; this is the explicit way
         # to reach a shell from turn code.
         Core.eval(state.eval_module, :(bash(script::AbstractString) = $(run_bash)(script)))
+        # A non-standard string literal does no interpolation, so `$?`, `$HOME`
+        # and `$(...)` reach bash. In `bash("...")` they are Julia syntax and a
+        # parse error.
+        Core.eval(state.eval_module, :(macro sh_str(script) :($$(run_bash)($script)) end))
+        Core.eval(state.eval_module, :(const ShellResult = $(ShellResult)))
+        # The InteractiveUtils varinfo() lists Main, not this module, and is not
+        # loaded here at all; this one lists the session's own bindings.
+        Core.eval(state.eval_module, :(varinfo() = $(varinfo)(@__MODULE__)))
+        Core.eval(state.eval_module, :(kernelinfo() = $(kernelinfo)()))
         state.variables = Dict{String, Any}()
         state.execution_history = ExecutionRecord[]
         state.operator_registry = Dict{String, Function}()
@@ -381,13 +390,142 @@ struct ShellEscape <: OperatorType
 end
 
 """
-    run_bash(script) -> Int
+    ShellResult
 
-Runs `script` with `bash -c`, so pipes, globs, redirects and `&&` work. Output
-goes to the caller's stdout and stderr. Returns the exit code instead of
-throwing on a nonzero one. Turn code reaches it as `bash(script)`.
+What `bash(script)` returns: the exit status and the complete stdout and
+stderr text. A process killed by a signal reports `128 + signal`, as a shell
+does. `success(r)` is true for status 0.
 """
-run_bash(script::AbstractString) = run(ignorestatus(`bash -c $script`)).exitcode
+struct ShellResult
+    exitcode::Int
+    stdout::String
+    stderr::String
+end
+Base.success(r::ShellResult) = r.exitcode == 0
+# The text was already printed when the command ran, so repeating it here would
+# return it to the model twice.
+Base.show(io::IO, r::ShellResult) =
+    print(io, "ShellResult(exitcode=", r.exitcode, ", stdout=", ncodeunits(r.stdout), " bytes, stderr=",
+          ncodeunits(r.stderr), " bytes)")
+
+"""
+    run_bash(script) -> ShellResult
+
+Runs `script` with `bash -c`, so pipes, globs, redirects and `&&` work. Prints
+the command's stdout and then its stderr, and returns them with the exit code
+instead of throwing on a nonzero one. Turn code reaches it as `bash(script)`,
+or as `sh"..."`, which passes `\$` to the shell instead of interpolating it.
+"""
+function run_bash(script::AbstractString)
+    out, err = IOBuffer(), IOBuffer()
+    p = run(pipeline(ignorestatus(`bash -c $script`); stdout=out, stderr=err))
+    o, e = String(take!(out)), String(take!(err))
+    print(stdout, o)
+    print(stderr, e)
+    return ShellResult(p.termsignal > 0 ? 128 + p.termsignal : p.exitcode, o, e)
+end
+
+"""
+    Api
+
+What turn code sees as `Neura`: the one entry point to broker-mediated
+authority. The whole package used to be bound there, so a model exploring it
+found `reset_kernel_state()`, which silently discarded every binding, and
+`discover()`, which listed operators that do not exist.
+"""
+module Api
+import ..Neura
+request_capability(category::String, params::Dict=Dict{String,Any}(); kwargs...) =
+    Neura.request_capability(category, params; kwargs...)
+end
+
+# Bindings the kernel creates in every session module. They are not the
+# model's own variables, so GetState and varinfo() leave them out.
+const KERNEL_BINDINGS = (:eval, :include, :bash, Symbol("@sh_str"), :Neura, :ShellResult,
+                         :varinfo, :kernelinfo, :ans, :PAYLOAD)
+
+"""
+    VarInfo
+
+A table of the session's own bindings: name, size and summary.
+"""
+struct VarInfo
+    rows::Vector{NTuple{3,String}}
+end
+function Base.show(io::IO, ::MIME"text/plain", v::VarInfo)
+    isempty(v.rows) && return print(io, "(no bindings yet)")
+    w1 = max(4, maximum(r -> textwidth(r[1]), v.rows))
+    w2 = max(4, maximum(r -> textwidth(r[2]), v.rows))
+    println(io, rpad("name", w1), "  ", rpad("size", w2), "  summary")
+    for (i, r) in enumerate(v.rows)
+        print(io, rpad(r[1], w1), "  ", rpad(r[2], w2), "  ", r[3])
+        i < length(v.rows) && println(io)
+    end
+end
+
+function _summary(v)
+    v isa Function && return "function, $(length(methods(v))) method(s)"
+    v isa Type && return "type"
+    v isa Module && return "module"
+    return try
+        summary(v)
+    catch
+        string(typeof(v))
+    end
+end
+
+"""
+    varinfo() -> VarInfo
+
+Every binding this session has created, with its size and summary.
+"""
+function varinfo(mod::Module=get_kernel_state().eval_module)
+    rows = NTuple{3,String}[]
+    for sym in sort!(Base.invokelatest(names, mod; all=true))
+        (sym === nameof(mod) || sym in KERNEL_BINDINGS || startswith(string(sym), '#')) && continue
+        Base.invokelatest(isdefined, mod, sym) || continue
+        v = Base.invokelatest(getglobal, mod, sym)
+        size = try
+            Base.format_bytes(Base.summarysize(v))
+        catch
+            "?"
+        end
+        push!(rows, (string(sym), size, _summary(v)))
+    end
+    return VarInfo(rows)
+end
+
+"""
+    kernelinfo()
+
+Prints what this kernel is: what persists, the call time limit, the network,
+the loadable and loaded packages, and the helpers turn code can use.
+"""
+function kernelinfo()
+    mod = get_kernel_state().eval_module
+    deps = try
+        sort!([String(k) for k in keys(get(Base.parsed_toml(Base.active_project()), "deps", Dict())) if k != "Neura"])
+    catch
+        String[]
+    end
+    loaded = sort!([String(nameof(m)) for m in values(Base.loaded_modules) if String(nameof(m)) in deps])
+    timeout = get(ENV, "NEURAJL_TURN_TIMEOUT", "")
+    offline = get(ENV, "JULIA_PKG_OFFLINE", "") == "true"
+    nbind = length(varinfo(mod).rows)
+    println("""
+        NeuraJL kernel: Julia $(VERSION), $(Threads.nthreads()) thread(s), $(nbind) binding(s), $(Base.format_bytes(Base.gc_live_bytes())) live
+        workspace  $(pwd()) (read/write; files outlive the kernel)
+        persists   bindings, functions, types and loaded packages, until the kernel stops
+        time limit $(isempty(timeout) ? "set by the host" : timeout * "s") per call. Waiting work (sleep, run, read, I/O) is interrupted and the kernel keeps its state;
+                   compute that never yields cannot be interrupted, so the kernel stops and its bindings are lost
+        network    $(offline ? "none; Pkg.add cannot install packages" : "available")
+        packages   loadable: Julia stdlib, $(join(deps, ", "))
+                   loaded: $(isempty(loaded) ? "none" : join(loaded, ", "))
+        helpers    bash("cmd") or sh"cmd" -> ShellResult(exitcode, stdout, stderr); sh"..." keeps \$ for the shell
+                   PAYLOAD: this call's payload text, raw; write(path, PAYLOAD) writes a file with no Julia quoting
+                   ans: the last call's value.  varinfo(): your bindings.  include("file.jl") loads a workspace file""")
+    return nothing
+end
 
 """
     register_operator!(state::KernelState, name::String, f::Function)
@@ -430,9 +568,11 @@ functions defined by earlier calls are labelled "an earlier call".
 """
 function describe_error(e, bt, call_file::AbstractString, scope::Module)
     # "./call 3" and "./boot.jl" are how stack frames spell these files.
-    clean(file) = replace(string(file), r"^\./" => "", r"^.*/packages/([^/]+)/[^/]+/" => s"\1/")
+    clean(file) = replace(string(file), r"^\./" => "", r"^.*/packages/([^/]+)/[^/]+/" => s"\1/",
+                          r"^.*/share/julia/stdlib/v[0-9.]+/" => "")
     location(file) = file == call_file ? "this call" : startswith(file, "call ") ? "an earlier call" : file
-    msg = replace(sprint(showerror, e), "@ $call_file:" => "@ this call, line ", string(scope) => "Main")
+    msg = replace(sprint(showerror, e), "@ $call_file:" => "@ this call, line ", string(scope) * "." => "",
+                  string(scope) => "Main")
     e isa Meta.ParseError && return msg
     frames = try
         stacktrace(bt)
@@ -446,14 +586,38 @@ function describe_error(e, bt, call_file::AbstractString, scope::Module)
     # Julia internals and says nothing about where the code went wrong.
     any(f -> startswith(clean(f.file), "call "), frames) || return msg
     lines = String[]
+    # A run of library frames says where inside a package the error surfaced
+    # and which package call led there; the frames between those two are that
+    # package's internals (a failed Pkg.add listed ten of them).
+    library_run = String[]
+    function flush_run!()
+        if length(library_run) > 3
+            append!(lines, library_run[1:2])
+            push!(lines, "  ... $(length(library_run) - 3) library frames omitted ...")
+            push!(lines, library_run[end])
+        else
+            append!(lines, library_run)
+        end
+        empty!(library_run)
+    end
     for f in frames
         name = f.func === Symbol("top-level scope") ? "top-level code" : try
-            sprint(Base.StackTraces.show_spec_linfo, f)
+            replace(sprint(Base.StackTraces.show_spec_linfo, f), string(scope) * "." => "")
         catch
             string(f.func)
         end
-        push!(lines, "  $name at $(location(clean(f.file))), line $(f.line)")
+        # Resolver and loader signatures run to several hundred characters.
+        length(name) > 160 && (name = first(name, 160) * "…)")
+        where_ = location(clean(f.file))
+        line = "  $name at $where_, line $(f.line)"
+        if where_ in ("this call", "an earlier call")
+            flush_run!()
+            push!(lines, line)
+        else
+            push!(library_run, line)
+        end
     end
+    flush_run!()
     if length(lines) > MAX_ERROR_FRAMES
         half = MAX_ERROR_FRAMES ÷ 2
         lines = [lines[1:half]; "  ... $(length(lines) - 2half) frames omitted ..."; lines[end-half+1:end]]
@@ -485,6 +649,9 @@ function execute(op::ExecuteCode)::OperationReceipt
         parsed = softscope(Meta.parseall(op.code; filename=call_file))
         value = Core.eval(state.eval_module, parsed)
         result = OperationResult(value, true, nothing)
+        # REPL semantics: the last call's value stays reachable without having
+        # been assigned.
+        Core.eval(state.eval_module, Expr(:global, Expr(:(=), :ans, QuoteNode(value))))
 
         # Variable index for GetState/discovery convenience, built from
         # real module reflection (`names`) rather than regex-guessing
@@ -507,14 +674,17 @@ function execute(op::ExecuteCode)::OperationReceipt
             # turn code can reach `Neura.request_capability` without
             # re-importing it every turn -- not a user variable, must not
             # show up in GetState/discovery any more than :eval or :include do.
-            (sym === own_name || sym in (:eval, :include, :bash, :Neura)) && continue
+            (sym === own_name || sym in KERNEL_BINDINGS) && continue
             startswith(string(sym), '#') && continue
             if Base.invokelatest(isdefined, state.eval_module, sym)
                 state.variables[string(sym)] = Base.invokelatest(getfield, state.eval_module, sym)
             end
         end
     catch e
-        error_msg = describe_error(e, catch_backtrace(), call_file, state.eval_module)
+        # invokelatest: rendering a frame of a function this call defined
+        # reads its binding, and from this function's older world age Julia
+        # 1.12 warned "access to binding ... in a world prior to its definition".
+        error_msg = Base.invokelatest(describe_error, e, catch_backtrace(), call_file, state.eval_module)
         result = OperationResult(nothing, false, error_msg)
     end
 
@@ -538,7 +708,12 @@ function execute(op::ExecuteCode)::OperationReceipt
         duration_ms,
         state.id
     )
-    push!(state.receipt_log, receipt)
+    # The log keeps the outcome, not the value: holding every call's value
+    # kept each unassigned result alive for the whole session (two 400 MB
+    # results left 800 MB that GC could never reclaim).
+    push!(state.receipt_log, OperationReceipt(receipt.id, receipt.timestamp, receipt.operation_type,
+                                              OperationResult(nothing, result.success, result.error),
+                                              duration_ms, state.id))
 
     return receipt
 end

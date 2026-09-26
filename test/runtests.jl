@@ -276,3 +276,33 @@ end
 
     rm(joinpath(pwd(), ".neurajl"); recursive=true, force=true)
 end
+
+@testset "Session module helpers" begin
+    reset_kernel_state()
+    run(code) = execute(ExecuteCode(code)).result
+
+    # bash returns the whole result, not only the exit code
+    r = run("r = bash(\"echo out; echo err >&2; exit 4\")")
+    @test r.success
+    @test r.data isa Neura.ShellResult
+    @test (r.data.exitcode, r.data.stdout, r.data.stderr) == (4, "out\n", "err\n")
+    @test !success(r.data)
+    @test run("sh\"x=2; echo \$((x+1))\"").data.stdout == "3\n"
+
+    # ans holds the last call's value
+    run("40 + 2")
+    @test run("ans").data == 42
+
+    # varinfo lists the session's own bindings and none of the kernel's
+    rows = run("varinfo()").data.rows
+    @test "r" in first.(rows)
+    @test isempty(intersect(first.(rows), string.(collect(Neura.KERNEL_BINDINGS))))
+
+    # turn code reaches authority through Neura, and nothing else of the package
+    @test run("Neura.request_capability isa Function").data
+    @test !run("Neura.reset_kernel_state()").success
+
+    # the receipt log keeps outcomes, not values
+    run("zeros(10^6)")
+    @test get_kernel_state().receipt_log[end].result.data === nothing
+end

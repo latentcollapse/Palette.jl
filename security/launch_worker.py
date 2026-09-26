@@ -119,13 +119,17 @@ def build_bwrap_argv(
         "bwrap",
         "--unshare-user", "--uid", "1000", "--gid", "1000",
         "--disable-userns", "--assert-userns-disabled",
-        # Process lifetime: julia runs as PID 1 of a new PID namespace, and
-        # when PID 1 exits the kernel SIGKILLs everything left in that
+        # Process lifetime: a new PID namespace whose PID 1 is bwrap's own
+        # reaper, with julia as its child. When julia exits the reaper exits,
+        # and when PID 1 exits the kernel SIGKILLs everything left in the
         # namespace -- background runs, setsid double forks, daemons that
-        # ignore TERM and HUP. --die-with-parent (below) kills PID 1 if the
+        # ignore TERM and HUP. --die-with-parent (below) ends it if the
         # supervising process dies first. Nothing a worker starts outlives
         # it; security/test_session_cli.py proves it for ephemeral children.
-        "--unshare-pid", "--as-pid-1",
+        # Not --as-pid-1: julia as PID 1 inherited every orphaned process and
+        # never reaped it, so finished background jobs stayed as zombies that
+        # `ps` and `pgrep` still reported.
+        "--unshare-pid",
         "--unshare-ipc",
     ]
     argv += ["--unshare-net"] if not network_enabled else []

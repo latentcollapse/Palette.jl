@@ -252,11 +252,75 @@ class TestSessionCli(unittest.TestCase):
         self.assertTrue(r["success"], r)
         self.assertNotIn("Precompiling", r["output"], "run security/prewarm_depot.py for this depot")
 
-    def test_bash_runs_shell_syntax_and_returns_the_exit_code(self):
-        r = self._turn('bash("ls *.txt | wc -l; echo to-stderr >&2; exit 3")')
+    def test_bash_runs_shell_syntax_and_returns_its_output_and_status(self):
+        """bash() used to return only the exit code, so a command's output
+        could be read but not kept."""
+        r = self._turn('r = bash("ls *.txt | wc -l; echo to-stderr >&2; exit 3")')
         self.assertTrue(r["success"], r)
-        self.assertEqual(r["data"], 3)
+        self.assertIn("exitcode=3", r["display"])
         self.assertEqual(r["output"].split(), ["1", "to-stderr"])
+        r = self._turn("(r.exitcode, strip(r.stdout), strip(r.stderr), success(r))")
+        self.assertEqual(r["data"], [3, "1", "to-stderr", False])
+
+    def test_sh_literal_passes_dollar_to_the_shell(self):
+        """In bash("...") a `$` is Julia interpolation, so `$?` and `$VAR`
+        were parse errors."""
+        r = self._turn('sh"x=5; echo $((x*2)); false; echo status=$?".stdout')
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["data"], "10\nstatus=1\n")
+        r = self._turn('bash("echo $?")')
+        self.assertFalse(r["success"])
+        self.assertIn('sh"..."', r["error"])
+
+    def test_payload_reaches_the_kernel_without_julia_quoting(self):
+        """Source files embedded in Julia string literals failed to parse
+        on triple quotes, `$` and backslashes."""
+        text = 'def f():\n    """Doc with "quotes", $dollar and a \\\\ backslash."""\n    return 1\n'
+        r = self._turn('write("f.py", PAYLOAD); read("f.py", String) == PAYLOAD', payload=text)
+        self.assertTrue(r["success"], r)
+        self.assertIs(r["data"], True)
+        self.assertEqual(Path(self.task_workspace, "f.py").read_text(), text)
+        r = self._turn("PAYLOAD === nothing")
+        self.assertIs(r["data"], True, "a payload must not leak into the next call")
+
+    def test_display_does_not_corrupt_the_protocol(self):
+        """display() wrote to the stdout captured at startup, which is the
+        protocol pipe, and killed the session."""
+        r = self._turn("display([1 2; 3 4]); 5")
+        self.assertTrue(r["success"], r)
+        self.assertIn("2×2 Matrix{Int64}", r["output"])
+        self.assertEqual(self._turn("ans + 1")["data"], 6)
+
+    def test_include_resolves_against_the_workspace(self):
+        """include("m.jl") looked next to session_loop.jl."""
+        r = self._turn('write("m.jl", "g(x) = 2x"); include("m.jl"); g(21)')
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["data"], 42)
+
+    def test_neura_handle_cannot_reset_the_kernel(self):
+        """Neura.reset_kernel_state() used to erase every binding silently."""
+        self._turn("keep = 1")
+        r = self._turn("Neura.reset_kernel_state()")
+        self.assertFalse(r["success"])
+        self.assertEqual(self._turn("keep")["data"], 1)
+
+    def test_kernel_helpers_describe_the_session(self):
+        r = self._turn("struct Pt; x::Int; end; v = zeros(10); Pt(3)")
+        self.assertEqual(r["display"], "Pt(3)", "types print without the session module's internal name")
+        r = self._turn("varinfo()")
+        self.assertTrue(r["success"], r)
+        self.assertIn("v", r["display"].split())
+        self.assertNotIn("PAYLOAD", r["display"])
+        r = self._turn("kernelinfo()")
+        self.assertIn("time limit 20s", r["output"])
+        self.assertIn("network    none", r["output"])
+
+    def test_unassigned_results_are_not_retained(self):
+        """Every call's value used to stay referenced from the receipt log."""
+        for i in range(3):
+            self.assertTrue(self._turn(f"zeros(UInt8, 200 * 2^20); {i}")["success"])
+        r = self._turn("GC.gc(); GC.gc(); Base.gc_live_bytes() / 2^20")
+        self.assertLess(r["data"], 200, "three unbound 200 MiB results were kept alive")
 
     def test_shell_syntax_in_backticks_points_to_bash(self):
         r = self._turn("run(`ls *.txt 2>&1`)")
@@ -337,8 +401,8 @@ class TestSessionCli(unittest.TestCase):
         self.assertIn("exit code 3", r["error"])
 
     def test_nothing_an_ephemeral_turn_starts_outlives_it(self):
-        """The child is PID 1 of its own PID namespace; when it exits the
-        kernel kills everything left in that namespace, however it was
+        """The child has its own PID namespace; when it exits, bwrap's reaper
+        (PID 1) exits and the kernel kills everything left in that namespace, however it was
         detached. Four escape shapes are started and seen alive inside the
         child, then none may remain on the host."""
         marker = "NJL" + uuid.uuid4().hex[:10]
@@ -407,11 +471,38 @@ class TestSessionCli(unittest.TestCase):
             proc.stdout.close()
             shutil.rmtree(tools, ignore_errors=True)
 
-    def test_timeout_reply_marks_the_session_dead(self):
-        r = self._turn("sleep(60)")
+    def test_timeout_interrupts_waiting_work_and_keeps_the_kernel(self):
+        """A timeout used to kill the kernel even when the call was only
+        waiting. Processes an earlier call started keep running; processes the
+        interrupted call started are stopped."""
+        self._turn("keep = 99; bg = run(`sleep 300`; wait=false); nothing")
+        r = self._turn('println("before"); run(`sleep 300`)')
         self.assertFalse(r["success"])
-        self.assertIn("turn_timeout", r["error"])
+        self.assertIs(r.get("interrupted"), True)
+        self.assertNotIn("session_dead", r)
+        self.assertIn("before", r["output"])
+        self.assertIn("every binding are intact", r["error"])
+        r = self._turn('(keep, process_running(bg), strip(sh"pgrep -c -x sleep".stdout))')
+        self.assertEqual(r["data"], [99, True, "1"])
+
+    def test_finished_background_processes_are_reaped(self):
+        """With julia as PID 1 an orphaned process that finished stayed a
+        zombie, and `pgrep` kept reporting it as running."""
+        r = self._turn('sh"(sleep 0.5 &); true"; sleep(2); strip(sh"ps -eo stat= | grep -c ^Z || true".stdout)')
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["data"], "0")
+
+    def test_compute_that_never_yields_stops_the_kernel(self):
+        r = self._turn("s = 0.0; i = 0; while true; s += sin(i); i += 1; end")
+        self.assertFalse(r["success"])
         self.assertIs(r.get("session_dead"), True)
+        self.assertIn("never yields", r["error"])
+
+    def test_turn_that_swallows_the_interrupt_stops_the_kernel(self):
+        r = self._turn("while true; try sleep(0.5) catch end; end")
+        self.assertFalse(r["success"])
+        self.assertIs(r.get("session_dead"), True)
+        self.assertIn("kept running after being interrupted", r["error"])
 
 
 if __name__ == "__main__":

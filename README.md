@@ -39,9 +39,10 @@ Run it with the same mounts sessions will have: a harness that puts the Julia
 runtime or this repo at another path must prewarm there, or every kernel
 start recompiles (~45s).
 
-A worker's processes cannot outlive it: julia is PID 1 of its own PID
-namespace, so when it exits (a finished or killed EPHEMERAL child, a closed
-session) the kernel kills every descendant, however detached. Output and
+A worker's processes cannot outlive it: julia runs in its own PID namespace
+under bwrap's reaper, which reaps finished background processes and exits when
+julia does; then (a finished or killed EPHEMERAL child, a closed session) the
+kernel kills every descendant, however detached. Output and
 files those descendants held go with the child's discarded workspace.
 
 ## Substrate clarification (read this)
