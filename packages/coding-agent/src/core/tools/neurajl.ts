@@ -99,9 +99,13 @@ function requiredSetting(value: string | undefined, name: string): string {
 	return value;
 }
 
-export function truncateMiddle(text: string, maxChars: number | undefined): { text: string; truncated: boolean } {
+export function truncateMiddle(
+	text: string,
+	maxChars: number | undefined,
+	fullText?: string,
+): { text: string; truncated: boolean } {
 	if (maxChars === undefined || text.length <= maxChars) return { text, truncated: false };
-	const notice = `\n[... ${text.length - maxChars} characters elided ...]\n`;
+	const notice = `\n[... ${text.length - maxChars} characters elided${fullText ? `; ${fullText}` : ""} ...]\n`;
 	const keep = Math.max(0, maxChars - notice.length);
 	const head = Math.ceil(keep / 2);
 	return { text: text.slice(0, head) + notice + text.slice(text.length - (keep - head)), truncated: true };
@@ -315,6 +319,7 @@ function neurajlDescription(options: NeurajlToolOptions | undefined): string {
 		"Execute Julia in this session's persistent NeuraJL kernel. The working directory is the task workspace; read and edit files with Julia's file I/O. Bindings, functions, types and loaded packages persist across calls, and ans is the last call's value. Printed output and the last expression's value are returned.",
 		'Shell: sh"cmd" (or bash("cmd")) runs bash, so pipes, globs, redirects and && work, and returns ShellResult(exitcode, stdout, stderr) after printing the output. In sh"..." the $ belongs to the shell; in an ordinary "..." string it is Julia interpolation. run(`prog args`) starts one program without a shell.',
 		"To write a file's text, put the text in payload and call write(path, PAYLOAD): the payload is not parsed as Julia, so it needs no escaping.",
+		"A package loaded from the workspace is reloaded when its source files change, so code and tests run in the kernel see your edits.",
 		`Each call may run for ${timeout}s. Waiting work (sleep, run, reading a process or file) is then interrupted and the kernel keeps every binding; compute that never yields cannot be interrupted, so the kernel stops and the next call starts a fresh one and says so.`,
 		`Loadable packages: ${loadable}.${options?.network ? "" : " There is no network access, so Pkg.add cannot install more."} kernelinfo() describes the kernel; varinfo() lists your bindings.`,
 	].join(" ");
@@ -322,7 +327,8 @@ function neurajlDescription(options: NeurajlToolOptions | undefined): string {
 
 /**
  * `SessionBaseToolsFactory` for NeuraJL: one kernel per agent session,
- * including each RLM child, started lazily on the first call.
+ * including each RLM child, started when the session's tools are built so
+ * that its startup overlaps the model's first request.
  */
 export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlToolOptions): SessionBaseToolsFactory {
 	return (_sessionId: string) => {
@@ -345,6 +351,11 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 			lastEpoch = kernel.epoch;
 			return { kernel, restartedFrom };
 		}
+
+		// Started lazily, the first call waited for the whole startup (~3s).
+		// A start that fails here is retried by that first call, which then
+		// reports the failure.
+		liveKernel().catch(() => undefined);
 
 		const definition: ToolDefinition<typeof neurajlSchema, NeurajlToolDetails> = {
 			name: "neurajl",
@@ -373,7 +384,17 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 					const stopped = kernel.isDead() ? `\n${KERNEL_STOPPED}` : "";
 					throw new Error(`${notice}${err instanceof Error ? err.message : String(err)}${stopped}`);
 				}
-				const { text, truncated } = truncateMiddle(formatNeurajlResponse(response), options?.maxOutputChars);
+				// The kernel keeps what each call printed, so elided output can be
+				// read back in pieces instead of recomputed.
+				const fullText =
+					typeof response.call === "number"
+						? `Neura.output(${response.call}) returns everything this call printed${response.success === true ? ", and ans its value" : ""}`
+						: undefined;
+				const { text, truncated } = truncateMiddle(
+					formatNeurajlResponse(response),
+					options?.maxOutputChars,
+					fullText,
+				);
 				if (response.session_dead === true) throw new Error(`${notice}${text}\n${KERNEL_STOPPED}`);
 				if (response.success !== true) throw new Error(`${notice}${text}`);
 				return {

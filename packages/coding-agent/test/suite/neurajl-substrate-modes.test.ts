@@ -142,7 +142,7 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 
 	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
 	it.skipIf(skipIfNeurajlUnavailable())(
-		"REAL integration: a timed-out turn stops the kernel and the next call says it runs in a new one",
+		"REAL integration: a timed-out wait keeps the kernel; compute that never yields stops it and the next call says so",
 		async () => {
 			const workspace = mkdtempSync(join(tmpdir(), "neurajl-timeout-"));
 			const scope = createNeurajlBaseToolsFactory(workspace, {
@@ -153,10 +153,14 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 			const tool = scope.tools.neurajl!;
 			try {
 				await tool.execute("t1", { code: "x = 1" }, undefined, undefined);
-				await expect(tool.execute("t2", { code: "sleep(30)" }, undefined, undefined)).rejects.toThrow(
-					/turn_timeout[\s\S]*the kernel stopped/,
-				);
-				const after = await tool.execute("t3", { code: "@isdefined(x)" }, undefined, undefined);
+				const waited = tool.execute("t2", { code: "sleep(30)" }, undefined, undefined);
+				await expect(waited).rejects.toThrow(/Interrupted[\s\S]*every binding are intact/);
+				await expect(waited).rejects.not.toThrow(/the kernel stopped/);
+				expect(textOf(await tool.execute("t3", { code: "x" }, undefined, undefined))).toBe("1");
+				await expect(
+					tool.execute("t4", { code: "s = 0; while true; s += 1; end" }, undefined, undefined),
+				).rejects.toThrow(/the kernel stopped/);
+				const after = await tool.execute("t5", { code: "@isdefined(x)" }, undefined, undefined);
 				expect(textOf(after)).toMatch(/NEW kernel[\s\S]*false$/);
 			} finally {
 				await scope.dispose?.();
@@ -208,6 +212,39 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 			}
 		},
 		// test-policy: allow explicit-test-timeout -- starts a real sandboxed Julia kernel twice
+		300_000,
+	);
+
+	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+	it.skipIf(skipIfNeurajlUnavailable())(
+		"REAL integration: elided output names the call whose full output the kernel kept",
+		async () => {
+			const workspace = mkdtempSync(join(tmpdir(), "neurajl-elide-"));
+			const scope = createNeurajlBaseToolsFactory(workspace, {
+				sessionCliPath: SESSION_CLI_PATH,
+				projectDir: PROJECT_DIR,
+				maxOutputChars: 400,
+			})("elide-test-session");
+			const tool = scope.tools.neurajl!;
+			try {
+				const long = textOf(
+					await tool.execute("t1", { code: 'for i in 1:500; println("line ", i); end' }, undefined, undefined),
+				);
+				expect(long).toMatch(/characters elided; Neura\.output\(1\) returns everything this call printed, and ans its value/);
+				expect(long).not.toContain("line 250\n");
+				const back = await tool.execute(
+					"t2",
+					{ code: 'o = Neura.output(1); (length(split(o, "\\n"; keepempty=false)), occursin("line 250\\n", o))' },
+					undefined,
+					undefined,
+				);
+				expect(textOf(back)).toBe("(500, true)");
+			} finally {
+				await scope.dispose?.();
+				rmSync(workspace, { recursive: true, force: true });
+			}
+		},
+		// test-policy: allow explicit-test-timeout -- starts a real sandboxed Julia kernel
 		300_000,
 	);
 
