@@ -1,0 +1,1 @@
+Maintenance, in the same repository: write docs/API.md documenting every function added in ISSUES.md, with one runnable example each. Then write test/test_docs_examples.jl that runs every example from docs/API.md and checks its output, and include it from test/runtests.jl. Keep the full test suite passing and say when the task is complete.

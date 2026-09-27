@@ -1,0 +1,1 @@
+More issues (28–32) were added to ISSUES.md for the OrderedCollections package. Work through them in order, keeping the full test suite passing, and say when they are complete.

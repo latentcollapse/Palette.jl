@@ -1,0 +1,727 @@
+[
+ [
+  "wrap",
+  [
+   "mu rho alpha omicron theta beta zeta delta mu pi theta nu sigma delta tau theta alpha eta xi iota zeta",
+   50
+  ],
+  {
+   "break_long_words": false
+  },
+  [
+   "mu rho alpha omicron theta beta zeta delta mu pi",
+   "theta nu sigma delta tau theta alpha eta xi iota",
+   "zeta"
+  ]
+ ],
+ [
+  "fill",
+  [
+   "mu rho alpha omicron theta beta zeta delta mu pi theta nu sigma delta tau theta alpha eta xi iota zeta",
+   50
+  ],
+  {
+   "break_long_words": false
+  },
+  "mu rho alpha omicron theta beta zeta delta mu pi\ntheta nu sigma delta tau theta alpha eta xi iota\nzeta"
+ ],
+ [
+  "wrap",
+  [
+   "epsilon upsilon upsilon omicron epsilon epsilon alpha alpha eta",
+   20
+  ],
+  {
+   "break_long_words": false
+  },
+  [
+   "epsilon upsilon",
+   "upsilon omicron",
+   "epsilon epsilon",
+   "alpha alpha eta"
+  ]
+ ],
+ [
+  "fill",
+  [
+   "epsilon upsilon upsilon omicron epsilon epsilon alpha alpha eta",
+   20
+  ],
+  {
+   "break_long_words": false
+  },
+  "epsilon upsilon\nupsilon omicron\nepsilon epsilon\nalpha alpha eta"
+ ],
+ [
+  "wrap",
+  [
+   "kappa lambda eta sigma eta zeta eta nu kappa alpha mu xi zeta epsilon iota",
+   10
+  ],
+  {
+   "initial_indent": "* ",
+   "subsequent_indent": "  "
+  },
+  [
+   "* kappa",
+   "  lambda",
+   "  eta",
+   "  sigma",
+   "  eta zeta",
+   "  eta nu",
+   "  kappa",
+   "  alpha mu",
+   "  xi zeta",
+   "  epsilon",
+   "  iota"
+  ]
+ ],
+ [
+  "fill",
+  [
+   "kappa lambda eta sigma eta zeta eta nu kappa alpha mu xi zeta epsilon iota",
+   10
+  ],
+  {
+   "initial_indent": "* ",
+   "subsequent_indent": "  "
+  },
+  "* kappa\n  lambda\n  eta\n  sigma\n  eta zeta\n  eta nu\n  kappa\n  alpha mu\n  xi zeta\n  epsilon\n  iota"
+ ],
+ [
+  "wrap",
+  [
+   "upsilon tau alpha upsilon lambda gamma kappa mu kappa pi lambda zeta pi pi zeta beta iota alpha mu nu alpha sigma xi mu",
+   50
+  ],
+  {},
+  [
+   "upsilon tau alpha upsilon lambda gamma kappa mu",
+   "kappa pi lambda zeta pi pi zeta beta iota alpha mu",
+   "nu alpha sigma xi mu"
+  ]
+ ],
+ [
+  "fill",
+  [
+   "upsilon tau alpha upsilon lambda gamma kappa mu kappa pi lambda zeta pi pi zeta beta iota alpha mu nu alpha sigma xi mu",
+   50
+  ],
+  {},
+  "upsilon tau alpha upsilon lambda gamma kappa mu\nkappa pi lambda zeta pi pi zeta beta iota alpha mu\nnu alpha sigma xi mu"
+ ],
+ [
+  "wrap",
+  [
+   "beta zeta upsilon eta delta theta omicron mu rho mu rho iota omicron delta tau mu kappa beta xi gamma eta lambda rho upsilon mu epsilon lambda iota sigma gamma kappa lambda kappa",
+   20
+  ],
+  {},
+  [
+   "beta zeta upsilon",
+   "eta delta theta",
+   "omicron mu rho mu",
+   "rho iota omicron",
+   "delta tau mu kappa",
+   "beta xi gamma eta",
+   "lambda rho upsilon",
+   "mu epsilon lambda",
+   "iota sigma gamma",
+   "kappa lambda kappa"
+  ]
+ ],
+ [
+  "fill",
+  [
+   "beta zeta upsilon eta delta theta omicron mu rho mu rho iota omicron delta tau mu kappa beta xi gamma eta lambda rho upsilon mu epsilon lambda iota sigma gamma kappa lambda kappa",
+   20
+  ],
+  {},
+  "beta zeta upsilon\neta delta theta\nomicron mu rho mu\nrho iota omicron\ndelta tau mu kappa\nbeta xi gamma eta\nlambda rho upsilon\nmu epsilon lambda\niota sigma gamma\nkappa lambda kappa"
+ ],
+ [
+  "wrap",
+  [
+   "kappa pi zeta beta gamma upsilon sigma nu beta theta upsilon mu iota omicron",
+   50
+  ],
+  {
+   "break_long_words": false
+  },
+  [
+   "kappa pi zeta beta gamma upsilon sigma nu beta",
+   "theta upsilon mu iota omicron"
+  ]
+ ],
+ [
+  "fill",
+  [
+   "kappa pi zeta beta gamma upsilon sigma nu beta theta upsilon mu iota omicron",
+   50
+  ],
+  {
+   "break_long_words": false
+  },
+  "kappa pi zeta beta gamma upsilon sigma nu beta\ntheta upsilon mu iota omicron"
+ ],
+ [
+  "wrap",
+  [
+   "beta pi lambda eta epsilon tau epsilon xi",
+   10
+  ],
+  {
+   "break_long_words": false
+  },
+  [
+   "beta pi",
+   "lambda eta",
+   "epsilon",
+   "tau",
+   "epsilon xi"
+  ]
+ ],
+ [
+  "fill",
+  [
+   "beta pi lambda eta epsilon tau epsilon xi",
+   10
+  ],
+  {
+   "break_long_words": false
+  },
+  "beta pi\nlambda eta\nepsilon\ntau\nepsilon xi"
+ ],
+ [
+  "wrap",
+  [
+   "mu epsilon beta xi kappa epsilon omicron upsilon zeta rho omicron pi lambda pi iota kappa pi nu epsilon delta nu sigma zeta pi lambda zeta gamma pi iota rho sigma rho",
+   33
+  ],
+  {},
+  [
+   "mu epsilon beta xi kappa epsilon",
+   "omicron upsilon zeta rho omicron",
+   "pi lambda pi iota kappa pi nu",
+   "epsilon delta nu sigma zeta pi",
+   "lambda zeta gamma pi iota rho",
+   "sigma rho"
+  ]
+ ],
+ [
+  "fill",
+  [
+   "mu epsilon beta xi kappa epsilon omicron upsilon zeta rho omicron pi lambda pi iota kappa pi nu epsilon delta nu sigma zeta pi lambda zeta gamma pi iota rho sigma rho",
+   33
+  ],
+  {},
+  "mu epsilon beta xi kappa epsilon\nomicron upsilon zeta rho omicron\npi lambda pi iota kappa pi nu\nepsilon delta nu sigma zeta pi\nlambda zeta gamma pi iota rho\nsigma rho"
+ ],
+ [
+  "wrap",
+  [
+   "tau beta kappa mu sigma iota pi iota kappa lambda zeta tau alpha pi sigma iota lambda iota omicron kappa rho mu mu iota mu xi mu",
+   20
+  ],
+  {
+   "max_lines": 2,
+   "placeholder": " [...]"
+  },
+  [
+   "tau beta kappa mu",
+   "sigma iota pi [...]"
+  ]
+ ],
+ [
+  "fill",
+  [
+   "tau beta kappa mu sigma iota pi iota kappa lambda zeta tau alpha pi sigma iota lambda iota omicron kappa rho mu mu iota mu xi mu",
+   20
+  ],
+  {
+   "max_lines": 2,
+   "placeholder": " [...]"
+  },
+  "tau beta kappa mu\nsigma iota pi [...]"
+ ],
+ [
+  "wrap",
+  [
+   "lambda rho epsilon rho zeta eta mu pi kappa gamma xi zeta upsilon tau rho xi kappa upsilon sigma iota alpha eta zeta tau omicron upsilon zeta theta",
+   20
+  ],
+  {},
+  [
+   "lambda rho epsilon",
+   "rho zeta eta mu pi",
+   "kappa gamma xi zeta",
+   "upsilon tau rho xi",
+   "kappa upsilon sigma",
+   "iota alpha eta zeta",
+   "tau omicron upsilon",
+   "zeta theta"
+  ]
+ ],
+ [
+  "fill",
+  [
+   "lambda rho epsilon rho zeta eta mu pi kappa gamma xi zeta upsilon tau rho xi kappa upsilon sigma iota alpha eta zeta tau omicron upsilon zeta theta",
+   20
+  ],
+  {},
+  "lambda rho epsilon\nrho zeta eta mu pi\nkappa gamma xi zeta\nupsilon tau rho xi\nkappa upsilon sigma\niota alpha eta zeta\ntau omicron upsilon\nzeta theta"
+ ],
+ [
+  "wrap",
+  [
+   "theta zeta beta epsilon delta lambda zeta pi eta sigma beta xi omicron mu nu upsilon gamma tau eta theta mu alpha mu nu iota xi delta sigma mu beta sigma upsilon kappa delta kappa",
+   33
+  ],
+  {
+   "initial_indent": "* ",
+   "subsequent_indent": "  "
+  },
+  [
+   "* theta zeta beta epsilon delta",
+   "  lambda zeta pi eta sigma beta",
+   "  xi omicron mu nu upsilon gamma",
+   "  tau eta theta mu alpha mu nu",
+   "  iota xi delta sigma mu beta",
+   "  sigma upsilon kappa delta kappa"
+  ]
+ ],
+ [
+  "fill",
+  [
+   "theta zeta beta epsilon delta lambda zeta pi eta sigma beta xi omicron mu nu upsilon gamma tau eta theta mu alpha mu nu iota xi delta sigma mu beta sigma upsilon kappa delta kappa",
+   33
+  ],
+  {
+   "initial_indent": "* ",
+   "subsequent_indent": "  "
+  },
+  "* theta zeta beta epsilon delta\n  lambda zeta pi eta sigma beta\n  xi omicron mu nu upsilon gamma\n  tau eta theta mu alpha mu nu\n  iota xi delta sigma mu beta\n  sigma upsilon kappa delta kappa"
+ ],
+ [
+  "wrap",
+  [
+   "epsilon xi xi tau sigma mu omicron epsilon zeta upsilon nu tau pi eta epsilon upsilon gamma mu alpha nu delta lambda tau upsilon sigma epsilon lambda",
+   50
+  ],
+  {
+   "max_lines": 2,
+   "placeholder": " [...]"
+  },
+  [
+   "epsilon xi xi tau sigma mu omicron epsilon zeta",
+   "upsilon nu tau pi eta epsilon upsilon gamma [...]"
+  ]
+ ],
+ [
+  "fill",
+  [
+   "epsilon xi xi tau sigma mu omicron epsilon zeta upsilon nu tau pi eta epsilon upsilon gamma mu alpha nu delta lambda tau upsilon sigma epsilon lambda",
+   50
+  ],
+  {
+   "max_lines": 2,
+   "placeholder": " [...]"
+  },
+  "epsilon xi xi tau sigma mu omicron epsilon zeta\nupsilon nu tau pi eta epsilon upsilon gamma [...]"
+ ],
+ [
+  "wrap",
+  [
+   "theta pi kappa pi nu nu zeta upsilon upsilon iota kappa pi iota xi alpha lambda kappa pi kappa epsilon pi alpha delta upsilon omicron theta kappa beta epsilon nu alpha pi",
+   33
+  ],
+  {
+   "break_long_words": false
+  },
+  [
+   "theta pi kappa pi nu nu zeta",
+   "upsilon upsilon iota kappa pi",
+   "iota xi alpha lambda kappa pi",
+   "kappa epsilon pi alpha delta",
+   "upsilon omicron theta kappa beta",
+   "epsilon nu alpha pi"
+  ]
+ ],
+ [
+  "fill",
+  [
+   "theta pi kappa pi nu nu zeta upsilon upsilon iota kappa pi iota xi alpha lambda kappa pi kappa epsilon pi alpha delta upsilon omicron theta kappa beta epsilon nu alpha pi",
+   33
+  ],
+  {
+   "break_long_words": false
+  },
+  "theta pi kappa pi nu nu zeta\nupsilon upsilon iota kappa pi\niota xi alpha lambda kappa pi\nkappa epsilon pi alpha delta\nupsilon omicron theta kappa beta\nepsilon nu alpha pi"
+ ],
+ [
+  "wrap",
+  [
+   "beta theta pi iota epsilon kappa kappa pi upsilon pi rho upsilon delta alpha epsilon kappa kappa sigma lambda upsilon kappa rho alpha omicron mu mu tau epsilon beta alpha iota sigma omicron delta sigma",
+   20
+  ],
+  {},
+  [
+   "beta theta pi iota",
+   "epsilon kappa kappa",
+   "pi upsilon pi rho",
+   "upsilon delta alpha",
+   "epsilon kappa kappa",
+   "sigma lambda upsilon",
+   "kappa rho alpha",
+   "omicron mu mu tau",
+   "epsilon beta alpha",
+   "iota sigma omicron",
+   "delta sigma"
+  ]
+ ],
+ [
+  "fill",
+  [
+   "beta theta pi iota epsilon kappa kappa pi upsilon pi rho upsilon delta alpha epsilon kappa kappa sigma lambda upsilon kappa rho alpha omicron mu mu tau epsilon beta alpha iota sigma omicron delta sigma",
+   20
+  ],
+  {},
+  "beta theta pi iota\nepsilon kappa kappa\npi upsilon pi rho\nupsilon delta alpha\nepsilon kappa kappa\nsigma lambda upsilon\nkappa rho alpha\nomicron mu mu tau\nepsilon beta alpha\niota sigma omicron\ndelta sigma"
+ ],
+ [
+  "dedent",
+  [
+   "    a\n    b\n"
+  ],
+  {},
+  "a\nb\n"
+ ],
+ [
+  "dedent",
+  [
+   "\t\tx\n\t\ty\n\t\t z\n"
+  ],
+  {},
+  "x\ny\n z\n"
+ ],
+ [
+  "dedent",
+  [
+   "  a\n\n  b\n"
+  ],
+  {},
+  "a\n\nb\n"
+ ],
+ [
+  "dedent",
+  [
+   "a\n  b\n"
+  ],
+  {},
+  "a\n  b\n"
+ ],
+ [
+  "indent",
+  [
+   "a\nb\n",
+   "> "
+  ],
+  {},
+  "> a\n> b\n"
+ ],
+ [
+  "indent",
+  [
+   "a\n\nb\n",
+   "> "
+  ],
+  {},
+  "> a\n\n> b\n"
+ ],
+ [
+  "indent",
+  [
+   "  x\ny",
+   "> "
+  ],
+  {},
+  ">   x\n> y"
+ ],
+ [
+  "shorten",
+  [
+   "Hello  world, this is a test",
+   12
+  ],
+  {},
+  "Hello [...]"
+ ],
+ [
+  "shorten",
+  [
+   "short",
+   20
+  ],
+  {},
+  "short"
+ ],
+ [
+  "shorten",
+  [
+   "a b c d e f g h",
+   9
+  ],
+  {},
+  "a b [...]"
+ ],
+ [
+  "split",
+  [
+   "a b c"
+  ],
+  {},
+  [
+   "a",
+   "b",
+   "c"
+  ]
+ ],
+ [
+  "split",
+  [
+   "a b c"
+  ],
+  {
+   "comments": true
+  },
+  [
+   "a",
+   "b",
+   "c"
+  ]
+ ],
+ [
+  "split",
+  [
+   "a 'b c' d"
+  ],
+  {},
+  [
+   "a",
+   "b c",
+   "d"
+  ]
+ ],
+ [
+  "split",
+  [
+   "a 'b c' d"
+  ],
+  {
+   "comments": true
+  },
+  [
+   "a",
+   "b c",
+   "d"
+  ]
+ ],
+ [
+  "split",
+  [
+   "x \"y z\" \\\"q"
+  ],
+  {},
+  [
+   "x",
+   "y z",
+   "\"q"
+  ]
+ ],
+ [
+  "split",
+  [
+   "x \"y z\" \\\"q"
+  ],
+  {
+   "comments": true
+  },
+  [
+   "x",
+   "y z",
+   "\"q"
+  ]
+ ],
+ [
+  "split",
+  [
+   "echo $HOME # comment"
+  ],
+  {},
+  [
+   "echo",
+   "$HOME",
+   "#",
+   "comment"
+  ]
+ ],
+ [
+  "split",
+  [
+   "echo $HOME # comment"
+  ],
+  {
+   "comments": true
+  },
+  [
+   "echo",
+   "$HOME"
+  ]
+ ],
+ [
+  "split",
+  [
+   "a\\ b c"
+  ],
+  {},
+  [
+   "a b",
+   "c"
+  ]
+ ],
+ [
+  "split",
+  [
+   "a\\ b c"
+  ],
+  {
+   "comments": true
+  },
+  [
+   "a b",
+   "c"
+  ]
+ ],
+ [
+  "split",
+  [
+   "''"
+  ],
+  {},
+  [
+   ""
+  ]
+ ],
+ [
+  "split",
+  [
+   "''"
+  ],
+  {
+   "comments": true
+  },
+  [
+   ""
+  ]
+ ],
+ [
+  "split",
+  [
+   "a'b'c"
+  ],
+  {},
+  [
+   "abc"
+  ]
+ ],
+ [
+  "split",
+  [
+   "a'b'c"
+  ],
+  {
+   "comments": true
+  },
+  [
+   "abc"
+  ]
+ ],
+ [
+  "quote",
+  [
+   "abc"
+  ],
+  {},
+  "abc"
+ ],
+ [
+  "quote",
+  [
+   "a b"
+  ],
+  {},
+  "'a b'"
+ ],
+ [
+  "quote",
+  [
+   "it's"
+  ],
+  {},
+  "'it'\"'\"'s'"
+ ],
+ [
+  "quote",
+  [
+   ""
+  ],
+  {},
+  "''"
+ ],
+ [
+  "quote",
+  [
+   "$x"
+  ],
+  {},
+  "'$x'"
+ ],
+ [
+  "quote",
+  [
+   "a\"b"
+  ],
+  {},
+  "'a\"b'"
+ ],
+ [
+  "join",
+  [
+   [
+    "a",
+    "b c"
+   ]
+  ],
+  {},
+  "a 'b c'"
+ ],
+ [
+  "join",
+  [
+   [
+    "it's",
+    "x"
+   ]
+  ],
+  {},
+  "'it'\"'\"'s' x"
+ ],
+ [
+  "join",
+  [
+   []
+  ],
+  {},
+  ""
+ ]
+]
