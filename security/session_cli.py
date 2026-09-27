@@ -17,7 +17,7 @@ simple to spawn, simple to pipe, no new transport to build.
 
 Protocol (all newline-delimited JSON):
 
-  Request:   {"request_id": "...", "code": "...", "ephemeral": bool?, "ceiling": {...}?, "payload": str?}
+  Request:   {"request_id": "...", "code": "...", "ephemeral": bool?, "ceiling": {...}?, "payload": str | {name: str}?}
   Response:  {"request_id": "...", "success": bool, "data": ..., "display": str?, "output": str?,
               "error": ..., "epoch": "...", "interrupted": bool, "call": int?, "bindings": [str]?, "session_dead": true?}
              `call` numbers a persistent turn; Neura.output(call) returns everything it printed.
@@ -45,6 +45,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from session import NeuraSession, SessionDeadError  # noqa: E402
+
+
+def _payload(value):
+    """Text, or an object of named texts; anything else is dropped."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in value.items()):
+        return value
+    return None
 
 
 def _respond(resp: dict) -> None:
@@ -141,7 +150,7 @@ def main() -> int:
                     code,
                     ephemeral=bool(req.get("ephemeral", False)),
                     ephemeral_ceiling=req.get("ceiling"),
-                    payload=req.get("payload") if isinstance(req.get("payload"), str) else None,
+                    payload=_payload(req.get("payload")),
                 )
                 _respond({
                     "request_id": request_id,

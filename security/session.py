@@ -240,7 +240,7 @@ class NeuraSession:
         return not self._closed and self._proc.poll() is None
 
     def turn(self, code: str, *, ephemeral: bool = False, ephemeral_ceiling: dict | None = None,
-             payload: str | None = None) -> dict:
+             payload: str | dict[str, str] | None = None) -> dict:
         """Send one script to the persistent worker and block for its one
         response. Raises SessionDeadError if the process is gone -- never
         silently relaunches; a new process would mean a new epoch, i.e. a
@@ -257,7 +257,8 @@ class NeuraSession:
 
         `payload` is bound as `PAYLOAD` for this turn: text, such as a file's
         contents, that the turn uses without it passing through Julia's
-        string syntax.
+        string syntax, or named texts (`{"old": ..., "new": ...}`) that the
+        turn reads as `PAYLOAD["old"]`.
 
         The worker enforces `turn_timeout` itself: it interrupts a turn that
         is waiting (sleep, a subprocess, I/O) and keeps the kernel. This call

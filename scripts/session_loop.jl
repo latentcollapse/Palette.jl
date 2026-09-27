@@ -177,11 +177,12 @@ function with_hint(err, code)
     err isa AbstractString || return err
     if (name = interpolated_undefined_name(err, code)) !== nothing
         return err * "\nHint: `$name` is interpolated into a string in this call (`\$$name`). If the string holds text for a file, " *
-               "write `\\\$$name`, or pass the text as this call's payload and use write(path, PAYLOAD): a payload is not parsed."
+               "write `\\\$$name`, or pass the text as this call's payload, which is not parsed: write(path, PAYLOAD), or for an edit " *
+               "payload {\"old\": ..., \"new\": ...} and replace(text, PAYLOAD[\"old\"] => PAYLOAD[\"new\"])."
     elseif (lines = docstring_closed_string(err, code)) !== nothing
         return err * "\nHint: the string that begins on line $(lines[1]) ends at the docstring's \"\"\" on line $(lines[2]), " *
-               "so the lines after it ran as code. Pass the file's text as this call's payload and use write(path, PAYLOAD): " *
-               "a payload is not parsed, so its quotes need no escaping."
+               "so the lines after it ran as code. Pass the text as this call's payload, which is not parsed: write(path, PAYLOAD), " *
+               "or for an edit payload {\"old\": ..., \"new\": ...} and replace(text, PAYLOAD[\"old\"] => PAYLOAD[\"new\"])."
     elseif occursin("must be quoted in commands", err)
         return err * "\nHint: backticks start one program without a shell. " *
                "Use sh\"...\" or bash(\"...\") for pipes, globs, redirects and &&."
@@ -264,7 +265,13 @@ for line in eachline(PROTO_IN)
         code isa String || error("request 'code' must be a string")
         timeout_s === nothing || timeout_s isa Real && timeout_s > 0 || error("request 'timeout_s' must be a positive number")
         payload = get(req, "payload", nothing)
-        payload === nothing || payload isa String || error("request 'payload' must be a string")
+        # Text, or named texts ({"old": ..., "new": ...}) for an edit that needs
+        # more than one: PAYLOAD["old"].
+        if payload isa AbstractDict
+            all(v -> v isa String, values(payload)) || error("request 'payload' parts must be strings")
+            payload = Dict{String, String}(String(k) => v for (k, v) in payload)
+        end
+        payload === nothing || payload isa Union{String, Dict{String, String}} || error("request 'payload' must be a string or an object of strings")
         if kind == "EPHEMERAL"
             requested_ceiling = get(req, "ceiling", Dict{String,Any}())
             requested_ceiling isa AbstractDict || error("request 'ceiling' must be an object")
