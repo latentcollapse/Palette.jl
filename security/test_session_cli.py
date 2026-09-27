@@ -300,6 +300,18 @@ class TestSessionCli(unittest.TestCase):
         self.assertFalse(r["success"], r)
         self.assertNotIn("docstring", r["error"])
 
+    def test_an_undefined_name_interpolated_into_file_text_is_named(self):
+        """Julia source for a file, written as a string literal: its `$K`
+        ran in the kernel and failed as an undefined name, 13 times in the
+        endurance runs, with no word about interpolation."""
+        r = self._turn('write("f.jl", "function f(d::Dict{K,V}) where {K,V}\\n    error(\\"bad key type $K\\")\\nend\\n")')
+        self.assertFalse(r["success"], r)
+        self.assertIn("`K` is interpolated into a string", r["error"])
+        self.assertIn("write(path, PAYLOAD)", r["error"])
+        r = self._turn("undefined_thing + 1")
+        self.assertFalse(r["success"], r)
+        self.assertNotIn("interpolated", r["error"])
+
     def test_display_does_not_corrupt_the_protocol(self):
         """display() wrote to the stdout captured at startup, which is the
         protocol pipe, and killed the session."""
