@@ -100,6 +100,33 @@ Tools: `docs/rnd-2026-09-27/pilot.py`, `pilot_analyze.py`.
 
 **The remaining lever is structural.** 72 of 277 edits needed two or more snippets (old and new text), and `payload` carries one string. A `payload` that accepts several named strings is the next thing to try. It is a new abstraction, so it needs its own evidence pass.
 
+### 5b. Named payload texts remove the quoting tax once adopted
+
+**Hypothesis.** The hints did not move Luna because `payload` could not carry what it needed. In the hint pilot, 90% of the inline writes after the first quoting failure embedded two or more texts, an edit's old and new, and one payload string cannot hold both. In the one hinted run that switched, the edits were appends, which one string can express.
+
+**Change:**
+- Lab branch `rnd/payload-parts` (`be972d5`): `payload` may be `{name: text}`, read as `PAYLOAD["old"]`. A string payload works as before. The hints show the edit form.
+- NP2 `2aaa128e2`: behind the experiment switch `NEURAJL_PAYLOAD_PARTS=1`, the schema accepts a string or an object of strings, and the descriptions say how to edit with it. With the switch off, the schema and descriptions were checked to be identical to before.
+- Test: `test_named_payload_texts_carry_an_edit`.
+
+**Pilot.** The same task and harness as finding 5, with 4 runs in a "parts" arm.
+
+| Arm | Runs that adopted `payload` | Payload calls using named texts | Quoting failures before adoption | After adoption |
+|---|---|---|---|---|
+| control (4) | 0 | – | – | – |
+| hints (4) | 1 | – | – | – |
+| **parts (4)** | **4** | **51 of 51** | 1, 3, 1, 1 | **0, 0, 0, 0** |
+
+- After adoption there were **no quoting failures and no inline triple-quoted writes**, in any of the four parts runs.
+- Two of the four adopted without a preceding failure, at their first multi-text edit. That is proactive use, which no hints or control run showed.
+- Grades were unchanged: 11/13 in all twelve pilot runs.
+
+**Limits.**
+- Four runs on one task.
+- The failures before adoption remain: the model starts out with the inline habit.
+- Before making it the default, the next step is a run on a different kind of work, such as the stdlib ports, where whole files are written.
+- It was not deployed in tin1: the running NP2 driver has neither the switch nor the schema.
+
 ### 6. The snapshot tax, and the check for a waiting request that never worked
 
 **Evidence, from tin1:**

@@ -245,3 +245,64 @@ emailutils: 0/26 (no ports/emailutils.jl)
 literal: 0/43 (no ports/literal.jl)
 ports total: 1032/2903
 ```
+
+## Checkpoint at 5.01 h (2026-09-27 09:10:21)
+
+- driver alive: True; follow-ups delivered: 19/50 (last: p09-random.txt)
+- kernel_rss_mb: 1538
+- driver_rss_mb: 14
+- sandbox_tmp_bytes: 7729995
+- state_root_bytes: 119360914
+- kernel_pid: 2245925
+- neurajl_calls: 822
+- compactions: 26
+- requests: 1717
+- request_errors: 208
+- cost_usd: 2.0837
+- in: 4600171
+- out: 1699344
+- cacheR: 56534420
+- retries: 142
+- backup_retries: 48
+- stall_aborts: 0
+- recoveries: 34
+- followups_started: 19
+- trace_mb: 13.9
+
+Live port grade:
+
+```
+fnmatch: 178/178
+shlex: 41/41
+textwrap: 70/70
+difflib: 57/57
+difflib2: 0/50  first failures: unified_diff[[],["inserted z"],"a.txt","b.txt",0] | unified_diff[[],["inserted z"],"a.txt","b.txt",1] | unified_diff[[],["inserted z"],"a.txt","b.txt",3]
+string: 0/51 (no ports/string.jl)
+heapq: 63/63
+statistics: 0/180 (no ports/statistics.jl)
+csv: 0/30 (no ports/csv.jl)
+colorsys: 0/84 (no ports/colorsys.jl)
+bisect: 0/107 (no ports/bisect.jl)
+base64: 116/116
+urlparse: 0/133 (no ports/urlparse.jl)
+posixpath: 0/111 (no ports/posixpath.jl)
+calendar: 0/43 (no ports/calendar.jl)
+fractions: 0/70 (no ports/fractions.jl)
+json: 40/40
+numeric: 0/88 (no ports/numeric.jl)
+struct: 0/73 (no ports/struct.jl)
+graphlib: 0/24 (no ports/graphlib.jl)
+format: 537/583  first failures: format_value[{"__float__":"inf"},""] | format_value[{"__float__":"inf"},"f"] | format_value[{"__float__":"inf"},".2f"]
+pystr: 0/216 (no ports/pystr.jl)
+random: 0/81 (no ports/random.jl)
+configparser: 0/28 (no ports/configparser.jl)
+ipaddress: 0/47 (no ports/ipaddress.jl)
+strftime: 0/74 (no ports/strftime.jl)
+checksum: 0/44 (no ports/checksum.jl)
+pprint: 0/40 (no ports/pprint.jl)
+itertools: 0/40 (no ports/itertools.jl)
+escape: 0/72 (no ports/escape.jl)
+emailutils: 0/26 (no ports/emailutils.jl)
+literal: 0/43 (no ports/literal.jl)
+ports total: 1102/2903
+```
