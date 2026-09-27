@@ -433,8 +433,9 @@ function run_bash(script::AbstractString)
     # up to the call's time limit, which then killed it. Only bash is waited
     # for; what the job writes later is reported at the start of a later call.
     out, err = tempname(), tempname()
-    p = open(out, "w") do o
-        open(err, "w") do e
+    # Append mode, so the files can be truncated safely once reported (turn.jl).
+    p = open(out, "a") do o
+        open(err, "a") do e
             run(pipeline(ignorestatus(`bash -c $script`); stdout=o, stderr=e))
         end
     end

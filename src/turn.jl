@@ -114,7 +114,7 @@ function late_output()
         total > read_to || continue
         skip = max(read_to, total - MAX_BACKGROUND_BYTES)
         push!(parts, open(f -> (seek(f, skip); String(read(f))), path))
-        LATE_FILES[i] = (path, total)
+        LATE_FILES[i] = (path, drop_reported!(path, total))
     end
     return join(parts)
 end
@@ -266,6 +266,16 @@ const SINK = Ref{Union{Nothing, IOStream}}(nothing)
 const SINK_PATH = Ref("")
 const SINK_READ = Ref(0)
 const MAX_BACKGROUND_BYTES = 16 * 1024
+# Output already reported is dropped once a file holding it passes this size:
+# the sandbox's /tmp is memory, and a chatty background job (50 KB/s in the
+# endurance pass) grew it by 4 GB a day. Every writer holds these files in
+# append mode, so truncating them is safe.
+const MAX_REPORTED_BYTES = 1024 * 1024
+function drop_reported!(path::String, read_to::Int)
+    read_to > MAX_REPORTED_BYTES || return read_to
+    open(path, "w") do _ end   # truncate
+    return 0
+end
 const REPORTED_TASKS = WeakKeyDict{Task, Nothing}()
 
 """
@@ -283,7 +293,7 @@ function report_background(mod::Module)
         if total > SINK_READ[]
             skip = max(SINK_READ[], total - MAX_BACKGROUND_BYTES)
             text *= open(f -> (seek(f, skip); String(read(f))), SINK_PATH[])
-            SINK_READ[] = total
+            SINK_READ[] = drop_reported!(SINK_PATH[], total)
         end
     end
     if !isempty(text)

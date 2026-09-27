@@ -465,6 +465,20 @@ class TestSessionCli(unittest.TestCase):
         r = self._turn("1")
         self.assertIn("[background output since the last call]\nlate\n", r["output"])
 
+    def test_reported_background_output_does_not_accumulate_in_tmp(self):
+        """The sandbox's /tmp is memory; a chatty background job grew it by
+        4 GB a day because output stayed in the sink after it was reported."""
+        r = self._turn('@async (sleep(0.5); for i in 1:3000; println(repeat("y", 1000)); end); :started')
+        self.assertTrue(r["success"], r)
+        time.sleep(2)
+        r = self._turn('1')
+        self.assertIn("[background output since the last call]", r["output"])
+        r = self._turn('(filesize(joinpath(tempdir(), "neurajl-background-output.log")), '
+                       'parse(Int, split(read(`du -sb /tmp`, String))[1]))')
+        sink, tmp = r["data"]
+        self.assertLess(sink, 100_000, r)
+        self.assertLess(tmp, 1_500_000, r)
+
     def test_file_changed_since_a_call_used_it_is_reported(self):
         """A binding computed from a workspace file kept the old contents
         after the file changed outside the call, with nothing to say so."""
