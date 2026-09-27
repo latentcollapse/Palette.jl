@@ -1,0 +1,14 @@
+New task, in the same repository. Port: module PyShlex in ports/shlex.jl. Python's shlex in POSIX mode: split(s) (comments=False), shell_quote(s) (shlex.quote; quote is a Julia keyword), join(parts). An unclosed quote or a trailing escape is an error (throw).
+
+Functions:
+  - split(s::AbstractString) -> Vector{String}
+  - shell_quote(s::AbstractString) -> String (shlex.quote)
+  - join(parts::AbstractVector) -> String
+
+A few examples (arguments shown as JSON):
+  split("a b c") -> ["a", "b", "c"]
+  split("  a   b  ") -> ["a", "b"]
+  split("'a b' c") -> ["a b", "c"]
+  split("'unclosed") -> throws
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

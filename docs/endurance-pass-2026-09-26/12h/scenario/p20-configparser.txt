@@ -1,0 +1,13 @@
+New task, in the same repository. Port: module PyConfig in ports/configparser.jl. Python's configparser.ConfigParser reading from a string with default settings: = and : delimiters, # and ; full-line comments only, keys lowercased, values stripped, indented continuation lines (empty lines inside values kept per Python's rules), the DEFAULT section merged into every section's items, BasicInterpolation (%(name)s, %% escape, max depth 10) for read_string and none for read_raw. Duplicate sections or options, missing section headers, lines without a delimiter, and bad interpolation throw. Return an insertion-ordered dict: section -> (key -> value), with sections in file order and keys in Python's items() order.
+
+Functions:
+  - read_string(text) -> AbstractDict
+  - read_raw(text) -> AbstractDict
+
+A few examples (arguments shown as JSON):
+  read_string("[a]\nx = 1\ny: two\n") -> {"a": {"x": "1", "y": "two"}}
+  read_raw("[a]\nx = 1\ny: two\n") -> {"a": {"x": "1", "y": "two"}}
+  read_string("[DEFAULT]\nbase = /srv\n[paths]\nlogs = %(base)s/logs\nlit = 100%%\n") -> {"paths": {"base": "/srv", "logs": "/srv/logs", "lit": "100%"}}
+  read_string("[s]\na=1\n[s]\nb=2\n") -> throws
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

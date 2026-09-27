@@ -1,0 +1,26 @@
+New task, in the same repository. Port: module PyStr in ports/pystr.jl. Python str methods with Python's exact Unicode semantics: title (word boundaries are any non-cased character, so "they're" -> "They'Re"), capitalize, swapcase, casefold (full case folding, ß -> ss), splitlines (every Python line boundary, including \x1c-\x1e, \x85, \u2028, \u2029, \v, \f), expandtabs, center (Python's placement of the odd padding character), zfill, partition/rpartition, split/rsplit with sep === nothing meaning whitespace runs and maxsplit -1 meaning no limit, strip with chars === nothing meaning whitespace, isidentifier, and repr() of a string (quote choice, escapes, printable non-ASCII kept).
+
+Functions:
+  - title(s)
+  - capitalize(s)
+  - swapcase(s)
+  - casefold(s)
+  - splitlines(s, keepends::Bool)
+  - expandtabs(s, tabsize)
+  - center(s, width, fill)
+  - zfill(s, width)
+  - partition(s, sep)
+  - rpartition(s, sep)
+  - split(s, sep, maxsplit)
+  - rsplit(s, sep, maxsplit)
+  - strip(s, chars)
+  - isidentifier(s)
+  - str_repr(s)
+
+A few examples (arguments shown as JSON):
+  title("hello world") -> "Hello World"
+  capitalize("hello world") -> "Hello world"
+  swapcase("hello world") -> "HELLO WORLD"
+  partition("abc", "") -> throws
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

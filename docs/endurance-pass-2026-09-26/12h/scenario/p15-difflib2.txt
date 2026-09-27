@@ -1,0 +1,13 @@
+New task, in the same repository. Extend the port: module PyDifflib in ports/difflib.jl. In the same PyDifflib module (ports/difflib.jl): the line-diff generators of Python's difflib, returned as vectors of lines with lineterm="" (no trailing newlines). For ndiff the input lines are given without newlines; behave as Python's ndiff does when every line ends in "\n", with the newline stripped from each output line, including the "? " hint lines (default charjunk=IS_CHARACTER_JUNK, linejunk=None).
+
+Functions:
+  - unified_diff(a::AbstractVector, b::AbstractVector, fromfile, tofile, n::Integer) -> Vector{String}
+  - context_diff(a, b, fromfile, tofile, n::Integer) -> Vector{String}
+  - ndiff(a::AbstractVector, b::AbstractVector) -> Vector{String}
+
+A few examples (arguments shown as JSON):
+  unified_diff([], ["inserted z"], "a.txt", "b.txt", 0) -> ["--- a.txt", "+++ b.txt", "@@ -0,0 +1 @@", "+inserted z"]
+  unified_diff([], ["inserted z"], "a.txt", "b.txt", 1) -> ["--- a.txt", "+++ b.txt", "@@ -0,0 +1 @@", "+inserted z"]
+  unified_diff([], ["inserted z"], "a.txt", "b.txt", 3) -> ["--- a.txt", "+++ b.txt", "@@ -0,0 +1 @@", "+inserted z"]
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

@@ -1,0 +1,14 @@
+New task, in the same repository. Port: module PyStruct in ports/struct.jl. Python's struct.pack / unpack / calcsize on x86-64 Linux for the codes x c b B ? h H i I l L q Q n N e f d s p and byte-order prefixes @ = < > ! (native @ uses native sizes and alignment; the others standard sizes and no alignment), with repeat counts. Bytes values (for c, s and p) are passed and returned as Latin-1 strings; packed data is a lowercase hex string. Range errors, wrong argument counts, and wrong buffer lengths throw.
+
+Functions:
+  - pack(fmt, values::AbstractVector) -> hex String
+  - unpack(fmt, hex) -> Vector
+  - calcsize(fmt) -> Int
+
+A few examples (arguments shown as JSON):
+  pack("<h", [1]) -> "0100"
+  pack(">h", [-2]) -> "fffe"
+  pack("!I", [4294967295]) -> "ffffffff"
+  pack("<B", [256]) -> throws
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

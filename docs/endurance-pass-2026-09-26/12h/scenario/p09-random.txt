@@ -1,0 +1,19 @@
+New task, in the same repository. Port: module PyRandom in ports/random.jl. Bit-exact reproduction of CPython's random.Random for integer seeds: the MT19937 generator, CPython's seeding (init_by_array over the 32-bit words of abs(seed)), random() from two 32-bit outputs, getrandbits, randrange via _randbelow's rejection sampling, shuffle, choice, sample (both of its internal algorithms, selected by population size), gauss (with its cached second value) and uniform. Each function starts from a fresh generator seeded with seed.
+
+Functions:
+  - random_floats(seed, n)
+  - getrandbits_seq(seed, k, n) (k <= 62)
+  - randrange_seq(seed, start, stop, step, n)
+  - shuffle(seed, xs)
+  - choice_seq(seed, xs, n)
+  - sample(seed, xs, k)
+  - gauss_seq(seed, mu, sigma, n)
+  - uniform_seq(seed, a, b, n)
+
+A few examples (arguments shown as JSON):
+  random_floats(0, 5) -> [0.8444218515250481, 0.7579544029403025, 0.420571580830845, 0.25891675029296335, 0.5112747213686085]
+  getrandbits_seq(0, 1, 8) -> [1, 0, 1, 1, 0, 0, 0, 1]
+  getrandbits_seq(0, 33, 3) -> [3626764237, 7550356652, 1806341205]
+  randrange_seq(1, 5, 5, 1, 1) -> throws
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

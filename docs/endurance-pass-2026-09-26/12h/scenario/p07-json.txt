@@ -1,0 +1,11 @@
+New task, in the same repository. Port: module PyJson in ports/json.jl. Python's json.dumps output, byte for byte: separators (", " and ": " without indent; "," and newline with it; indent 0 still inserts newlines), float formatting as Python's float repr (1e+16, 1e-05, 0.1, 2.0), ensure_ascii \uXXXX escapes with surrogate pairs above U+FFFF, the short escapes (\n, \", \\ and so on), sort_keys, and nested empty containers ([] and {}). obj arrives as parsed JSON: an insertion-ordered AbstractDict{String,Any}, Vector{Any}, String, Int64, Float64, Bool or nothing.
+
+Functions:
+  - dumps(obj, indent, sort_keys::Bool, ensure_ascii::Bool) -> String (indent === nothing means compact)
+
+A few examples (arguments shown as JSON):
+  dumps({"b": 1, "a": [1, 2.0, null, true, false], "c": {"z": {}, "y": []}}, null, false, true) -> "{\"b\": 1, \"a\": [1, 2.0, null, true, false], \"c\": {\"z\": {}, \"y\": []}}"
+  dumps({"b": 1, "a": [1, 2.0, null, true, false], "c": {"z": {}, "y": []}}, 2, true, true) -> "{\n  \"a\": [\n    1,\n    2.0,\n    null,\n    true,\n    false\n  ],\n  \"b\": 1,\n  \"c\": {\n    \"y\": [],\n    \"z\": {}\n  }\n}"
+  dumps({"b": 1, "a": [1, 2.0, null, true, false], "c": {"z": {}, "y": []}}, 0, false, false) -> "{\n\"b\": 1,\n\"a\": [\n1,\n2.0,\nnull,\ntrue,\nfalse\n],\n\"c\": {\n\"z\": {},\n\"y\": []\n}\n}"
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

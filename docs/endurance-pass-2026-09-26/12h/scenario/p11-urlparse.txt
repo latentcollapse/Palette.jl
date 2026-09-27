@@ -1,0 +1,20 @@
+New task, in the same repository. Port: module PyUrlparse in ports/urlparse.jl. Python's urllib.parse: urlsplit/urlunsplit (5-part, allow_fragments on), quote/quote_plus/unquote/unquote_plus (UTF-8, errors="replace" on decode), urlencode of [key, value] pairs, parse_qsl (& separator only), and urljoin including every RFC 3986 relative-reference example. urlsplit raises on an invalid IPv6 netloc; throw there.
+
+Functions:
+  - urlsplit(url) -> [scheme, netloc, path, query, fragment]
+  - urlunsplit(parts::AbstractVector) -> String
+  - url_quote(s, safe) -> String (urllib.parse.quote; quote is a Julia keyword)
+  - quote_plus(s)
+  - unquote(s)
+  - unquote_plus(s)
+  - urlencode(pairs) -> String
+  - parse_qsl(qs, keep_blank_values::Bool) -> vector of [k, v]
+  - urljoin(base, url) -> String
+
+A few examples (arguments shown as JSON):
+  urlsplit("http://www.example.com:80/path;p?q=1&r=2#frag") -> ["http", "www.example.com:80", "/path;p", "q=1&r=2", "frag"]
+  urlsplit("HTTPS://User:Pw@Host.COM/a/b/") -> ["https", "User:Pw@Host.COM", "/a/b/", "", ""]
+  urlsplit("mailto:someone@example.com") -> ["mailto", "", "someone@example.com", "", ""]
+  urlsplit("http://[::1/x") -> throws
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

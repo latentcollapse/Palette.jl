@@ -1,0 +1,19 @@
+New task, in the same repository. Port: module PyHeapq in ports/heapq.jl. Python's heapq, including the exact array layout its sift algorithms produce (heapify, heappush, heappop, heappushpop, heapreplace are compared element by element, not just as valid heaps). replace_seq on an empty heap throws, as heapreplace does.
+
+Functions:
+  - heapify(xs) -> Vector (a new heapified copy)
+  - push_all(xs) -> heap after heappush of each x onto an empty heap
+  - pop_all(xs) -> heapify a copy, then heappop until empty
+  - pushpop_seq(heap, items) -> [results, final_heap] (heap is heapified first)
+  - replace_seq(heap, items) -> [results, final_heap]
+  - nsmallest(n, xs)
+  - nlargest(n, xs)
+  - merge(lists) -> merged Vector
+
+A few examples (arguments shown as JSON):
+  heapify([]) -> []
+  push_all([]) -> []
+  pop_all([]) -> []
+  replace_seq([], [23, 41, -44, -54, -54, -7]) -> throws
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

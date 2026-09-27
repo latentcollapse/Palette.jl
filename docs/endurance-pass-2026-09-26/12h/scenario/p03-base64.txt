@@ -1,0 +1,20 @@
+New task, in the same repository. Port: module PyBase64 in ports/base64.jl. Python's base64 encodings of the UTF-8 bytes of a string (decoders return the decoded bytes as a UTF-8 string). b64decode is strict (validate=True): bad characters or bad padding throw. b32decode and a85decode throw on malformed input as Python does. Defaults everywhere else (a85encode: no foldspaces, no wrapcol, no pad).
+
+Functions:
+  - b64encode(s::AbstractString) -> String
+  - b64decode(s::AbstractString) -> String
+  - urlsafe_b64encode(s::AbstractString) -> String
+  - b32encode(s::AbstractString) -> String
+  - b32decode(s::AbstractString) -> String
+  - b16encode(s::AbstractString) -> String
+  - b85encode(s::AbstractString) -> String
+  - a85encode(s::AbstractString) -> String
+  - a85decode(s::AbstractString) -> String
+
+A few examples (arguments shown as JSON):
+  b64encode("") -> ""
+  urlsafe_b64encode("") -> ""
+  b32encode("") -> ""
+  b64decode("Zm9v=") -> throws
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.
