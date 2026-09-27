@@ -131,9 +131,35 @@ end
 # assignment (`end = 3`), a keyword argument or a loop variable. Julia's
 # parser reports these as "Expected `end`" several columns away.
 const RESERVED_AS_NAME = r"(?:^|[(,;\s])(quote|end|begin|let|local|global|module|baremodule|struct|macro|do|try|catch|finally|export|import|using|const|return|break|continue|function|if|elseif|else|while|for|abstract|primitive|mutable|public)\s*(?:::|=(?!=)|,\s*\w|\s+in\s)"
+# Source with a docstring, embedded in a triple-quoted string: the docstring's
+# own """ line ends the string, and the lines after it run as code. In the
+# endurance runs this failed as `invalid keyword argument name "last::Bool"`
+# or an undefined name, far from the cause. Returns the line the string began
+# on and the line that ended it, when the error is in the lines that leaked.
+function docstring_closed_string(err::AbstractString, code::AbstractString)
+    m = match(r"around call \d+:(\d+)|at this call, line (\d+)|# Error @ this call, line (\d+)", err)
+    m === nothing && return nothing
+    errline = parse(Int, something(m.captures...))
+    linenum(i) = count(==('\n'), SubString(code, 1, prevind(code, i))) + 1
+    for open in eachmatch(r"(?:=|\(|\*|=>|,)\s*\"\"\"", code)
+        start = open.offset + ncodeunits(open.match)
+        close = match(r"\n[ \t]*\"\"\"[ \t]*\n(?=[ \t]+\S)", code, start)
+        close === nothing && continue
+        after = close.offset + ncodeunits(close.match)
+        next = findnext("\"\"\"", code, after)
+        next === nothing && continue
+        linenum(after) <= errline <= linenum(first(next)) && return (linenum(start), linenum(close.offset + 1))
+    end
+    return nothing
+end
+
 function with_hint(err, code)
     err isa AbstractString || return err
-    if occursin("must be quoted in commands", err)
+    if (lines = docstring_closed_string(err, code)) !== nothing
+        return err * "\nHint: the string that begins on line $(lines[1]) ends at the docstring's \"\"\" on line $(lines[2]), " *
+               "so the lines after it ran as code. Pass the file's text as this call's payload and use write(path, PAYLOAD): " *
+               "a payload is not parsed, so its quotes need no escaping."
+    elseif occursin("must be quoted in commands", err)
         return err * "\nHint: backticks start one program without a shell. " *
                "Use sh\"...\" or bash(\"...\") for pipes, globs, redirects and &&."
     elseif startswith(err, "ParseError") && occursin(r"after \$ in string|interpolat", err)

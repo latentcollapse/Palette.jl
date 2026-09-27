@@ -12,9 +12,11 @@
 # - data bindings are deserialized, in groups that keep shared references
 #   shared, only when Julia, the packages and every user type they use are
 #   unchanged;
-# - everything else (tasks, processes, IO, pointers, closures, values built
-#   from an earlier version of a type) is reported lost, with the code that
-#   made it.
+# - closures and anonymous functions are data too: Serialization carries a
+#   closure's own type and method, and its captured values are checked like
+#   any struct's fields;
+# - everything else (tasks, processes, IO, pointers, values built from an
+#   earlier version of a type) is reported lost, with the code that made it.
 #
 # Nothing is reported restored unless it is the same value or the same
 # definition. Anything uncertain is reported as such, or as lost.
@@ -66,7 +68,7 @@ evaluated again.
 function definition_kind(ex)
     ex isa Expr || return nothing
     h = ex.head
-    h in (:function, :macro, :struct, :abstract, :primitive) && return "def"
+    h in (:function, :macro, :struct, :abstract, :primitive, :module) && return "def"
     h === :(=) && is_signature(ex.args[1]) && return "def"
     h in (:using, :import) && return "using"
     h === :const && return "const"
@@ -103,6 +105,8 @@ function defined_names(ex)
         return endswith(macro_name(ex), "@enum") ? enum_names(ex) : defined_names(ex.args[end])
     elseif h in (:struct,)
         return [string(type_head(ex.args[2]))]
+    elseif h === :module
+        return [string(ex.args[2])]
     elseif h in (:abstract, :primitive)
         return [string(type_head(ex.args[1]))]
     elseif h in (:function, :macro, :(=))
@@ -146,9 +150,28 @@ end
 Appends the definition statements of `code` to DEFINITION_LOG. Called for
 every call, successful or not: a failed call may have defined things before
 it failed, and the check after a revival compares against what the kernel
-really had.
+really had. A failed call's statement that bound nothing is left out.
 """
-function log_definitions!(code::String, call::Int)
+# The names a `using`/`import` binds: `using A` binds A, `using A: f` binds
+# f, `import A.B as C` binds C.
+function imported_names(ex)
+    out = String[]
+    last_name(p) = p isa Expr && p.head === :. ? string(p.args[end]) : string(p)
+    for a in ex.args
+        if a isa Expr && a.head === :(:)
+            for b in a.args[2:end]
+                push!(out, b isa Expr && b.head === :as ? string(b.args[2]) : last_name(b))
+            end
+        elseif a isa Expr && a.head === :as
+            push!(out, string(a.args[2]))
+        else
+            push!(out, last_name(a))
+        end
+    end
+    return out
+end
+
+function log_definitions!(code::String, call::Int; failed_in::Union{Nothing, Module}=nothing)
     ex = try
         Meta.parseall(code; filename="call $call")
     catch
@@ -164,6 +187,15 @@ function log_definitions!(code::String, call::Int)
             entry["path"] = path
             entry["stamp"] = isfile(path) ? collect(file_stamp(path)) : nothing
             entry["names"] = isfile(path) ? unique(reduce(vcat, (defined_names(d) for (_, d) in file_definitions(path)); init=String[])) : String[]
+        end
+        # In a call that failed, a statement after the error never ran. One
+        # that bound nothing is left out, or a revival would report the loss
+        # of something the kernel never had.
+        if failed_in !== nothing
+            # A method of another module's function (`Base.show`) cannot be
+            # looked up by name here, so it is kept.
+            bound = kind == "using" ? imported_names(st) : entry["names"]
+            !isempty(bound) && !any(n -> occursin('.', n) || Base.invokelatest(isdefined, failed_in, Symbol(n)), bound) && continue
         end
         push!(DEFINITION_LOG, entry)
     end
@@ -224,22 +256,56 @@ end
 # A function type the kernel created for an anonymous function or closure.
 anonymous_function_type(T) = T isa DataType && T <: Function && startswith(string(nameof(T)), '#')
 
-const CLOSURE_FREE = IdDict{Any, Bool}()
-function closure_free(T)
-    get!(CLOSURE_FREE, T) do
-        anonymous_function_type(T) && return false
-        T isa DataType || return true
-        CLOSURE_FREE[T] = true   # recursive types
-        all(closure_free, T.parameters) && (!isstructtype(T) || all(closure_free, fieldtypes(T)))
-    end
+# Serialization sends a closure's whole type (its method included) only for
+# closures of the real Main; one of the kernel's module it sends by name, and a
+# new kernel would find no such type, or worse, a same-named closure of a
+# later definition. This serializer sends the kernel's closures whole, so a
+# revived closure runs the code it was made with.
+mutable struct SnapshotSerializer{I<:IO} <: Serialization.AbstractSerializer
+    io::I
+    counter::Int
+    table::IdDict{Any, Any}
+    pending_refs::Vector{Int}
+    known_object_data::Dict{UInt64, Any}
+    version::Int
+    mod::Module
+    SnapshotSerializer(io::I, mod::Module) where {I<:IO} =
+        new{I}(io, 0, IdDict{Any, Any}(), Int[], Dict{UInt64, Any}(), Serialization.ser_version, mod)
+end
+
+Serialization.should_send_whole_type(s::SnapshotSerializer, t::DataType) =
+    (t.name.module === s.mod && anonymous_function_type(t)) ||
+    invoke(Serialization.should_send_whole_type, Tuple{Any, DataType}, s, t)
+
+function snapshot_bytes(mod::Module, x)
+    buf = IOBuffer()
+    s = SnapshotSerializer(buf, mod)
+    Serialization.writeheader(s)
+    serialize(s, x)
+    return take!(buf)
+end
+
+# A closure deserializes with its own method, so its code must come from the
+# kernel's module or from a package the new kernel loads too.
+function closure_module_refusal(w::Walk, T::DataType)
+    m = parentmodule(T)
+    m === w.mod && return nothing
+    Base.moduleroot(m) in (Base, Core) || haskey(Base.loaded_modules, Base.PkgId(Base.moduleroot(m))) ||
+        return "it is a closure from module $(m), which a new kernel does not load"
+    return nothing
 end
 
 function check_type(w::Walk, @nospecialize(T))
     T isa DataType || return nothing
-    closure_free(T) || return "it is or holds an anonymous function (closure)"
+    anonymous_function_type(T) && (r = closure_module_refusal(w, T)) !== nothing && return r
     for p in T.parameters
         p isa Type && (r = check_type(w, p)) !== nothing && return r
     end
+    # Serialization rebuilds a closure's type in its own module, so there is no
+    # definition of it to compare; a new kernel's closures reuse the same names.
+    # Every value of one closure type is saved in one group: a group read on its
+    # own would make its own copy of the type, and `===` would fail between them.
+    anonymous_function_type(T) && (push!(w.ids, objectid(T)); return nothing)
     m = parentmodule(T)
     if m === w.mod
         current_definition(T) ||
@@ -255,17 +321,20 @@ function refusal(w::Walk, @nospecialize(x))::Union{Nothing, String}
     for R in REFUSED_TYPES
         x isa R && return "a $(nameof(R)) cannot be revived"
     end
+    # Serialization saves a Regex as its pattern and flags and compiles it
+    # again. Two bindings sharing one Regex come back as two equal copies; a
+    # Regex cannot be changed, so only `===` can tell.
+    x isa Regex && return nothing
     x isa Ptr && return "it holds a pointer"
     x isa IO && !(x isa IOBuffer) && return "an open $(nameof(T)) cannot be revived"
-    if x isa Function
-        if isdefined(T, :instance) && !startswith(string(nameof(x)), '#')
-            m = parentmodule(x)
-            m === w.mod && (push!(w.user, string(nameof(x))); return nothing)
-            return Base.moduleroot(m) in (Base, Core) || haskey(Base.loaded_modules, Base.PkgId(Base.moduleroot(m))) ?
-                   nothing : "it refers to function $(nameof(x)) of an unloaded module"
-        end
-        return "it is or holds an anonymous function (closure)"
+    if x isa Function && isdefined(T, :instance) && !startswith(string(nameof(x)), '#')
+        m = parentmodule(x)
+        m === w.mod && (push!(w.user, string(nameof(x))); return nothing)
+        return Base.moduleroot(m) in (Base, Core) || haskey(Base.loaded_modules, Base.PkgId(Base.moduleroot(m))) ?
+               nothing : "it refers to function $(nameof(x)) of an unloaded module"
     end
+    # Any other function value is a closure or an anonymous function: checked
+    # below like a struct whose fields are the values it captured.
     if x isa Type
         u = Base.unwrap_unionall(x)
         u isa DataType && parentmodule(u) === w.mod && !current_definition(u) &&
@@ -433,9 +502,9 @@ function snapshot_state!(call::Int)
     stored = Dict{String, Any}[]
     total = 0
     for (i, g) in enumerate(groups)
-        buf = IOBuffer()
+        bytes = UInt8[]
         ok = try
-            serialize(buf, Dict(n => Base.invokelatest(getglobal, mod, Symbol(n)) for n in g.names))
+            bytes = snapshot_bytes(mod, Dict(n => Base.invokelatest(getglobal, mod, Symbol(n)) for n in g.names))
             true
         catch e
             for n in g.names
@@ -446,7 +515,6 @@ function snapshot_state!(call::Int)
             false
         end
         ok || continue
-        bytes = take!(buf)
         why = length(bytes) > max_binding_bytes() * length(g.names) ?
                   "$(Base.format_bytes(length(bytes))) is over the $(Base.format_bytes(max_binding_bytes())) limit per binding" :
               total + length(bytes) > max_snapshot_bytes() ?

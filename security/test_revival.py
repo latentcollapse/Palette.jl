@@ -248,19 +248,90 @@ class RevivalTest(unittest.TestCase):
 
     def test_runtime_objects_are_lost_with_their_recipe(self):
         self.session('t = @async sleep(1000); ch = Channel{Int}(1); lk = ReentrantLock(); io = open("f.txt", "w"); '
-                     'p = run(`sleep 1000`; wait=false); ptr = pointer([1]); fn = x -> x + 1; '
-                     'holds = Dict(:f => fn); closure_in_struct = (1, fn); buf = IOBuffer("abc"); cmd = `ls -l`\n'
+                     'p = run(`sleep 1000`; wait=false); ptr = pointer([1]); '
+                     'buf = IOBuffer("abc"); cmd = `ls -l`\n'
                      'let; global letdef(x) = x; end')
-        out, r = self.revive("(@isdefined(t), @isdefined(fn), String(take!(buf)), cmd)")
+        out, r = self.revive("(@isdefined(t), @isdefined(ptr), String(take!(buf)), cmd)")
         lost = section(out, "not revived")
         for name, why in (("t", "a Task cannot be revived"), ("ch", "a Channel"), ("lk", "a ReentrantLock"),
                           ("io", "an open IOStream"), ("p", "a Process"), ("ptr", "it holds a pointer"),
-                          ("fn", "anonymous function"), ("holds", "anonymous function"),
-                          ("closure_in_struct", "anonymous function"),
                           ("letdef", "not defined by top-level code")):
             self.assertRegex(lost, rf"(^|; ){name} \([^)]*\): [^;]*{re.escape(why)}", f"{name}: {lost}")
         self.assertIn("it came from `t = ", lost)
         self.assertEqual(r["display"], '(false, false, "abc", `ls -l`)')
+
+    def test_closures_come_back_with_their_captured_state(self):
+        self.session('helper(x) = 10x\n'
+                     'make_adder(n) = x -> x + n\n'
+                     'add3 = make_adder(3); bare = x -> 2x; uses_helper = x -> helper(x) + 1\n'
+                     'counter = let c = Ref(0); () -> (c[] += 1) end; counter(); counter()\n'
+                     'boxed = let k = 0; () -> (k += 1) end; boxed()\n'
+                     'shared = [1, 2]; pushes = y -> push!(shared, y)\n'
+                     'holds = Dict(:f => add3, :g => [bare, counter]); in_tuple = (1, add3)\n'
+                     'struct Wrap; f::Function; end; wrapped = Wrap(add3)\n'
+                     'composed = add3 ∘ bare; fixed = Base.Fix1(+, 5)\n'
+                     'task_holder = let t = @async sleep(1000); () -> t end\n'
+                     'struct Old; a::Int; end; over_old = let o = Old(1); () -> o.a end\n'
+                     'struct Old; a::Int; b::Int; end')
+        out, r = self.revive('(add3(1), bare(5), uses_helper(2), counter(), boxed(), (pushes(3); shared), '
+                             'holds[:f] === add3, holds[:g][2] === counter, in_tuple[2](0), wrapped.f(1), composed(5), '
+                             'fixed(1), @isdefined(task_holder), @isdefined(over_old))')
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["data"], [4, 10, 21, 3, 2, [1, 2, 3], True, True, 3, 4, 13, 6, False, False])
+        exact = section(out, "restored exactly")
+        for name in ("add3", "bare", "uses_helper", "counter", "boxed", "pushes", "holds", "in_tuple", "wrapped", "composed"):
+            self.assertIn(f"{name} (", exact)
+        lost = section(out, "not revived")
+        self.assertRegex(lost, r"task_holder \([^)]*\): [^;]*a Task cannot be revived")
+        self.assertRegex(lost, r"over_old \([^)]*\): [^;]*earlier definition")
+
+    def test_an_included_module_comes_back_and_a_failed_using_is_not_a_loss(self):
+        # The 12h run: `using JSON5Lite` failed (not a registered package),
+        # then `include`d the package's module file. Revival replayed the
+        # failed `using`, reported it lost, and never rebuilt the module.
+        pkg = Path(self.ws, "json5", "src"); pkg.mkdir(parents=True)
+        (pkg / "JSON5Lite.jl").write_text("module JSON5Lite\nparse(s) = length(s)\nend\n")
+        # One kernel: a failed call leaves no snapshot, the next success does.
+        results = self.session('using JSON5Lite', 'before_error(x) = x + 1; using NoSuchPackage',
+                               'struct T2; x::Int; end',
+                               'Base.show(io::IO, t::T2) = print(io, "T2!"); error("after the method")',
+                               'include("json5/src/JSON5Lite.jl"); n = JSON5Lite.parse("abc")', may_fail=True)
+        self.assertEqual([r["success"] for r in results], [False, False, True, False, True])
+        out, r = self.revive('(JSON5Lite.parse("ab"), before_error(1), n, repr(T2(1)))')
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["data"], [2, 2, 3, "T2!"])
+        self.assertIn("JSON5Lite (module", section(out, "rebuilt from source"))
+        self.assertIn("before_error (", section(out, "rebuilt from source"))
+        self.assertNotIn("using JSON5Lite", out)
+        self.assertNotIn("NoSuchPackage", out)
+
+    def test_regexes_and_matches_are_restored(self):
+        # In the 12h run a log-parsing regex was lost at every kernel death.
+        self.session('LINE_RE = r"^(?<user>\\w+) (\\d+)$"im; m = match(LINE_RE, "Ann 42"); '
+                     'rules = Dict(:ip => r"\\d+\\.\\d+", :word => r"\\w+"); bad = match(r"x", "y")')
+        out, r = self.revive('(match(LINE_RE, "BOB 7")[:user], m[:user], m[2], match(rules[:ip], "at 10.2").match, '
+                             'LINE_RE == r"^(?<user>\\w+) (\\d+)$"im, bad === nothing)')
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["data"], ["BOB", "Ann", "42", "10.2", True, True])
+        exact = section(out, "restored exactly")
+        for name in ("LINE_RE", "m", "rules"):
+            self.assertIn(f"{name} (", exact)
+
+    def test_a_revived_closure_runs_the_code_it_was_made_with(self):
+        # make_adder is redefined after add3 was made. The rebuilt make_adder
+        # makes closures of the same generated name; add3 must not become one.
+        self.session('make_adder(n) = x -> x + n; add3 = make_adder(3)',
+                     'make_adder(n) = x -> x * n; times3 = make_adder(3)')
+        out, r = self.revive("(add3(10), times3(10), make_adder(2)(10))")
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["data"], [13, 30, 20])
+        self.assertIn("add3 (", section(out, "restored exactly"))
+        # A lambda that is data is not rebuilt; a const one is, first, and in a
+        # new kernel it takes the generated name the data lambda had.
+        self.session('bare = x -> 2x', 'const K = x -> x + 100')
+        out, r = self.revive("(bare(5), K(5))")
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["data"], [10, 105])
 
     def test_package_object_holding_a_c_pointer_is_not_revived(self):
         self.session('using EzXML; doc = parsexml("<a><b/></a>"); names_ = [nodename(n) for n in eachelement(root(doc))]')

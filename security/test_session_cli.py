@@ -283,6 +283,23 @@ class TestSessionCli(unittest.TestCase):
         r = self._turn("PAYLOAD === nothing")
         self.assertIs(r["data"], True, "a payload must not leak into the next call")
 
+    def test_a_docstring_that_ends_an_enclosing_string_is_named(self):
+        """Code with a docstring, embedded in a triple-quoted string, failed in
+        every endurance run as `invalid keyword argument name "last::Bool"`:
+        the docstring's quotes ended the string and its signature ran as code."""
+        code = ('block = """\n\n"""\n    move_to_end!(d, key; last::Bool=true)\n\nMove `key` to the end.\n"""\n'
+                'function move_to_end!(d, key; last::Bool=true)\n    d\nend\n"""\nlength(block)')
+        r = self._turn(code)
+        self.assertFalse(r["success"], r)
+        self.assertIn("invalid keyword argument", r["error"])
+        self.assertIn("begins on line 1 ends at the docstring", r["error"])
+        self.assertIn("write(path, PAYLOAD)", r["error"])
+        # A docstring kept whole in its own literal is fine, and an unrelated
+        # error in the same shape of code gets no such hint.
+        r = self._turn('doc = """\n    f(x)\n\nDoc.\n"""\nerror("unrelated")')
+        self.assertFalse(r["success"], r)
+        self.assertNotIn("docstring", r["error"])
+
     def test_display_does_not_corrupt_the_protocol(self):
         """display() wrote to the stdout captured at startup, which is the
         protocol pipe, and killed the session."""
