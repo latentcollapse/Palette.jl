@@ -79,6 +79,51 @@ Other measurements:
 - I then attributed the undefined names to "method-body code run at top level". Reading the code showed they are interpolation.
 - Both claims were in this draft before the evidence was read. The numbers above are the checked ones.
 
+### 5. Do the hints change behaviour? A pilot says no
+
+**Design:**
+- The s11 OrderedCollections ISSUES task: the one on which the docstring failure happened in 5 of 8 endurance runs.
+- OpenRouter Luna, the same NP2 driver, 4 runs per arm, run in two rounds of 2 per arm.
+- The hints arm runs `rnd/closure-revival`.
+- The control arm runs lab `7644239`: in round 1 on the lab checkout, in round 2 on a worktree pinned there after the lab had moved.
+
+Tools: `docs/rnd-2026-09-27/pilot.py`, `pilot_analyze.py`.
+
+**Results:**
+
+| Arm | Runs that switched to `payload` after the first quoting failure | Quoting failures per run | Calls per run | Grade |
+|---|---|---|---|---|
+| hints | 1 of 4 (14 of 24 later writes) | 3, 1, 2, 2 | 87, 75, 108, 61 | 11/13 in every run |
+| control | 0 of 4 (one run 1 of 5) | 1, 1, 2, 2 | 65, 67, 76, 86 | 11/13 in every run |
+
+**Reading.** Luna saw the hints: in hints-b the call right after the docstring hint moved the file text into `payload`. But 3 of 4 hinted runs kept writing inline literals after one to three hints, and quoting failures did not fall. At this sample size, the hypothesis that a precise hint moves the habit is **not supported**. The hints stay, because they are accurate and cost nothing when nothing fails.
+
+**The remaining lever is structural.** 72 of 277 edits needed two or more snippets (old and new text), and `payload` carries one string. A `payload` that accepts several named strings is the next thing to try. It is a new abstraction, so it needs its own evidence pass.
+
+### 6. The snapshot tax, and the check for a waiting request that never worked
+
+**Evidence, from tin1:**
+- Snapshots grew with the model's state: 98 MB took 25 s at 2.5 h, and 110 MB took 28 s at 3 h.
+- The median call's time rose from 0.1 s to 2–9 s as the next call waited for the snapshot. About half of one ten-minute window went to waiting.
+- The existing rule "a request already waiting goes first" never fired. The input stream does not read ahead between requests, so `bytesavailable` stayed 0; that was measured in isolation.
+
+**Fix, on branch `rnd/snapshot-yield` (`746e223` plus a follow-up), not deployed in tin1:**
+- **Detecting the waiting request.** The descriptor is polled (`poll`, `POLLIN`).
+  - A closed input is not a request. The snapshot then completes as the last chance to save. A first version counted `POLLHUP`, and 24 revival tests failed.
+- **Giving way.** A snapshot gives way to a waiting request only when the last complete snapshot took 2 s or more, and only while the last saved call is fewer than five calls back.
+  - A quick snapshot always completes, so an ordinary session still revives the last completed call.
+  - A first version without the threshold broke exactly that guarantee: the existing `test_kernel_death_mid_call_revives_the_last_completed_call` failed.
+- **Package-image trap.** The precompile workload called `snapshot_state!(6)` and left `LAST_SAVED_CALL = 6` baked into the package image, so the staleness bound never fired. It is now reset with the workload's other globals.
+- **Naming lost calls.** A `last_call` marker is written after every completed call. When the revived snapshot is older, the revival report says: "Calls N–M completed after this state was saved: what they changed in the kernel is lost."
+- **Measured.** With a 65 MB state and a 2.4 s snapshot, the next call waited 2.8 s before the fix and 0.6 s after.
+- **Tests.**
+  - `test_a_request_does_not_wait_for_a_slow_snapshot_until_it_is_five_calls_old`;
+  - `test_a_quick_snapshot_never_gives_way`;
+  - `test_calls_completed_after_the_saved_state_are_named`.
+  - Full suites pass: revival 29, session_cli 50, session 12, authority 27, Julia `Pkg.test`.
+- **NP2 `25f9d0528`.** The model-facing notices say "the last saved state", and the report names the call. Previously they said "the last completed call".
+- **Why not deployed in tin1.** The running NP2 driver cannot pick up that notice change, so it would tell the model "the last completed call" when the state could be older.
+
 ## Negative controls
 
 All five tests for findings 1–4 that existed at the time were run against the original source with the new test files. All five fail there, and all pass on the fixed source. The interpolation hint's test asserts text that only the new code produces.
