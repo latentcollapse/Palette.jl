@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { type AssistantMessage, type Model, modelsAreEqual } from "@earendil-works/pi-ai";
+import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import { AuthStorage } from "../packages/coding-agent/src/core/auth-storage.js";
 import { ModelRegistry } from "../packages/coding-agent/src/core/model-registry.js";
 import { DefaultResourceLoader } from "../packages/coding-agent/src/core/resource-loader.js";
@@ -11,6 +12,9 @@ import { SettingsManager } from "../packages/coding-agent/src/core/settings-mana
 import { createModelRequestBudget } from "../packages/coding-agent/src/core/model-request-budget.js";
 import { createNeurajlBaseToolsFactory } from "../packages/coding-agent/src/core/tools/neurajl.js";
 
+// As cli-main does. Without it, Node's bundled undici keeps a destroyed HTTP/2 session
+// in its pool after a stream is cut, and every later request to that origin fails at once.
+setGlobalDispatcher(new EnvHttpProxyAgent({ bodyTimeout: 0, headersTimeout: 0 }));
 const promptFile = process.env.ABC_PROMPT_FILE;
 const traceFile = process.env.ABC_TRACE_FILE;
 const agentDir = process.env.ABC_AGENT_DIR;
