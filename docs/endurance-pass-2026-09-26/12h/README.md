@@ -140,3 +140,15 @@ The main kernel ran the new build before the scheduled 4 h kill. At 3.56 h the m
   - Controls afterwards: `format` scored empty 0, stub 0 and oracle 583/583.
   - The pilot's ports then scored 583/583 in five runs and 568 in one.
 - **Effect on tin1.** The checkpoints up to 5 h under-report `format` by up to 50. The grader runs afresh at each checkpoint, so later checkpoints and the final grade use the fixed one.
+
+### 6.5 h and 9 h kills, and a second deploy (13:35 EDT)
+
+- **6.5 h kill.** The revival restored 166 bindings exactly and rebuilt 31 definitions: types, functions and six port modules. It marked 8 port modules "rebuilt from a file that changed since", which is correct.
+- **9 h kill.** The revival restored 170 exactly and marked 15 changed modules.
+  - The report was 23 KB, so the model saw it cut in the middle at the 12,000-character cap. The whole "rebuilt from source" list fell in the cut.
+  - Luna does not call `Neura.output` to read the rest.
+- **Fix** (`05becce`, merged as `cc0a79b` and deployed for the 11 h kill):
+  - The report now leads with what needs attention: lost, different and stale. Rebuilt and restored-exactly come last.
+  - Those two lists are shortened past 1,500 characters, first to names and then to a count. `varinfo()` has every binding.
+  - Short reports keep their exact form.
+- **Checks.** Full suites pass: revival 28, session_cli 50, session 12, authority 27, Julia `Pkg.test`. After the trial depot was prewarmed, the new test and the closure test also passed on the deployed build.

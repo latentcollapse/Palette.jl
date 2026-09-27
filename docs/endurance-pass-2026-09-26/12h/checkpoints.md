@@ -306,3 +306,247 @@ emailutils: 0/26 (no ports/emailutils.jl)
 literal: 0/43 (no ports/literal.jl)
 ports total: 1102/2903
 ```
+
+## Checkpoint at 6.01 h (2026-09-27 10:10:04)
+
+- driver alive: True; follow-ups delivered: 22/50 (last: p12-statistics.txt)
+- kernel_rss_mb: 1516
+- driver_rss_mb: 14
+- sandbox_tmp_bytes: 2827751
+- state_root_bytes: 123383760
+- kernel_pid: 2270009
+- neurajl_calls: 971
+- compactions: 30
+- requests: 1920
+- request_errors: 215
+- cost_usd: 2.355
+- in: 5209657
+- out: 1907920
+- cacheR: 65064066
+- retries: 149
+- backup_retries: 53
+- stall_aborts: 0
+- recoveries: 34
+- followups_started: 21
+- trace_mb: 16.2
+
+Live port grade:
+
+```
+fnmatch: 178/178
+shlex: 41/41
+textwrap: 70/70
+difflib: 57/57
+difflib2: 0/50  first failures: unified_diff[[],["inserted z"],"a.txt","b.txt",0] | unified_diff[[],["inserted z"],"a.txt","b.txt",1] | unified_diff[[],["inserted z"],"a.txt","b.txt",3]
+string: 0/51 (no ports/string.jl)
+heapq: 63/63
+statistics: 0/180 (no ports/statistics.jl)
+csv: 30/30
+colorsys: 0/84 (no ports/colorsys.jl)
+bisect: 0/107 (no ports/bisect.jl)
+base64: 116/116
+urlparse: 133/133
+posixpath: 0/111 (no ports/posixpath.jl)
+calendar: 0/43 (no ports/calendar.jl)
+fractions: 0/70 (no ports/fractions.jl)
+json: 40/40
+numeric: 0/88 (no ports/numeric.jl)
+struct: 0/73 (no ports/struct.jl)
+graphlib: 0/24 (no ports/graphlib.jl)
+format: 583/583
+pystr: 0/216 (no ports/pystr.jl)
+random: 81/81
+configparser: 0/28 (no ports/configparser.jl)
+ipaddress: 0/47 (no ports/ipaddress.jl)
+strftime: 0/74 (no ports/strftime.jl)
+checksum: 0/44 (no ports/checksum.jl)
+pprint: 0/40 (no ports/pprint.jl)
+itertools: 0/40 (no ports/itertools.jl)
+escape: 0/72 (no ports/escape.jl)
+emailutils: 0/26 (no ports/emailutils.jl)
+literal: 0/43 (no ports/literal.jl)
+ports total: 1392/2903
+```
+
+## Checkpoint at 7.01 h (2026-09-27 11:10:19)
+
+- driver alive: True; follow-ups delivered: 25/50 (last: p15-difflib2.txt)
+- kernel_rss_mb: 1684
+- driver_rss_mb: 14
+- sandbox_tmp_bytes: 4422832
+- state_root_bytes: 131650459
+- kernel_pid: 2274168
+- neurajl_calls: 1135
+- compactions: 35
+- requests: 2139
+- request_errors: 220
+- cost_usd: 2.638
+- in: 5822656
+- out: 2108649
+- cacheR: 75057138
+- retries: 154
+- backup_retries: 58
+- stall_aborts: 0
+- recoveries: 34
+- followups_started: 25
+- trace_mb: 18.3
+
+Live port grade:
+
+```
+fnmatch: 178/178
+shlex: 41/41
+textwrap: 70/70
+difflib: 57/57
+difflib2: 50/50
+string: 0/51 (no ports/string.jl)
+heapq: 63/63
+statistics: 179/180  first failures: geometric_mean[[0,1,4]]
+csv: 30/30
+colorsys: 0/84 (no ports/colorsys.jl)
+bisect: 0/107 (no ports/bisect.jl)
+base64: 116/116
+urlparse: 133/133
+posixpath: 111/111
+calendar: 0/43 (no ports/calendar.jl)
+fractions: 0/70 (no ports/fractions.jl)
+json: 40/40
+numeric: 0/88 (no ports/numeric.jl)
+struct: 73/73
+graphlib: 0/24 (no ports/graphlib.jl)
+format: 583/583
+pystr: 0/216 (no ports/pystr.jl)
+random: 81/81
+configparser: 0/28 (no ports/configparser.jl)
+ipaddress: 0/47 (no ports/ipaddress.jl)
+strftime: 0/74 (no ports/strftime.jl)
+checksum: 0/44 (no ports/checksum.jl)
+pprint: 0/40 (no ports/pprint.jl)
+itertools: 0/40 (no ports/itertools.jl)
+escape: 0/72 (no ports/escape.jl)
+emailutils: 0/26 (no ports/emailutils.jl)
+literal: 0/43 (no ports/literal.jl)
+ports total: 1805/2903
+```
+
+## Checkpoint at 8.02 h (2026-09-27 12:10:32)
+
+- driver alive: True; follow-ups delivered: 28/50 (last: p18-colorsys.txt)
+- kernel_rss_mb: 1826
+- driver_rss_mb: 14
+- sandbox_tmp_bytes: 8656581
+- state_root_bytes: 136444842
+- kernel_pid: 2277852
+- neurajl_calls: 1276
+- compactions: 41
+- requests: 2334
+- request_errors: 222
+- cost_usd: 2.9257
+- in: 6495223
+- out: 2342926
+- cacheR: 83817864
+- retries: 156
+- backup_retries: 60
+- stall_aborts: 0
+- recoveries: 34
+- followups_started: 28
+- trace_mb: 20.6
+
+Live port grade:
+
+```
+fnmatch: 178/178
+shlex: 41/41
+textwrap: 70/70
+difflib: 57/57
+difflib2: 50/50
+string: 0/51 (no ports/string.jl)
+heapq: 63/63
+statistics: 179/180  first failures: geometric_mean[[0,1,4]]
+csv: 30/30
+colorsys: 84/84
+bisect: 0/107 (no ports/bisect.jl)
+base64: 116/116
+urlparse: 133/133
+posixpath: 111/111
+calendar: 43/43
+fractions: 0/70 (no ports/fractions.jl)
+json: 40/40
+numeric: 0/88 (no ports/numeric.jl)
+struct: 73/73
+graphlib: 0/24 (no ports/graphlib.jl)
+format: 583/583
+pystr: 216/216
+random: 81/81
+configparser: 0/28 (no ports/configparser.jl)
+ipaddress: 0/47 (no ports/ipaddress.jl)
+strftime: 0/74 (no ports/strftime.jl)
+checksum: 0/44 (no ports/checksum.jl)
+pprint: 0/40 (no ports/pprint.jl)
+itertools: 0/40 (no ports/itertools.jl)
+escape: 0/72 (no ports/escape.jl)
+emailutils: 0/26 (no ports/emailutils.jl)
+literal: 0/43 (no ports/literal.jl)
+ports total: 2148/2903
+```
+
+## Checkpoint at 9.01 h (2026-09-27 13:10:13)
+
+- driver alive: True; follow-ups delivered: 33/50 (last: p23-pprint.txt)
+- kernel_rss_mb: None
+- driver_rss_mb: 14
+- sandbox_tmp_bytes: None
+- state_root_bytes: 192516316
+- kernel_pid: None
+- neurajl_calls: 1412
+- compactions: 46
+- requests: 2590
+- request_errors: 233
+- cost_usd: 3.2211
+- in: 7177165
+- out: 2589131
+- cacheR: 92857540
+- retries: 164
+- backup_retries: 66
+- stall_aborts: 0
+- recoveries: 34
+- followups_started: 33
+- trace_mb: 22.9
+
+Live port grade:
+
+```
+fnmatch: 178/178
+shlex: 41/41
+textwrap: 70/70
+difflib: 57/57
+difflib2: 50/50
+string: 0/51 (no ports/string.jl)
+heapq: 63/63
+statistics: 179/180  first failures: geometric_mean[[0,1,4]]
+csv: 30/30
+colorsys: 84/84
+bisect: 0/107 (no ports/bisect.jl)
+base64: 116/116
+urlparse: 133/133
+posixpath: 111/111
+calendar: 43/43
+fractions: 65/70  first failures: fraction_round["5/2",null] | fraction_round["7/2",null] | fraction_round["-5/2",null]
+json: 40/40
+numeric: 88/88
+struct: 73/73
+graphlib: 24/24
+format: 583/583
+pystr: 216/216
+random: 81/81
+configparser: 28/28
+ipaddress: 0/47 (no ports/ipaddress.jl)
+strftime: 0/74 (no ports/strftime.jl)
+checksum: 0/44 (no ports/checksum.jl)
+pprint: 0/40 (no ports/pprint.jl)
+itertools: 0/40 (no ports/itertools.jl)
+escape: 0/72 (no ports/escape.jl)
+emailutils: 0/26 (no ports/emailutils.jl)
+literal: 0/43 (no ports/literal.jl)
+ports total: 2353/2903
+```
