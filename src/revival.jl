@@ -579,6 +579,23 @@ end
 
 fmt_binding(b) = "$(b["name"]) ($(b["type"]), call $(b["call"]))"
 
+# A list line that stays readable at any size: in full while short, then as
+# names only, then as the first names and a count; varinfo() has the rest.
+const REPORT_LIST_CHARS = 1500
+function short_list(heading::String, items::Vector{String})
+    line = "  $heading: " * join(items, ", ")
+    length(line) <= REPORT_LIST_CHARS && return line
+    names = [first(split(i, " ("; limit=2)) for i in items]
+    shown = String[]; n = 0
+    for nm in names
+        n + length(nm) + 2 > REPORT_LIST_CHARS && break
+        push!(shown, nm); n += length(nm) + 2
+    end
+    rest = length(names) - length(shown)
+    return "  $heading ($(length(items))): " * join(shown, ", ") *
+           (rest > 0 ? ", and $rest more (varinfo() lists every binding)" : "")
+end
+
 """
     revive_state!() -> String
 
@@ -802,11 +819,14 @@ function finish_revival(m, mod, state, call, pending, failed, errors, changed_fi
 
     push!(lines, "[revival] The previous kernel stopped. This kernel revived the state saved at the end of call $call" *
                  (data_block === nothing ? "." : "; its data could not be restored because $data_block."))
-    isempty(exact) || push!(lines, "  restored exactly: " * join(exact, ", "))
-    isempty(rebuilt) || push!(lines, "  rebuilt from source: " * join(rebuilt, ", "))
-    isempty(stale) || push!(lines, "  restored but stale (a file it was computed from changed): " * join(stale, "; "))
-    isempty(approx) || push!(lines, "  not the same as before: " * join(approx, "; "))
+    # What needs attention first: a long report is cut in the middle for the
+    # model (in the 12h run it reached 23 KB), so the lists that only confirm
+    # come last and are shortened.
     isempty(lost) || push!(lines, "  not revived: " * join(lost, "; "))
+    isempty(approx) || push!(lines, "  not the same as before: " * join(approx, "; "))
+    isempty(stale) || push!(lines, "  restored but stale (a file it was computed from changed): " * join(stale, "; "))
+    isempty(rebuilt) || push!(lines, short_list("rebuilt from source", rebuilt))
+    isempty(exact) || push!(lines, short_list("restored exactly", exact))
     isempty(bindings) && push!(lines, "  (the previous kernel had no bindings)")
     push!(lines, "  Packages were loaded again, and LOAD_PATH, the active project, ENV and the working directory were restored. " *
                  "Other runtime state starts fresh: random number streams, settings changed inside packages, open handles. " *
