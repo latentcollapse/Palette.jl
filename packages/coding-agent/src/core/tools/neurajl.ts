@@ -27,25 +27,37 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.js";
  * earlier binding is gone and which epoch replaced which.
  */
 
-const neurajlSchema = Type.Object({
-	code: Type.String({
-		description: `Julia source to evaluate in this session's persistent NeuraJL kernel. The working directory is the task workspace. Bindings, functions and compiled methods survive across calls. Everything printed (println, @show, @warn, display, output of run(\`cmd\`) and sh"cmd") is returned along with the value of the last expression. To write a file's full text (source code, JSON, CSV), put the text in payload and call write(path, PAYLOAD) instead of embedding it in a Julia string literal.`,
-	}),
-	payload: Type.Optional(
-		Type.String({
-			description:
-				"Text bound as PAYLOAD for this call only, such as the complete contents of a file to write with write(path, PAYLOAD). It is not parsed as Julia, so quotes, triple quotes, $ and backslashes need no escaping.",
-		}),
-	),
-	ephemeral: Type.Optional(
-		Type.Boolean({
-			description:
-				"Run this code in a fresh, disposable Julia process instead of the persistent kernel: it sees none of the kernel's bindings, leaves none behind, and cannot see the task workspace. Starting it takes several seconds. Defaults to false.",
-		}),
-	),
-});
+const CODE_DESCRIPTION = `Julia source to evaluate in this session's persistent NeuraJL kernel. The working directory is the task workspace. Bindings, functions and compiled methods survive across calls. Everything printed (println, @show, @warn, display, output of run(\`cmd\`) and sh"cmd") is returned along with the value of the last expression. To write a file's full text (source code, JSON, CSV), put the text in payload and call write(path, PAYLOAD) instead of embedding it in a Julia string literal.`;
+const PAYLOAD_DESCRIPTION =
+	"Text bound as PAYLOAD for this call only, such as the complete contents of a file to write with write(path, PAYLOAD). It is not parsed as Julia, so quotes, triple quotes, $ and backslashes need no escaping.";
+// Experiment switch (NEURAJL_PAYLOAD_PARTS=1): payload may also be named texts,
+// so an edit's old and new text both travel outside Julia's string syntax.
+const CODE_DESCRIPTION_PARTS = `${CODE_DESCRIPTION.slice(0, CODE_DESCRIPTION.lastIndexOf(" To write"))} To write a file's full text, put the text in payload and call write(path, PAYLOAD); to edit a file, put the old and new text in payload as {"old": ..., "new": ...} and call write(path, replace(read(path, String), PAYLOAD["old"] => PAYLOAD["new"])). Either way, do not embed file text in a Julia string literal.`;
+const PAYLOAD_PARTS_DESCRIPTION =
+	'Text bound as PAYLOAD for this call only, or, for an edit or anything needing several texts, an object of named texts such as {"old": ..., "new": ...}, read as PAYLOAD["old"] and PAYLOAD["new"]. It is not parsed as Julia, so quotes, triple quotes, $ and backslashes need no escaping.';
+
+function neurajlSchemaFor(parts: boolean) {
+	return Type.Object({
+		code: Type.String({ description: parts ? CODE_DESCRIPTION_PARTS : CODE_DESCRIPTION }),
+		payload: Type.Optional(
+			parts
+				? Type.Union([Type.String(), Type.Record(Type.String(), Type.String())], {
+						description: PAYLOAD_PARTS_DESCRIPTION,
+					})
+				: Type.String({ description: PAYLOAD_DESCRIPTION }),
+		),
+		ephemeral: Type.Optional(
+			Type.Boolean({
+				description:
+					"Run this code in a fresh, disposable Julia process instead of the persistent kernel: it sees none of the kernel's bindings, leaves none behind, and cannot see the task workspace. Starting it takes several seconds. Defaults to false.",
+			}),
+		),
+	});
+}
+const neurajlSchema = neurajlSchemaFor(true);
 
 export type NeurajlToolInput = Static<typeof neurajlSchema>;
+const payloadParts = () => process.env.NEURAJL_PAYLOAD_PARTS === "1";
 
 export interface NeurajlToolDetails {
 	success: boolean;
@@ -103,7 +115,7 @@ interface NeurajlKernel {
 	isDead: () => boolean;
 	turn: (
 		code: string,
-		options: { ephemeral?: boolean; payload?: string },
+		options: { ephemeral?: boolean; payload?: string | Record<string, string> },
 		signal: AbortSignal | undefined,
 	) => Promise<Record<string, unknown>>;
 	dispose: () => Promise<void>;
@@ -341,7 +353,9 @@ function neurajlDescription(options: NeurajlToolOptions | undefined): string {
 	return [
 		"Execute Julia in this session's persistent NeuraJL kernel. The working directory is the task workspace; read and edit files with Julia's file I/O. Bindings, functions, types and loaded packages persist across calls, and ans is the last call's value. Printed output and the last expression's value are returned.",
 		'Shell: sh"cmd" (or bash("cmd")) runs bash, so pipes, globs, redirects and && work, and returns ShellResult(exitcode, stdout, stderr) after printing the output. In sh"..." the $ belongs to the shell; in an ordinary "..." string it is Julia interpolation. run(`prog args`) starts one program without a shell.',
-		"To write a file's text, put the text in payload and call write(path, PAYLOAD): the payload is not parsed as Julia, so it needs no escaping.",
+		payloadParts()
+			? 'To write a file\'s text, put the text in payload and call write(path, PAYLOAD); to edit, give payload as {"old": ..., "new": ...} and use PAYLOAD["old"] and PAYLOAD["new"]. A payload is not parsed as Julia, so it needs no escaping.'
+			: "To write a file's text, put the text in payload and call write(path, PAYLOAD): the payload is not parsed as Julia, so it needs no escaping.",
 		"A package loaded from the workspace is reloaded when its source files change, so code and tests run in the kernel see your edits.",
 		`Each call may run for ${timeout}s. Waiting work (sleep, run, reading a process or file) is then interrupted and the kernel keeps every binding; compute that never yields cannot be interrupted, so the kernel stops and the next call starts a fresh one and says so.`,
 		`Loadable packages: ${loadable}.${options?.network ? "" : " There is no network access, so Pkg.add cannot install more."} kernelinfo() describes the kernel; varinfo() lists your bindings.`,
@@ -409,7 +423,7 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 			description: neurajlDescription(options),
 			promptSnippet: "neurajl - persistent Julia kernel in the task workspace, OS-sandboxed",
 			executionMode: "sequential",
-			parameters: neurajlSchema,
+			parameters: neurajlSchemaFor(payloadParts()) as typeof neurajlSchema,
 			// The agent loop marks a tool result as an error only when execute
 			// throws; an `isError` field on a returned result is ignored.
 			execute: async (_toolCallId, params, signal) => {
