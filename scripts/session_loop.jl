@@ -153,9 +153,32 @@ function docstring_closed_string(err::AbstractString, code::AbstractString)
     return nothing
 end
 
+# An undefined name that the call's code interpolates into a string. In the
+# endurance runs 13 of 18 UndefVarErrors were this: Julia source for a file,
+# written as a string literal, whose `$K` and `$new` ran in the kernel.
+function interpolated_undefined_name(err::AbstractString, code::AbstractString)
+    m = match(r"UndefVarError: `([^`]+)`", err)
+    m === nothing && return nothing
+    name = Symbol(m[1])
+    ex = try
+        Meta.parseall(code)
+    catch
+        return nothing
+    end
+    found = Ref(false)
+    walk(x) = x isa Expr && (x.head === :string && any(a -> a === name || (a isa Expr && name in collect_symbols(a)), x.args) ?
+                             (found[] = true) : foreach(walk, x.args))
+    walk(ex)
+    return found[] ? string(name) : nothing
+end
+collect_symbols(x) = x isa Symbol ? Symbol[x] : x isa Expr ? reduce(vcat, map(collect_symbols, x.args); init=Symbol[]) : Symbol[]
+
 function with_hint(err, code)
     err isa AbstractString || return err
-    if (lines = docstring_closed_string(err, code)) !== nothing
+    if (name = interpolated_undefined_name(err, code)) !== nothing
+        return err * "\nHint: `$name` is interpolated into a string in this call (`\$$name`). If the string holds text for a file, " *
+               "write `\\\$$name`, or pass the text as this call's payload and use write(path, PAYLOAD): a payload is not parsed."
+    elseif (lines = docstring_closed_string(err, code)) !== nothing
         return err * "\nHint: the string that begins on line $(lines[1]) ends at the docstring's \"\"\" on line $(lines[2]), " *
                "so the lines after it ran as code. Pass the file's text as this call's payload and use write(path, PAYLOAD): " *
                "a payload is not parsed, so its quotes need no escaping."
