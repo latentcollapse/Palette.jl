@@ -115,3 +115,16 @@ It also made closures revivable. The fixes had passed the full lab suites: reviv
 **What this does to the run's claim.** tin1 is 4 h of `7644239`, then 8 h of `917b18d`, not 12 h of one build. The later kills (6.5, 9 and 11 h) test the new revival code on a real, large state.
 
 **Not deployed.** The snapshot-yield change (branch `rnd/snapshot-yield`). Snapshots of this run's 110 MB state take 28 s, and the median call waits about 9 s for them. The change lets a waiting request go first, but it weakens the "revives the last completed call" guarantee, which one existing test enforces. It needs a design pass, not a deploy under a deadline.
+
+### The new build in the live run
+
+The main kernel ran the new build before the scheduled 4 h kill. At 3.56 h the model's own non-yielding compute ran past the 60 s limit twice, and the kernel was stopped each time. From then on, new kernels started on `917b18d`.
+
+| Revival | Restored exactly | Rebuilt from source | Marked not the same | Not revived |
+|---|---|---|---|---|
+| 3.59 h (runaway compute) | 170 | 12, including the modules PyHeapq, PyJson and PyShlex that the model defined in included port files | – | 1 |
+| 4 h (scheduled SIGKILL of 7 kernels, the main one and six RLM children) | 172 | 15, including six port modules and JSON5Lite | 2: PyHeapq and PyJson, "rebuilt from a file that changed since", which is correct because the model had edited them since including them | 1 |
+
+- **Under the old build these modules were lost.** `module … end` in an included file was never replayed.
+- **The one "not revived" item in both revivals** is the failed `using JSON5Lite` of call 224, logged by the old build before the fix. The definition log carries it forward, so it recurs at every revival in this run. New failed calls are no longer logged this way.
+- **The 4 h revival call took 26.6 s:** the state is about 110 MB.
