@@ -1,0 +1,1 @@
+This repository is the OrderedCollections.jl package. Work through every issue in ISSUES.md, in order, until all are done. Teammates may update ISSUES.md while you work; re-read it before starting each issue and follow the latest version. When all issues are done and the full test suite passes, say that the work is complete.

@@ -1,0 +1,52 @@
+{
+ "wall_min": 20.0,
+ "neurajl_calls": 85,
+ "errors": 8,
+ "requests": 144,
+ "input_tokens": 184600,
+ "output_tokens": 64910,
+ "cache_read_tokens": 4869343,
+ "cost_usd": 0.117,
+ "compactions": 1,
+ "neurajl_state_notes": 1,
+ "output_limit_continuations": 0,
+ "kernel_stopped_notices": 1,
+ "revival_reports": 1,
+ "changed_on_disk_notices": 1,
+ "reload_notices": 15,
+ "background_reports": 1,
+ "background_task_failures": 0,
+ "undefvar_errors": 1,
+ "interrupted_calls": 0,
+ "in_kernel_test_includes": 2,
+ "cli_test_runs": 16,
+ "background_jobs_started": 0,
+ "reuse_after_revival": [
+  {
+   "at_call": 43,
+   "revived_names": 17,
+   "reused_in_next_10_calls": [
+    "i",
+    "new",
+    "old",
+    "s",
+    "src",
+    "test"
+   ]
+  }
+ ],
+ "after_compaction": {
+  "post_calls": 22,
+  "reuse": 10,
+  "reconstruct": 1,
+  "reparse_log": 0,
+  "rediscover": 2,
+  "undef_errors": 0,
+  "distinct_reused": [
+   "entries",
+   "index",
+   "move_to_end",
+   "value"
+  ]
+ }
+}

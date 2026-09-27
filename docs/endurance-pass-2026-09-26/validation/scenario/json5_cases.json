@@ -1,0 +1,359 @@
+{
+"valid": [
+{
+"input": "{}",
+"expected": {},
+"kind": "dict"
+},
+{
+"input": "[]",
+"expected": [],
+"kind": "list"
+},
+{
+"input": "{\"a\": 1}",
+"expected": {
+"a": 1
+},
+"kind": "dict"
+},
+{
+"input": "{a: 1}",
+"expected": {
+"a": 1
+},
+"kind": "dict"
+},
+{
+"input": "{'a': 'b'}",
+"expected": {
+"a": "b"
+},
+"kind": "dict"
+},
+{
+"input": "[1, 2, 3,]",
+"expected": [
+1,
+2,
+3
+],
+"kind": "list"
+},
+{
+"input": "{a: 1, b: 2,}",
+"expected": {
+"a": 1,
+"b": 2
+},
+"kind": "dict"
+},
+{
+"input": "// c\n{a: 1}",
+"expected": {
+"a": 1
+},
+"kind": "dict"
+},
+{
+"input": "/* block */ [1]",
+"expected": [
+1
+],
+"kind": "list"
+},
+{
+"input": "{a: /* x */ 1}",
+"expected": {
+"a": 1
+},
+"kind": "dict"
+},
+{
+"input": "0x1F",
+"expected": 31,
+"kind": "int"
+},
+{
+"input": "-0xff",
+"expected": -255,
+"kind": "int"
+},
+{
+"input": ".5",
+"expected": 0.5,
+"kind": "float"
+},
+{
+"input": "5.",
+"expected": 5.0,
+"kind": "float"
+},
+{
+"input": "+1",
+"expected": 1,
+"kind": "int"
+},
+{
+"input": "-Infinity",
+"expected": {
+"__float__": "-inf"
+},
+"kind": "float"
+},
+{
+"input": "Infinity",
+"expected": {
+"__float__": "inf"
+},
+"kind": "float"
+},
+{
+"input": "NaN",
+"expected": {
+"__float__": "nan"
+},
+"kind": "float"
+},
+{
+"input": "1e3",
+"expected": 1000.0,
+"kind": "float"
+},
+{
+"input": "-1.5E-2",
+"expected": -0.015,
+"kind": "float"
+},
+{
+"input": "'single \"quoted\"'",
+"expected": "single \"quoted\"",
+"kind": "str"
+},
+{
+"input": "\"double 'quoted'\"",
+"expected": "double 'quoted'",
+"kind": "str"
+},
+{
+"input": "\"line1\\\nline2\"",
+"expected": "line1line2",
+"kind": "str"
+},
+{
+"input": "\"tab\\tnew\\nline\"",
+"expected": "tab\tnew\nline",
+"kind": "str"
+},
+{
+"input": "\"\\u00e9\"",
+"expected": "\u00e9",
+"kind": "str"
+},
+{
+"input": "'\\x41'",
+"expected": "A",
+"kind": "str"
+},
+{
+"input": "{$key: 1, _k2: 2, k3$: 3}",
+"expected": {
+"$key": 1,
+"_k2": 2,
+"k3$": 3
+},
+"kind": "dict"
+},
+{
+"input": "[null, true, false]",
+"expected": [
+null,
+true,
+false
+],
+"kind": "list"
+},
+{
+"input": "{nested: {deep: [1, {x: [2]}]}}",
+"expected": {
+"nested": {
+"deep": [
+1,
+{
+"x": [
+2
+]
+}
+]
+}
+},
+"kind": "dict"
+},
+{
+"input": "  \n  42  \n ",
+"expected": 42,
+"kind": "int"
+},
+{
+"input": "\"\\\\\"",
+"expected": "\\",
+"kind": "str"
+},
+{
+"input": "[1, [2, [3, [4]]]]",
+"expected": [
+1,
+[
+2,
+[
+3,
+[
+4
+]
+]
+]
+],
+"kind": "list"
+},
+{
+"input": "{'quoted-key': 1, unquoted: 2}",
+"expected": {
+"quoted-key": 1,
+"unquoted": 2
+},
+"kind": "dict"
+},
+{
+"input": "[.1, 1., +.5]",
+"expected": [
+0.1,
+1.0,
+0.5
+],
+"kind": "list"
+},
+{
+"input": "{a: [], b: {}}",
+"expected": {
+"a": [],
+"b": {}
+},
+"kind": "dict"
+},
+{
+"input": "\"emoji \\ud83d\\ude00\"",
+"expected": "emoji \ud83d\ude00",
+"kind": "str"
+},
+{
+"input": "{a: 1, // comment after\n b: 2}",
+"expected": {
+"a": 1,
+"b": 2
+},
+"kind": "dict"
+},
+{
+"input": "[\n  1,\n  2,\n]",
+"expected": [
+1,
+2
+],
+"kind": "list"
+},
+{
+"input": "\"a\\u0041b\"",
+"expected": "aAb",
+"kind": "str"
+},
+{
+"input": "123456789012",
+"expected": 123456789012,
+"kind": "int"
+},
+{
+"input": "-0",
+"expected": 0,
+"kind": "int"
+},
+{
+"input": "0.0",
+"expected": 0.0,
+"kind": "float"
+},
+{
+"input": "1E+2",
+"expected": 100.0,
+"kind": "float"
+},
+{
+"input": "{a: 'it\\'s'}",
+"expected": {
+"a": "it's"
+},
+"kind": "dict"
+},
+{
+"input": "\"\\/\"",
+"expected": "/",
+"kind": "str"
+},
+{
+"input": "[1 /* in */, 2]",
+"expected": [
+1,
+2
+],
+"kind": "list"
+},
+{
+"input": "{\na: 1\n}\n",
+"expected": {
+"a": 1
+},
+"kind": "dict"
+},
+{
+"input": "\"\\v\\f\\b\"",
+"expected": "\u000b\f\b",
+"kind": "str"
+},
+{
+"input": "{ \"a\" : [ 1 , 2 ] }",
+"expected": {
+"a": [
+1,
+2
+]
+},
+"kind": "dict"
+},
+{
+"input": "/**/1/**/",
+"expected": 1,
+"kind": "int"
+}
+],
+"invalid": [
+"{a: 1",
+"[1, 2",
+"{'a': }",
+"[1,,2]",
+"{,}",
+"01",
+"undefined",
+"'unterminated",
+"{a b}",
+"[1] [2]",
+"{\"a\": 1,,}",
+"0x",
+"1e",
+"\"\\u12\"",
+"{1: 2}",
+"",
+"/* open",
+"[,1]",
+"tru",
+"+-1"
+]
+}

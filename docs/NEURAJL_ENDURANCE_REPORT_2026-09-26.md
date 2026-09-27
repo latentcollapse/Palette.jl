@@ -322,3 +322,176 @@ None of these calls for a new abstraction; each needs measurement or a harness f
 **Fix.** `bash()` now writes its output to temporary files and waits only for bash itself. The files join the late-output files, so the job's later output (`late`) opens the next call as background output. The test is `test_background_job_in_sh_does_not_hold_the_call`.
 
 Unchanged Julia semantics: `run(cmd; wait=false)` still discards the child's output unless it is given `stdout=stdout` or a file.
+
+## Pre-72-hour validation (feature freeze)
+
+This pass added no features. It removed blockers, measured scale and storage, and ran one long supervised session.
+
+### 1. Harness compaction (NP2 `f020af235`)
+
+**The earlier diagnosis was wrong.** The revival pass reported that "a threshold compaction with no goal set ends the agent's run." The trace of the run that stopped (`s10-logs--on2`) shows otherwise:
+- the model's last reply ended with `stopReason: "length"`: it was cut off at the 4,000-token output limit that trial used, mid-sentence, with no tool call;
+- the agent loop took that truncated reply as the model finishing;
+- compaction then ran on an assistant-last turn, and with no goal set, the run ended.
+
+Compactions in the middle of a tool loop already resumed correctly: 16 in `on3` and 9 in `off1` did.
+
+**Fix.** A reply cut off at the output limit, with no tool call, is not a deliberate stop. It now queues one resume prompt (`[output limit] … Continue the task from where you stopped.`), at most three in a row, with an active goal keeping priority. Both paths are covered:
+- the natural-stop continuation hook;
+- the threshold-compaction path, which returns before that hook and needed the same continuation queued as a session input.
+
+This applies to both arms, IPython and NeuraJL.
+
+**Regression tests.** `test/suite/agent-session-compaction-continuity.test.ts`, 6 tests, faux model, end to end:
+- one compaction;
+- repeated compactions (four tool calls, at least three compactions, every tool call run exactly once);
+- compaction with a stateful tool's `[neurajl-state]` note (one note per compaction, and the task continues);
+- tool calls after compaction;
+- the user's request appears exactly once;
+- a reply cut off with and without compaction;
+- the three-in-a-row bound;
+- no continuation after a normal stop.
+
+The four compaction tests pass without the change, which confirms that mid-task compaction already resumed. The two truncation tests fail without it.
+
+Also: `autonomous-continuation-subagent-gate.test.ts` needed the new method on its fake session (28/28 pass). One failure in `agent-session-goal.test.ts` ("runtime rebuild restores tools with an active goal") predates this change and is unrelated.
+
+### 2. Snapshot scale
+
+Measured on the real sandbox with 8 MiB bindings (under the 16 MiB per-binding cap). All restored exactly.
+
+| Saved state | Bindings | Snapshot (steady) | Disk | Kernel max RSS | Next call sent right after a reply | Idle call | Revival first call |
+|---|---|---|---|---|---|---|---|
+| 1 MiB | 1 | 0.008s | 1.0 MiB | 560 MB | 2.0s* | 0.04s | 5.4s |
+| 10 MiB | 1 | 0.22s | 10 MiB | 568 MB | 2.0s* | 0.00s | 5.3s |
+| 50 MiB | 6 | 0.34s | 50 MiB | 613 MB | 2.4s* | 0.01s | 5.7s |
+| 100 MiB | 12 | 0.79s | 100 MiB | 689 MB | 2.9s* | 0.01s | 6.1s |
+| 120 MiB (cap 128) | 15 | 1.04s | 120 MiB | 721 MB | 3.0s* | 0.01s | 6.2s |
+
+\* This is the first snapshot of the session, which compiles the serializer for the new types, about 2s once.
+
+In steady state at 120 MiB, a call sent right after the previous reply waited 0.93–1.08s. Calls sent 0.2s apart each waited about 0.75s, because every successful call re-saves everything.
+
+**Conclusion.** Snapshot cost is linear, about 8.5 ms/MiB, and at most about 1s at the cap. Revival is dominated by kernel start and package load, not by state size. At a model's pace (2s or more between calls) nothing blocks. **No optimization; not a real problem at the measured scale.**
+
+### 3. Temp and storage hygiene (lab `318c918`, `638ffdb`, `6f6e9a5`)
+
+**Sandbox `/tmp` (RAM tmpfs) was unbounded: fixed.** With a background job printing 50 KB/s plus a Julia task logging, the sandbox `/tmp` grew linearly (0.5 MB after 10s, 3.5 MB after 70s). That is about 4.3 GB a day, 13 GB over 72 hours, against a 16 GB host tmpfs. The cause: output stayed in the background sink after it had been reported.
+
+Now a sink or late-output file whose reported part passes 1 MiB is truncated. All writers hold these files in append mode, and `bash()` now opens its output files in append mode too. After the fix, the same load held `/tmp` at the 32 kept per-call capture files (under 200 KB), and the sink stays under 1 MiB. Test: `test_reported_background_output_does_not_accumulate_in_tmp` (it fails without the fix: 3 MB kept).
+
+**Where revival state lives.** The host directory is `$TMPDIR/neurajl-state/<sessionId>`, by default the OS temp directory: a RAM tmpfs on this machine, 16 GB. Per session it is bounded by the 128 MiB cap, plus a transient copy while a group is written. It is never deleted, because a resumed session needs it. After one day of testing it held 423 MB across 34 sessions.
+
+For one 72-hour run that is fine. For a machine running many sessions, the state should move to disk (`stateRoot`) and old sessions should be pruned. That is recorded as a remaining item, and not changed during the freeze.
+
+**Two blockers found while starting the endurance run, both fixed:**
+- **Class A, substrate.** The broker's Unix socket lived under `$HOME/.neurajl-sessions/<id>/broker`. With the run's longer `HOME`, the path passed the 108-byte `AF_UNIX` limit, and every kernel start failed ("AF_UNIX path too long"); the first attempt (`e1`) never got a kernel. The socket now gets a short private directory under `/tmp` when needed. Test: `test_session_starts_under_a_deep_session_root`, which fails without the fix.
+- **Class B, harness environment.** Under a fresh `HOME`, the juliaup shim installed and returned its current default release. The second attempt's (`e2`) kernel ran **Julia 1.13.1** while the depot was built for 1.12.6. Earlier runs with fresh homes did not install anything; the likely cause is a juliaup release-channel change on the day, not fully determined. `NEURAJL_JULIA_BIN` now pins the kernel's binary, and the endurance supervisor sets it. Any real 72-hour run must set it.
+
+### 4. Endurance runs (supervised, uncoached)
+
+**Setup.**
+- **Task (S11):** the OrderedCollections.jl repository with three injected bugs and a backlog in `ISSUES.md`. Graded afterwards by a hidden acceptance suite, validated 0/13 on the fixture and all-pass on a reference implementation, plus the package's own 25,972-test suite.
+- **Driver:** an isolated copy of `abc-agent.ts` (untracked, not Codex's file) with a 2,000-request budget. It uses a 100k-token window with 16k of output and 16k kept, so compaction happens at about 80k. Later batches arrive as follow-up prompts in the same session, with the same kernel and the same revival state.
+- **Supervisor:** logs every intervention; samples kernel RSS, the sandbox `/tmp` (`du -x`) and the host state root every 60s; and grades at the end.
+- **Interventions, all by the supervisor, none by hand:**
+  - `SIGKILL` of the kernel (and of any subagent kernels in the same workspace);
+  - a "teammate" appending a requirements change to `ISSUES.md` (issue 5 changed, issue 14 added);
+  - a "teammate commit" of a comment line to `src/dict_support.jl`.
+- **No coaching:** the prompts never mention kernel state.
+
+**Failed starts (fixed, then rerun):**
+- `e1` never got a kernel (AF_UNIX path too long, class A).
+- `e2` ran Julia 1.13.1 (juliaup under a fresh `HOME`, class B).
+
+| Run | Work | Wall | neurajl calls / model requests | Compactions | Kernel kills → revivals | External edits | Graded result | Cost |
+|---|---|---|---|---|---|---|---|---|
+| e3 | batch 1 (issues 1–14, plus the requirements change) | 20 min | 85 / 144 | 1 | 1 → 1 | 1 (ISSUES.md) | 13/13; full suite passes | $0.12 |
+| e4 | batches 1–3 (issues 1–27) | 37 min | 169 / 209 | 3 | 1 → 1 (second kill not reached) | 2 | 13/13 + 11/11; suite passes | $0.20 |
+| e5 | batches 1–3, log analysis, Python textkit repair, batch 6 | 68 min | 270 / 310 | 6 | 2 → 2 (third not reached) | 2 | OC 13/13 + 11/11 + 5/5; logs 6/6 anomalies, sessions and top user correct; textkit 61/61 golden, `wrap_paragraphs` correct, suite passes; OC suite passes | $0.33 |
+| e6 | e5's work plus a JSON5 parser from a stub | 50.5 min (ended by a provider outage) | 226 / 274 | 5 | 2 → 2 (97 bindings revived at call 222) | 2 | OC 13/13 + 11/11; batch 6 **3/5** (issues 31–32 never started: the outage ended the turn); logs, textkit correct; suite passes (26,183 tests); JSON5 not reached | $0.28 |
+| e7 | e6's work, with an outage-tolerant retry policy (8 retries from 5s) | 50.1 min | 254 / 294 | 7 | 2 → 2 (12 and 54 bindings) | 2 | **every check passes**: OC 13/13 + 11/11 + 5/5; logs correct; textkit 61/61; **JSON5 parser written from a stub: 50/50 valid, 20/20 invalid rejected with `ParseError`**; OC suite passes | $0.36 |
+| e8 | e7's work plus a TOML parser from a stub and three maintenance batches | 40 min of work, then a **50-minute provider stall**; stopped by the operator at 89 min | 205 / 292 | 4 | 1 → 1 | 2 | OC 13/13 + 11/11; suite passes; stalled in batch 4 (logs), so later batches were not reached | — |
+
+**e5 in detail.** This is the longest completed run before e6, at 1.8 times the earlier 150-call ceiling.
+
+- **Revival after the first kill (call 60):** 6 bindings were revived. Luna repeated its interrupted call and continued.
+- **Revival after the second kill (call 221), in the middle of the log analysis:** 83 bindings were revived exactly, including the 300,000-element parsed log vectors, grouped dictionaries and quantiles. On the next call, Luna emptied those vectors. The kill reports exit code 137, which is what an out-of-memory kill looks like, so Luna inferred memory pressure. It then recomputed what it needed and finished the report correctly.
+  - This is **model behavior, class C**: a rational reading of an exit code that the supervisor produced with `SIGKILL`.
+- **State reuse after compaction:** of 212 calls after a compaction, 61 used names defined outside the retained context, 28 redefined one, 2 probed state (`varinfo`/`@isdefined`), and 2 hit `UndefVarError`. The heuristic counts names inside code strings too, so these numbers are indicative.
+- **Both `UndefVarError`s**, and the 2 in e4, were `$name` interpolation inside Julia code written as a Julia string (the quoting tax: class C/D), not lost state. Each was fixed on the next call.
+- **Notices:** 4 changed-on-disk notices (the teammate's `ISSUES.md` and source edits, plus Luna's own edits outside a call that named the file), 33 package reloads, 2 background-output reports, 0 background task failures.
+- **Tests:** Luna ran them through the CLI (25 runs), never in the kernel, and started no background jobs. So background-job handling was exercised only by the unit tests and the `/tmp` probe, not by the model.
+- **Resources over 68 minutes:**
+  - kernel RSS between 520 and 861 MB, no trend;
+  - sandbox `/tmp` at most 283 KB;
+  - host revival state grew 5 MB (one session's snapshot);
+  - no human intervention beyond the scripted ones.
+- **Semantic drift:** none detected. Every graded check passes, including the requirements changed mid-run.
+
+**Substrate soak (no model): the multi-hour check.** One NeuraJL session ran for 150 minutes. Every 20 seconds a call cycled through:
+- editing a workspace package and calling it (reload);
+- reading a 5,000-row CSV into a DataFrame and accumulating a total;
+- starting an `@async` job that prints after the call;
+- allocating an 8 MB vector;
+- running a shell command;
+- allocating and dropping churn.
+
+The kernel was killed every 45 minutes. Every call's result was checked.
+
+| Minutes | Calls | Latency | Kernel RSS | Sandbox `/tmp` | Saved state | Snapshot | Kills | Mismatches |
+|---|---|---|---|---|---|---|---|---|
+| 9 | 30 | 0.010s | 676 MB | 645 B | 15 MB | 0.061s | 0 | 0 |
+| 45 | kill → revived: package version 23, total restored | | | | | | 1 | 0 |
+| 60 | 180 | 0.009s | 727 MB | 803 B | 7 MB | 0.060s | 1 | 0 |
+| 90 | kill → revived: version 46 | | 654 MB | | | | 2 | 0 |
+| 120 | 360 | 0.009s | 743 MB | 1.0 KB | 15 MB | 0.060s | 2 | 0 |
+| 135 | kill → revived: version 68 | | | | | | 3 | 0 |
+| 150 (end) | 446 | 0.010s | 739 MB | 1.4 KB | 7 MB | 0.066s | 3 | **0** |
+
+Over 2.5 hours, with 3 kills, latency did not drift, RSS held at 654–756 MB with no trend, the sandbox `/tmp` stayed under 1.5 KB, and snapshots stayed near 60 ms for 8–15 MB. Every revival restored the DataFrame, the accumulated total and the vector exactly, and reloaded the workspace package at its current version. Each background `Task` was reported lost with its recipe.
+
+### 5. Failures and recoveries (this pass)
+
+| # | Failure | Class | Handling |
+|---|---|---|---|
+| 1 | A reply cut off at the output limit ended the whole run (misdiagnosed earlier as "compaction ends the run") | B, harness | Fixed (NP2 `f020af235`): bounded resume prompt; 6 tests |
+| 2 | The sandbox `/tmp` (RAM) kept all reported background output: about 4 GB a day with a chatty job | A, substrate | Fixed (`318c918`): truncated once reported; test |
+| 3 | Broker socket path over 108 bytes under a long `HOME`: no kernel could start | A, substrate | Fixed (`638ffdb`): short socket directory when needed; test |
+| 4 | juliaup installed and ran Julia 1.13.1 under a fresh `HOME`; the depot is for 1.12.6 | B, environment | Fixed (`6f6e9a5`): `NEURAJL_JULIA_BIN` pin; the supervisor sets it |
+| 5 | After a `SIGKILL` (exit 137), Luna assumed memory pressure and emptied revived vectors | C, model | Recorded; not built around. The supervisor's kill looks like the kernel being killed for running out of memory, so the inference is reasonable. |
+| 6 | `$name` interpolation inside Julia source written as a Julia string: 4 `UndefVarError`s in e4 and e5 | C/D | Recorded. The quoting tax is known; each was fixed on the next call. |
+| 7 | In-place mutation cannot be detected, so every successful call re-saves all saved state | D | Measured: 1s at the 128 MiB cap; not a problem at a model's pace |
+| 8 | Host revival state accumulates in the OS temp directory (RAM here): 423 MB over 47 sessions in a day | B, deployment | Recorded as a blocker for multi-session machines; unchanged during the freeze |
+| 9 | Provider outage: OpenRouter "Connection error" for more than 30s ended e6 (3 retries from 2s) | B, harness policy | Retries made configurable in the isolated driver (8 from 5s, about 21 min of tolerance); e7 then completed. Codex's runner still has 3 from 2s. |
+| 10 | Provider stall on one long request: e8 got "Connection error" every ~5 min for 50 min while a tiny request succeeded | B, external | Operator stopped the run at 89 min. Retries cannot beat a request that stalls deterministically, so the harness needs a per-request stall limit with a different recovery (a fresh request, or compaction). |
+| 11 | "call N" in the revival report is the call that last *bound* the name. A value changed in place by later calls (`push!(hist, …)`) is saved and restored current, but labelled with the old call. | D, labelling | Recorded; the value is correct |
+
+No false continuity was observed. Across 4 revivals in the endurance runs, every value Luna then used was correct: all graded checks pass.
+
+### 6. Exact remaining blockers for a supervised 72-hour run
+
+1. **Pin the environment.** Set `NEURAJL_JULIA_BIN` to the Julia the depot was built for. Run `prewarm_depot.py` after any change to Neura or the project. A 72-hour run under a fresh `HOME` without the pin will silently use whatever juliaup's default is that day.
+2. **Put revival state on disk.** Set `stateRoot` to a disk path, not the RAM-backed temp directory, and prune old session state between runs. For a single 72-hour session it is bounded (at most 128 MiB plus a transient copy), so this is operational, not a code change.
+3. **The harness request cap.** `abc-agent.ts` hardcodes a 60-request budget and a 16k `keepRecentTokens`. The endurance runs used an isolated driver copy with 2,000. A real 72-hour run needs Codex's runner to take these from configuration, which is Codex's file to change.
+4. **The provider path.** Two of the eight runs were damaged by the model provider, not the substrate: an outage (e6) and a per-request stall (e8). A 72-hour run will meet both. It needs outage-tolerant retries in Codex's runner, and a stall limit that abandons and re-issues a request that hangs.
+5. **Duration.** Model-driven sessions reached 50–68 minutes and 254–270 calls; Luna finishes the backlogs faster than they can be written. The substrate alone ran a 2.5-hour soak (below). Behavior at 72 hours, including memory, context cost and model drift over days, is extrapolated from these, not measured.
+
+### 7. Readiness verdict for a supervised 72-hour run
+
+**Ready to start a supervised 72-hour run, with the five blockers above handled as preconditions. Not yet shown to succeed at 72 hours.**
+
+**What the evidence supports:**
+- The substrate held for 2.5 hours and 446 calls, with no drift in latency, memory, `/tmp` or snapshot cost, and was killed and revived 3 times without a single wrong value.
+- Model-driven sessions of 50–68 minutes and 254–270 calls did real repository work with no coaching: 29 graded issues, a Python repair, a log analysis, and a JSON5 parser from scratch.
+- Those sessions ran through up to 7 compactions, 2 kernel kills, a requirements change and an external source edit. Every graded check passed in every run that the provider did not interrupt.
+- No false continuity was observed in 7 model-driven revivals or 3 soak revivals.
+
+**What stands between this and a 72-hour success is mostly outside NeuraJL:**
+- the provider path (outages and per-request stalls, which ended 2 of the 8 runs);
+- the runner's hardcoded request budget and retry policy (Codex's file);
+- deployment settings: pin Julia, put revival state on disk.
+
+The substrate items this pass found, including the `/tmp` growth, the socket path limit and the Julia drift, are fixed and tested.
+
+**The next step:** run the real 72-hour session under supervision once the runner takes its budget, retries and stall limit from configuration. The same supervisor can be reused, with its interventions, sampling and grading, and with work batches queued ahead.

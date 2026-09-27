@@ -1,0 +1,3 @@
+textkit: golden 61/61, wrap_paragraphs ok, suite pass
+json5: valid 50/50, invalid rejected with ParseError 20/20
+s11-endurance--e7 anomalies 6/6 sessions ok top user ok

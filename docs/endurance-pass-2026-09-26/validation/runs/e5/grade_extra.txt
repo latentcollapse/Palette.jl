@@ -1,0 +1,2 @@
+textkit: golden 61/61, wrap_paragraphs ok, suite pass
+s11-endurance--e5 anomalies 6/6 sessions ok top user ok

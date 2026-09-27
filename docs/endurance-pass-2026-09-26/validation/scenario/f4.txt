@@ -1,0 +1,10 @@
+New task, in the same repository: analyze logs/access.log (one request per line) and write reports/logs.md with these sections, in order:
+
+1. Requests and share of total per status class (2xx, 3xx, 4xx, 5xx).
+2. p50, p95 and p99 latency per endpoint, where an endpoint is the path with every numeric path segment replaced by {id}.
+3. The 10 users with the most total bytes, with their byte totals.
+4. Sessions: consecutive requests by the same user less than 30 minutes apart belong to one session. Report the number of sessions and the median session duration in seconds.
+5. Anomalous minutes: minutes whose 5xx rate is more than 3 times the median per-minute 5xx rate of the day. List each such minute with its 5xx rate.
+6. For each anomalous minute, the endpoint with the most 5xx responses in that minute.
+
+Check every number against an independent recomputation, and say when the report is complete.
