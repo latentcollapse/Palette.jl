@@ -16,7 +16,7 @@
  * being proven there. Here it is the point.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readlinkSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -190,9 +190,7 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 				await expect(
 					tool.execute("t2", { code: "x[1] = 99; s = 0; while true; s += 1; end" }, undefined, undefined),
 				).rejects.toThrow(/revives what it can of the state at the end of the last completed call/);
-				const after = textOf(
-					await tool.execute("t3", { code: "(x, y === x, double(x))" }, undefined, undefined),
-				);
+				const after = textOf(await tool.execute("t3", { code: "(x, y === x, double(x))" }, undefined, undefined));
 				expect(after).toMatch(/NEW kernel .*which revived the state/);
 				expect(after).toMatch(/\[revival\].*end of call 1/);
 				expect(after).toMatch(/restored exactly: x \(Vector\{Int64\}, call 1\), y \(Vector\{Int64\}, call 1\)/);
@@ -205,6 +203,53 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 			}
 		},
 		// test-policy: allow explicit-test-timeout -- starts two real sandboxed Julia kernels
+		300_000,
+	);
+
+	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+	it.skipIf(skipIfNeurajlUnavailable())(
+		"REAL integration: an idle kernel is stopped and revived on the next call; a long call is never stopped",
+		async () => {
+			const workspace = mkdtempSync(join(tmpdir(), "neurajl-idle-"));
+			const stateRoot = mkdtempSync(join(tmpdir(), "neurajl-idle-state-"));
+			const scope = createNeurajlBaseToolsFactory(workspace, {
+				sessionCliPath: SESSION_CLI_PATH,
+				projectDir: PROJECT_DIR,
+				stateRoot,
+				idleStopMs: 4000,
+			})("idle-test-session");
+			const tool = scope.tools.neurajl!;
+			// Kernels of this workspace only: other sessions on the host may run their own.
+			const kernels = () =>
+				execFileSync("pgrep", ["-f", "session_loop.jl"], { encoding: "utf8" })
+					.split("\n")
+					.filter((pid) => {
+						try {
+							return pid !== "" && readlinkSync(`/proc/${pid}/cwd`) === workspace;
+						} catch {
+							return false;
+						}
+					}).length;
+			try {
+				await tool.execute("t1", { code: "x = 41" }, undefined, undefined);
+				// Longer than the idle limit, but a call in progress is never stopped.
+				expect(textOf(await tool.execute("t2", { code: "sleep(7); x + 1" }, undefined, undefined))).toBe("42");
+				const before = kernels();
+				// test-policy: allow wall-clock-timer -- the feature under test is a real idle timer stopping a real kernel process
+				await new Promise((resolve) => setTimeout(resolve, 20_000));
+				expect(kernels()).toBeLessThan(before);
+				const after = textOf(await tool.execute("t3", { code: "x" }, undefined, undefined));
+				expect(after).toMatch(
+					/stopped after 4 seconds without a call, to free its memory; this call ran in a NEW kernel/,
+				);
+				expect(after).toMatch(/41$/);
+			} finally {
+				await scope.dispose?.();
+				rmSync(workspace, { recursive: true, force: true });
+				rmSync(stateRoot, { recursive: true, force: true });
+			}
+		},
+		// test-policy: allow explicit-test-timeout -- starts a real sandboxed Julia kernel twice and waits out the idle limit
 		300_000,
 	);
 
@@ -268,7 +313,9 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 				const long = textOf(
 					await tool.execute("t1", { code: 'for i in 1:500; println("line ", i); end' }, undefined, undefined),
 				);
-				expect(long).toMatch(/characters elided; Neura\.output\(1\) returns everything this call printed, and ans its value/);
+				expect(long).toMatch(
+					/characters elided; Neura\.output\(1\) returns everything this call printed, and ans its value/,
+				);
 				expect(long).not.toContain("line 250\n");
 				const back = await tool.execute(
 					"t2",

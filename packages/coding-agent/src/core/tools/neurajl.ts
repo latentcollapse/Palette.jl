@@ -83,6 +83,12 @@ export interface NeurajlToolOptions {
 	 * session) revives it. Default: `neurajl-state` in the OS temp directory. `false` turns saving off.
 	 */
 	stateRoot?: string | false;
+	/**
+	 * Stop a kernel that has had no call for this long; the next call revives its saved state. Only applies
+	 * when state is saved (stateRoot is not false). A finished RLM child is kept for the parent's lifetime,
+	 * and without this its kernel is too. Default: 20 minutes. 0 turns it off.
+	 */
+	idleStopMs?: number;
 }
 
 interface PendingTurn {
@@ -360,6 +366,21 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 		let lastBindings: string[] = [];
 		const lostBindings = () => (lastBindings.length === 0 ? "" : ` Lost bindings: ${lastBindings.join(", ")}.`);
 		const stoppedNotice = () => (stateDir ? KERNEL_STOPPED_REVIVING : `${KERNEL_STOPPED}${lostBindings()}`);
+		const idleStopMs = stateDir ? (options?.idleStopMs ?? 20 * 60_000) : 0;
+		let idleTimer: ReturnType<typeof setTimeout> | undefined;
+		let stoppedIdle = false;
+		let running = 0;
+		const armIdleStop = () => {
+			clearTimeout(idleTimer);
+			if (!(idleStopMs > 0) || disposed || running > 0) return;
+			idleTimer = setTimeout(async () => {
+				const kernel = kernelPromise ? await kernelPromise.catch(() => undefined) : undefined;
+				if (!kernel || kernel.isDead() || disposed || running > 0) return;
+				stoppedIdle = true;
+				await kernel.dispose();
+			}, idleStopMs);
+			idleTimer.unref?.();
+		};
 
 		// Returns the live kernel, starting one if none exists or the last one
 		// died. `restartedFrom` names the dead kernel's epoch.
@@ -380,7 +401,7 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 		// Started lazily, the first call waited for the whole startup (~3s).
 		// A start that fails here is retried by that first call, which then
 		// reports the failure.
-		liveKernel().catch(() => undefined);
+		liveKernel().then(armIdleStop, () => undefined);
 
 		const definition: ToolDefinition<typeof neurajlSchema, NeurajlToolDetails> = {
 			name: "neurajl",
@@ -393,48 +414,59 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 			// throws; an `isError` field on a returned result is ignored.
 			execute: async (_toolCallId, params, signal) => {
 				const started = Date.now();
-				const { kernel, restartedFrom } = await liveKernel();
-				const notice =
-					restartedFrom === undefined
-						? ""
-						: kernel.revival
-							? `[neurajl: the previous kernel (epoch ${restartedFrom}) stopped; this call ran in a NEW kernel (epoch ${kernel.epoch}), which revived the state saved at the end of the last completed call. Its report below says what was restored, rebuilt, or lost.]\n`
-							: `[neurajl: the previous kernel (epoch ${restartedFrom}) stopped; this call ran in a NEW kernel (epoch ${kernel.epoch}). All earlier bindings, functions and loaded packages are gone.${lostBindings()} Files written to the workspace remain.]\n`;
-				let response: Record<string, unknown>;
+				running += 1;
+				clearTimeout(idleTimer);
 				try {
-					response = await kernel.turn(
-						params.code,
-						{ ephemeral: params.ephemeral, payload: params.payload },
-						signal,
+					const { kernel, restartedFrom } = await liveKernel();
+					const why = stoppedIdle
+						? ` after ${idleStopMs >= 60_000 ? `${Math.round(idleStopMs / 60_000)} minutes` : `${Math.round(idleStopMs / 1000)} seconds`} without a call, to free its memory`
+						: "";
+					if (restartedFrom !== undefined) stoppedIdle = false;
+					const notice =
+						restartedFrom === undefined
+							? ""
+							: kernel.revival
+								? `[neurajl: the previous kernel (epoch ${restartedFrom}) stopped${why}; this call ran in a NEW kernel (epoch ${kernel.epoch}), which revived the state saved at the end of the last completed call. Its report below says what was restored, rebuilt, or lost.]\n`
+								: `[neurajl: the previous kernel (epoch ${restartedFrom}) stopped; this call ran in a NEW kernel (epoch ${kernel.epoch}). All earlier bindings, functions and loaded packages are gone.${lostBindings()} Files written to the workspace remain.]\n`;
+					let response: Record<string, unknown>;
+					try {
+						response = await kernel.turn(
+							params.code,
+							{ ephemeral: params.ephemeral, payload: params.payload },
+							signal,
+						);
+					} catch (err) {
+						const stopped = kernel.isDead() ? `\n${stoppedNotice()}` : "";
+						throw new Error(`${notice}${err instanceof Error ? err.message : String(err)}${stopped}`);
+					}
+					// The kernel keeps what each call printed, so elided output can be
+					// read back in pieces instead of recomputed.
+					const fullText =
+						typeof response.call === "number"
+							? `Neura.output(${response.call}) returns everything this call printed${response.success === true ? ", and ans its value" : ""}`
+							: undefined;
+					const { text, truncated } = truncateMiddle(
+						formatNeurajlResponse(response),
+						options?.maxOutputChars,
+						fullText,
 					);
-				} catch (err) {
-					const stopped = kernel.isDead() ? `\n${stoppedNotice()}` : "";
-					throw new Error(`${notice}${err instanceof Error ? err.message : String(err)}${stopped}`);
+					if (response.session_dead === true) throw new Error(`${notice}${text}\n${stoppedNotice()}`);
+					if (Array.isArray(response.bindings)) lastBindings = response.bindings.map(String);
+					if (response.success !== true) throw new Error(`${notice}${text}`);
+					return {
+						content: [{ type: "text", text: `${notice}${text}` }],
+						details: {
+							success: true,
+							epoch: kernel.epoch,
+							restartedFromEpoch: restartedFrom,
+							durationMs: Date.now() - started,
+							outputTruncated: truncated,
+						},
+					};
+				} finally {
+					running -= 1;
+					armIdleStop();
 				}
-				// The kernel keeps what each call printed, so elided output can be
-				// read back in pieces instead of recomputed.
-				const fullText =
-					typeof response.call === "number"
-						? `Neura.output(${response.call}) returns everything this call printed${response.success === true ? ", and ans its value" : ""}`
-						: undefined;
-				const { text, truncated } = truncateMiddle(
-					formatNeurajlResponse(response),
-					options?.maxOutputChars,
-					fullText,
-				);
-				if (response.session_dead === true) throw new Error(`${notice}${text}\n${stoppedNotice()}`);
-				if (Array.isArray(response.bindings)) lastBindings = response.bindings.map(String);
-				if (response.success !== true) throw new Error(`${notice}${text}`);
-				return {
-					content: [{ type: "text", text: `${notice}${text}` }],
-					details: {
-						success: true,
-						epoch: kernel.epoch,
-						restartedFromEpoch: restartedFrom,
-						durationMs: Date.now() - started,
-						outputTruncated: truncated,
-					},
-				};
 			},
 		};
 
@@ -458,6 +490,7 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 			},
 			dispose: async () => {
 				disposed = true;
+				clearTimeout(idleTimer);
 				if (!kernelPromise) return;
 				const kernel = await kernelPromise.catch(() => undefined);
 				await kernel?.dispose();
