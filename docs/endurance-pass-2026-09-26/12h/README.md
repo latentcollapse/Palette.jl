@@ -83,3 +83,18 @@ The smoke test also found that the OpenAI organisation is limited to 200k tokens
 **Also affects `scripts/abc-agent.ts`.** It has no dispatcher either, so any A/B/C trial whose stream is cut can fail every request after it. That file is Codex's; this is reported here and it has not been edited.
 
 **Test gap.** The pre-launch failover tests covered a refused connection and a blackhole, but not a stream cut mid-response. That case is what poisons the pool.
+
+## Incident 2: finished RLM children keep their kernels (found 04:45, mitigated 04:53 EDT)
+
+**Symptom.** At 04:11 the model spawned two RLM children from code: `ordered-dict-set-audit` and `little-dict-audit`. Both finished at 04:13. At 04:45 their sandboxed Julia kernels were still running, with no calls since 04:12.
+
+**Cause.** `registerRlmChildSession` retains a finished child for the parent's lifetime, so that it stays addressable. The NeuraJL base-tools scope is disposed only with the session, so each child's kernel (about 0.5–0.8 GB) also lived for the rest of the run. At the observed rate this grows without bound over 12 h. The machine has 31 GB, of which 17 GB was available.
+
+**Fix, NP2 `425c61161` (not pushed).**
+- `createNeurajlBaseToolsFactory` stops a kernel that has had no call for 20 minutes (`idleStopMs`).
+- The stop applies only when state is saved, so the next call revives the kernel's state. The notice says it was stopped "after 20 minutes without a call, to free its memory".
+- A call in progress is never stopped.
+- The real-kernel test `an idle kernel is stopped and revived on the next call; a long call is never stopped` passes (15/15 across the NeuraJL and compaction test files; `tsgo` and the test-policy check are clean).
+- Negative control: with `idleStopMs: 0` the same test fails ("expected 3 to be less than 3").
+
+**Live run.** The running driver loaded the old tool code, so `tools/reaper.py` applies the same policy from outside. It sends SIGTERM to a `session_cli` whose state directory has had no write for 20 minutes; `session_cli` tears down its sandbox on SIGTERM, as the tool's dispose does. At 04:53:57 it stopped both children's kernels, idle for 41 minutes, and available memory rose from 17 to 19 GB. Stops are logged in `runs/s12--tin1/reaper.jsonl`.
