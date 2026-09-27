@@ -30,8 +30,14 @@ function same(e, x)
     e isa AbstractDict && return x isa AbstractDict && Set(keys(x)) == Set(keys(e)) && all(same(e[k], x[k]) for k in keys(e))
     false
 end
+# Arguments that JSON cannot hold (inf, nan) arrive encoded like expected
+# values; a port is called with the Float64 itself.
+decode_arg(x) = x isa AbstractDict && haskey(x, "__float__") && length(x) == 1 ?
+                Base.parse(Float64, replace(x["__float__"], "inf" => "Inf", "nan" => "NaN")) :
+                x isa AbstractVector ? Any[decode_arg(v) for v in x] : x
 ok = 0; fails = String[]
-for (fn, args, expected) in g["cases"]
+for (fn, raw_args, expected) in g["cases"]
+    args = decode_arg(raw_args)
     global ok
     wants_error = expected isa AbstractDict && haskey(expected, "__error__")
     pass = try
@@ -42,6 +48,6 @@ for (fn, args, expected) in g["cases"]
         wants_error
     end
     ok += pass
-    pass || length(fails) >= 3 || push!(fails, "$fn$(first(JSON.json(args), 120))")
+    pass || length(fails) >= 3 || push!(fails, "$fn$(first(JSON.json(raw_args), 120))")
 end
 println("$name: $ok/$(length(g["cases"]))", isempty(fails) ? "" : "  first failures: " * join(fails, " | "))

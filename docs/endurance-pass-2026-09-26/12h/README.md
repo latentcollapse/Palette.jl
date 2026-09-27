@@ -128,3 +128,15 @@ The main kernel ran the new build before the scheduled 4 h kill. At 3.56 h the m
 - **Under the old build these modules were lost.** `module … end` in an included file was never replayed.
 - **The one "not revived" item in both revivals** is the failed `using JSON5Lite` of call 224, logged by the old build before the fix. The definition log carries it forward, so it recurs at every revival in this run. New failed calls are no longer logged this way.
 - **The 4 h revival call took 26.6 s:** the state is about 110 MB.
+
+## Grader defect found and fixed at about 5.5 h
+
+- **Defect.** `grade_ports.jl` decoded special floats (`{"__float__": "inf"}`) in expected values but passed arguments to the port raw. A Julia port was therefore called with a dict where it should have received `Inf` or `NaN`. This affects the 50 `format` cases whose argument is `inf` or `nan`, the only such cases in the goldens.
+- **Why the controls missed it.** The oracle shim sent the arguments back to Python, which decoded them. The positive control never passed a decoded argument to Julia code.
+- **How it was found.** A ports pilot: five of six independent `format` ports scored exactly 537/583, all failing the same `inf` cases.
+- **Fix.**
+  - Arguments are decoded before the call.
+  - The shim re-encodes non-finite floats for its JSON trip to Python.
+  - Controls afterwards: `format` scored empty 0, stub 0 and oracle 583/583.
+  - The pilot's ports then scored 583/583 in five runs and 568 in one.
+- **Effect on tin1.** The checkpoints up to 5 h under-report `format` by up to 50. The grader runs afresh at each checkpoint, so later checkpoints and the final grade use the fixed one.

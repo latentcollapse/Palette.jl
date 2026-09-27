@@ -121,10 +121,19 @@ Tools: `docs/rnd-2026-09-27/pilot.py`, `pilot_analyze.py`.
 - Two of the four adopted without a preceding failure, at their first multi-text edit. That is proactive use, which no hints or control run showed.
 - Grades were unchanged: 11/13 in all twelve pilot runs.
 
+**Generalization, on a port task.** `p04-format` (583 hidden CPython cases), 3 runs per arm, parts against hints:
+
+| Arm | `payload` use | Named texts | Quoting failures | Grade (fixed grader) |
+|---|---|---|---|---|
+| hints | 1 call per run | 0 | 3, 1, 0 | 583, 583, 583 |
+| **parts** | 14, 6 and 8 calls, **used from the start** (14/33, 6/29, 8/23 writes) | 26 of 28 | **0, 0, 0** | 583, 583, 568 |
+
+On whole-file work too, the named form is taken up without a failure prompting it, and the quoting failures disappear, at no cost to quality.
+
 **Limits.**
-- Four runs on one task.
+- Four runs on one task, then three per arm on a second.
 - The failures before adoption remain: the model starts out with the inline habit.
-- Before making it the default, the next step is a run on a different kind of work, such as the stdlib ports, where whole files are written.
+- The ports pilot (above) covers a second kind of work. Making it the default in NP2 (removing the switch) is the next step; that is Matt's call.
 - It was not deployed in tin1: the running NP2 driver has neither the switch nor the schema.
 
 ### 6. The snapshot tax, and the check for a waiting request that never worked
