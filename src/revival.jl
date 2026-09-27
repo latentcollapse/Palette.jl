@@ -443,6 +443,22 @@ const SLOW_SNAPSHOT_SECONDS = 2.0
 const MAX_UNSAVED_CALLS = 5
 
 """
+    note_completed_call!(call)
+
+Records in STATE_DIR that `call` completed. A snapshot can give way and fall
+behind; a revival compares this with the call its snapshot holds and says
+which calls' effects on the kernel it could not bring back.
+"""
+function note_completed_call!(call::Int)
+    dir = STATE_DIR[]
+    isempty(dir) && return nothing
+    tmp = joinpath(dir, "last_call.tmp")
+    write(tmp, string(call))
+    mv(tmp, joinpath(dir, "last_call"); force=true)
+    return nothing
+end
+
+"""
     snapshot_state!(call; waiting = () -> false)
 
 Writes the state at the end of `call` to STATE_DIR, replacing the last
@@ -606,6 +622,8 @@ fmt_binding(b) = "$(b["name"]) ($(b["type"]), call $(b["call"]))"
 Rebuilds the last snapshot's state in this kernel, and returns the report the
 first call shows.
 """
+read_or_empty(path) = isfile(path) ? read(path, String) : ""
+
 function revive_state!()
     dir = STATE_DIR[]
     path = joinpath(dir, "manifest.json")
@@ -823,6 +841,10 @@ function finish_revival(m, mod, state, call, pending, failed, errors, changed_fi
 
     push!(lines, "[revival] The previous kernel stopped. This kernel revived the state saved at the end of call $call" *
                  (data_block === nothing ? "." : "; its data could not be restored because $data_block."))
+    last = tryparse(Int, strip(read_or_empty(joinpath(dir, "last_call"))))
+    last !== nothing && last > call &&
+        push!(lines, "  Call$(last == call + 1 ? " $last" : "s $(call + 1)–$last") completed after this state was saved: " *
+                     "what $(last == call + 1 ? "it" : "they") changed in the kernel is lost; files written to the workspace remain.")
     isempty(exact) || push!(lines, "  restored exactly: " * join(exact, ", "))
     isempty(rebuilt) || push!(lines, "  rebuilt from source: " * join(rebuilt, ", "))
     isempty(stale) || push!(lines, "  restored but stale (a file it was computed from changed): " * join(stale, "; "))

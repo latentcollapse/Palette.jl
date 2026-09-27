@@ -363,7 +363,7 @@ for line in eachline(PROTO_IN)
                                 "processes this call started were stopped. Output printed before the interrupt is above.\n" * resp["error"]
             end
             isempty(resp["error"]) && (resp["error"] = nothing)
-            resp["success"] && (snapshot_call = call)
+            resp["success"] && (snapshot_call = call; Neura.note_completed_call!(call))
         else
             # Fail closed on an unrecognized `kind` -- confirmed by direct
             # testing that an earlier version of this branch ran ANY

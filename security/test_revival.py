@@ -316,6 +316,19 @@ class RevivalTest(unittest.TestCase):
         self.assertGreaterEqual(saved_meanwhile, 6, "a snapshot five calls old must complete even with requests waiting")
         self.assertEqual(m["call"], 9, "once idle, the last call's state is saved")
 
+    def test_calls_completed_after_the_saved_state_are_named(self):
+        # A slow snapshot can give way and fall up to four calls behind; a
+        # revival must not let the model believe those calls' work survived.
+        self.session("a = 1", "b = 2")
+        self.assertEqual(Path(self.state, "last_call").read_text(), "2")
+        Path(self.state, "last_call").write_text("5")   # calls 3-5 completed, none saved
+        out, r = self.revive("(a, b)")
+        self.assertEqual(r["data"], [1, 2])
+        self.assertIn("Calls 3–5 completed after this state was saved", out)
+        self.session("c = 3")
+        out, r = self.revive("c")
+        self.assertNotIn("completed after this state was saved", out)
+
     def test_a_quick_snapshot_never_gives_way(self):
         # Revival's promise for an ordinary session: the state of the last
         # completed call, even when the next call arrives at once and kills
