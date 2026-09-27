@@ -440,7 +440,8 @@ function execute_turn(code::String, timeout_s::Union{Nothing, Float64})
         turn = run_turn(() -> execute(ExecuteCode(code)), timeout_s)
         refresh_workspace_packages!(reload=false)
         note_files_named!(code, call)
-        log_definitions!(code, call)
+        ok = turn[1] isa OperationReceipt && turn[1].result.success && !turn[2]
+        log_definitions!(code, call; failed_in=ok ? nothing : state.eval_module)
         turn
     end
 end
