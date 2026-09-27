@@ -44,6 +44,8 @@ if ccall(:jl_generating_output, Cint, ()) == 1
         isempty(STATE_DIR[]) || rm(STATE_DIR[]; recursive=true, force=true)
         STATE_DIR[] = ""
         REVIVAL_REPORT[] = ""
+        LAST_SAVED_CALL[] = 0
+        LAST_SNAPSHOT_SECONDS[] = 0.0
         GLOBAL_STATE[] = nothing
         empty!(OUTPUTS)
         empty!(WORKSPACE_PACKAGES)

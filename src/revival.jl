@@ -432,22 +432,37 @@ mutable struct Group
     user::Set{String}
 end
 
+# The call whose state the last complete snapshot holds, in this kernel, and
+# how long that snapshot took.
+const LAST_SAVED_CALL = Ref(0)
+const LAST_SNAPSHOT_SECONDS = Ref(0.0)
+# When saving takes this long, a snapshot gives way to a waiting request, so
+# the model does not wait for it, until this many calls have gone unsaved. A
+# quick snapshot always completes: the state revived is then the last call's.
+const SLOW_SNAPSHOT_SECONDS = 2.0
+const MAX_UNSAVED_CALLS = 5
+
 """
-    snapshot_state!(call)
+    snapshot_state!(call; waiting = () -> false)
 
 Writes the state at the end of `call` to STATE_DIR, replacing the last
-snapshot only once the new one is complete.
+snapshot only once the new one is complete. When the last complete snapshot was
+slow and recent, and `waiting()` says a request is waiting, it stops and
+returns `nothing`; the last complete snapshot stays.
 """
-function snapshot_state!(call::Int)
+function snapshot_state!(call::Int; waiting::Function = () -> false)
     dir = STATE_DIR[]
     isempty(dir) && return nothing
+    give_way() = LAST_SNAPSHOT_SECONDS[] >= SLOW_SNAPSHOT_SECONDS && call - LAST_SAVED_CALL[] < MAX_UNSAVED_CALLS && waiting()
+    give_way() && return nothing
     started = time()
     mod = get_kernel_state().eval_module
     consts = Set(n for e in DEFINITION_LOG if e["kind"] == "const" for n in e["names"])
     defnames = Set(n for e in DEFINITION_LOG if e["kind"] in ("def", "include") for n in e["names"])
     bindings = Dict{String, Any}[]
     groups = Group[]
-    for sym in sort!(Base.invokelatest(names, mod; all=true))
+    for (k, sym) in enumerate(sort!(Base.invokelatest(names, mod; all=true)))
+        k % 32 == 0 && give_way() && return nothing
         (sym === nameof(mod) || sym in KERNEL_BINDINGS || startswith(string(sym), '#')) && continue
         Base.invokelatest(isdefined, mod, sym) || continue
         v = Base.invokelatest(getglobal, mod, sym)
@@ -502,6 +517,10 @@ function snapshot_state!(call::Int)
     stored = Dict{String, Any}[]
     total = 0
     for (i, g) in enumerate(groups)
+        if give_way()
+            foreach(f -> rm(joinpath(dir, f * ".tmp"); force=true), written)
+            return nothing
+        end
         bytes = UInt8[]
         ok = try
             bytes = snapshot_bytes(mod, Dict(n => Base.invokelatest(getglobal, mod, Symbol(n)) for n in g.names))
@@ -552,6 +571,8 @@ function snapshot_state!(call::Int)
     tmp = joinpath(dir, "manifest.json.tmp")
     write(tmp, JSON.json(manifest))
     mv(tmp, joinpath(dir, "manifest.json"); force=true)   # the commit point
+    LAST_SAVED_CALL[] = call
+    LAST_SNAPSHOT_SECONDS[] = time() - started
     keep = Set(written)
     for f in readdir(dir)
         startswith(f, "data-") && !(f in keep) && rm(joinpath(dir, f); force=true)
