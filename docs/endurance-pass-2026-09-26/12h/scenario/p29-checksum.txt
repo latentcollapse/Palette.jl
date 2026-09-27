@@ -1,0 +1,15 @@
+New task, in the same repository. Port: module PyChecksum in ports/checksum.jl. zlib.crc32, zlib.adler32 (both unsigned, over the UTF-8 bytes of s), hashlib.md5 and hashlib.sha1 hex digests, and crc32 chaining (crc32(b, previous)). Write MD5 yourself; other Julia standard libraries are allowed.
+
+Functions:
+  - crc32(s) -> Int
+  - adler32(s) -> Int
+  - md5_hex(s) -> String
+  - sha1_hex(s) -> String
+  - crc32_chain(parts) -> Int
+
+A few examples (arguments shown as JSON):
+  crc32("") -> 0
+  adler32("") -> 1
+  md5_hex("") -> "d41d8cd98f00b204e9800998ecf8427e"
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

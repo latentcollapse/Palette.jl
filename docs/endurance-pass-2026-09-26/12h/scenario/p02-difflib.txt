@@ -1,0 +1,14 @@
+New task, in the same repository. Port: module PyDifflib in ports/difflib.jl. Python's difflib.SequenceMatcher with isjunk=None and autojunk on (so the popular-element heuristic applies to sequences of 200 or more). a and b are both strings (compare characters) or both vectors of strings (compare elements). ratio, matching blocks (including the final dummy block) and opcodes must match exactly, and so must get_close_matches.
+
+Functions:
+  - ratio(a, b) -> Float64
+  - matching_blocks(a, b) -> vector of [i, j, n]
+  - opcodes(a, b) -> vector of [tag, i1, i2, j1, j2] with tag a String
+  - close_matches(word, possibilities::AbstractVector, n::Integer, cutoff::Real) -> Vector{String}
+
+A few examples (arguments shown as JSON):
+  ratio("", "") -> 1.0
+  matching_blocks("", "") -> [[0, 0, 0]]
+  opcodes("", "") -> []
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

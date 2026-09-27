@@ -1,0 +1,12 @@
+New task, in the same repository. Port: module PyLiteral in ports/literal.jl. A port of ast.literal_eval restricted to this value set: ints (all literal forms: 0x, 0o, 0b, underscores; results within Int64), floats (all literal forms, including 1., .5, 1e3, 1_0.5), strings (single, double and triple quotes, r and u prefixes, every escape except \N{...}, adjacent-literal concatenation), True/False/None, lists, tuples (returned as vectors), dicts with string keys (insertion-ordered), and unary +/- on numbers. Anything else, including names, calls, sets, bytes, complex numbers, f-strings, binary operators, and malformed syntax, throws.
+
+Functions:
+  - literal_eval(s) -> value
+
+A few examples (arguments shown as JSON):
+  literal_eval("1") -> 1
+  literal_eval("-0x1F") -> -31
+  literal_eval("0o17") -> 15
+  literal_eval("--5") -> throws
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

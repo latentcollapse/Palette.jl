@@ -1,0 +1,21 @@
+New task, in the same repository. Port: module PyItertools in ports/itertools.jl. Python's itertools results, materialised as vectors in Python's exact output order. r === nothing in permutations means len(xs); islice's start/stop/step follow Python (stop === nothing means no limit, negatives throw); batched with n < 1 throws; accumulate sums with an optional initial value (initial === nothing means none).
+
+Functions:
+  - combinations(xs, r)
+  - permutations(xs, r)
+  - product(lists, repeat)
+  - combinations_with_replacement(xs, r)
+  - accumulate(xs, initial)
+  - groupby(xs) -> vector of [key, items]
+  - batched(xs, n)
+  - pairwise(xs)
+  - islice(xs, start, stop, step)
+  - zip_longest(lists, fillvalue)
+
+A few examples (arguments shown as JSON):
+  combinations(["A", "B", "C", "D"], 0) -> [[]]
+  combinations(["A", "B", "C", "D"], 2) -> [["A", "B"], ["A", "C"], ["A", "D"], ["B", "C"], ["B", "D"], ["C", "D"]]
+  combinations(["A", "B", "C", "D"], 4) -> [["A", "B", "C", "D"]]
+  batched([0, 1, 2, 3, 4, 5, 6], 0) -> throws
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

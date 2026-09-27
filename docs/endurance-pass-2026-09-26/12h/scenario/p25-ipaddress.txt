@@ -1,0 +1,18 @@
+New task, in the same repository. Port: module PyIpaddress in ports/ipaddress.jl. Python 3.14's ipaddress module for IPv4 only: network parsing (strict and non-strict, prefix or netmask or hostmask forms), subnets, supernet, collapse_addresses, address_exclude (sorted), summarize_address_range, and address classification flags exactly as Python 3.14 defines them (its is_private/is_global tables changed in 3.13). Invalid input throws.
+
+Functions:
+  - network_info(s, strict::Bool) -> [network, broadcast, netmask, hostmask, prefixlen, num_addresses]
+  - subnets(s, new_prefix)
+  - supernet(s, new_prefix)
+  - collapse(nets)
+  - exclude(net, other)
+  - classify(addr) -> [is_private, is_global, is_loopback, is_multicast, is_link_local, is_reserved, is_unspecified]
+  - summarize(first, last)
+
+A few examples (arguments shown as JSON):
+  network_info("192.168.1.0/24", true) -> ["192.168.1.0", "192.168.1.255", "255.255.255.0", "0.0.0.255", 24, 256]
+  network_info("192.168.1.0/24", false) -> ["192.168.1.0", "192.168.1.255", "255.255.255.0", "0.0.0.255", 24, 256]
+  network_info("10.0.0.0/8", true) -> ["10.0.0.0", "10.255.255.255", "255.0.0.0", "0.255.255.255", 8, 16777216]
+  network_info("192.168.1.5/24", true) -> throws
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

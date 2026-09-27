@@ -1,0 +1,20 @@
+New task, in the same repository. Port: module PyPosixpath in ports/posixpath.jl. Python's posixpath functions (pure string manipulation; no filesystem access). relpath is only called with absolute paths. commonpath throws on an empty list or on a mix of absolute and relative paths.
+
+Functions:
+  - normpath(p)
+  - join(parts::AbstractVector)
+  - split(p) -> [head, tail]
+  - splitext(p) -> [root, ext]
+  - basename(p)
+  - dirname(p)
+  - commonpath(paths)
+  - commonprefix(paths)
+  - relpath(p, start)
+
+A few examples (arguments shown as JSON):
+  normpath("") -> "."
+  split("") -> ["", ""]
+  splitext("") -> ["", ""]
+  commonpath([]) -> throws
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.
