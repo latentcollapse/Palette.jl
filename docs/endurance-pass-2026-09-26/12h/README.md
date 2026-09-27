@@ -64,3 +64,22 @@ The smoke test was a 12-minute run of the full supervisor on fnmatch and shlex:
 - Cost was $0.11.
 
 The smoke test also found that the OpenAI organisation is limited to 200k tokens per minute. Requests that hit the limit were served by the backup route, as designed.
+
+## Incident 1: every request failing instantly, fixed live (04:12–04:42 EDT)
+
+**Symptom.** From about 3 minutes into the run, every OpenRouter request failed within about 20 ms with "Connection error.". Direct OpenAI worked until it hit the organisation's 200k tokens-per-minute cap. At that point the backup and recovery path switched to OpenRouter, which always failed. Later, api.openai.com failed the same way. By the time of the fix, 34 of the 60 allowed recoveries had been used, and the NeuraJL call count had stalled at 73.
+
+**What was ruled out.**
+- The network: curl reached both hosts in about 0.2 s.
+- The request content: replaying the same context from a fresh process succeeded, with 155 KB bodies and HTTP 200.
+- File-descriptor exhaustion: 34 open fds.
+
+**Cause.** Node's inspector was opened on the live driver with SIGUSR1, and a `fetch` evaluated inside that process returned `ERR_HTTP2_INVALID_SESSION: The session has been destroyed` for both provider origins, while example.com returned 200. Node 26.8.2 bundles undici 8.10.2, which uses HTTP/2. The run's first OpenRouter request was cut mid-stream (undici "terminated", 08:12:45Z), and undici then kept the destroyed HTTP/2 session in its pool. The CLI entry point never meets this, because `cli-main.ts` installs its own dispatcher (undici 7.29 `EnvHttpProxyAgent`). The endurance driver was copied from `scripts/abc-agent.ts`, which does not install one.
+
+**Fix.**
+- In the live process, through the inspector: `setGlobalDispatcher(new EnvHttpProxyAgent({ bodyTimeout: 0, headersTimeout: 0 }))`, exactly what cli-main does. Both origins answered at once (200 and 401), the next backup retry succeeded, and the run continued in the same session. The inspector was then closed.
+- The same line was added to `tools/endurance-agent.ts`. The refused and healthy failover tests were re-run on the patched driver, and both passed.
+
+**Also affects `scripts/abc-agent.ts`.** It has no dispatcher either, so any A/B/C trial whose stream is cut can fail every request after it. That file is Codex's; this is reported here and it has not been edited.
+
+**Test gap.** The pre-launch failover tests covered a refused connection and a blackhole, but not a stream cut mid-response. That case is what poisons the pool.
