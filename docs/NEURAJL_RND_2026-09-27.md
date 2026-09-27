@@ -124,6 +124,22 @@ Tools: `docs/rnd-2026-09-27/pilot.py`, `pilot_analyze.py`.
 - **NP2 `25f9d0528`.** The model-facing notices say "the last saved state", and the report names the call. Previously they said "the last completed call".
 - **Why not deployed in tin1.** The running NP2 driver cannot pick up that notice change, so it would tell the model "the last completed call" when the state could be older.
 
+### 7. Two hypotheses about runaway compute, both falsified
+
+A call whose compute never yields is interrupted, then the kernel is stopped, and the next call revives the state.
+
+**Hypothesis 1: a SIGINT could interrupt such compute in place and save the kernel.**
+- Test: `docs/rnd-2026-09-27/sigint_probe2.jl`, one process per case, with the signal sent from outside as a host would.
+- Results:
+  - a tight integer loop and an allocating loop were not interrupted, even by a second SIGINT;
+  - a floating-point loop and a large sort **segfaulted the process**.
+- The current design, stopping the kernel and reviving it, is the right one.
+
+**Hypothesis 2: the model re-runs the code that stopped the kernel.**
+- Evidence: 3 runaway stops across all the traces, all in tin1.
+- The next call's similarity to the one that stopped the kernel was 0.25, 0.25 and 0.06. The model changed its approach each time.
+- Nothing to fix, and nothing was added.
+
 ## Negative controls
 
 All five tests for findings 1–4 that existed at the time were run against the original source with the new test files. All five fail there, and all pass on the fixed source. The interpolation hint's test asserts text that only the new code produces.
