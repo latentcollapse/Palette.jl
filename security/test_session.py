@@ -121,6 +121,20 @@ class TestSessionLifecycle(SessionTestCase):
         finally:
             s.close()
 
+    def test_session_starts_under_a_deep_session_root(self):
+        """The broker's Unix socket lived under the session root; a long HOME
+        pushed its path past 108 bytes and no kernel could start."""
+        deep = Path(tempfile.mkdtemp(prefix="neurajl-deep-")) / ("d" * 60) / ("e" * 60)
+        s = NeuraSession(project_dir=PROJECT_DIR, ceiling={}, workspace_dir=str(deep))
+        try:
+            sock_dir = s._broker_sock_dir
+            self.assertLessEqual(len(str(Path(sock_dir) / "broker.sock").encode()), 100)
+            self.assertEqual(s.turn("1 + 1")["data"], 2)
+        finally:
+            s.close()
+            shutil.rmtree(deep.parent.parent, ignore_errors=True)
+        self.assertFalse(Path(sock_dir).exists())
+
     def test_turn_after_close_raises(self):
         s = NeuraSession(project_dir=PROJECT_DIR, ceiling={})
         s.close()

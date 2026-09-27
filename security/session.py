@@ -37,6 +37,7 @@ import os
 import selectors
 import shutil
 import subprocess
+import tempfile
 import threading
 import uuid
 from pathlib import Path
@@ -153,9 +154,18 @@ class NeuraSession:
 
             self.depot_clone_dir = create_session_depot()
 
-            self._broker_sock_dir = str(self._tmp_root / "broker")
-            Path(self._broker_sock_dir).mkdir(parents=True, exist_ok=True)
-            receipts_path = str(Path(receipts_dir or self._broker_sock_dir) / "receipts.jsonl")
+            # A Unix socket path is limited to 108 bytes. Under a long HOME the
+            # session root pushed it past that and no kernel could start
+            # ("AF_UNIX path too long"); the socket then gets a short private
+            # directory of its own. Receipts stay in the session root.
+            broker_root = self._tmp_root / "broker"
+            broker_root.mkdir(parents=True, exist_ok=True)
+            if len(str(broker_root / "broker.sock").encode()) > 100:
+                self._short_sock_dir = tempfile.mkdtemp(prefix="nj-")
+                self._broker_sock_dir = self._short_sock_dir
+            else:
+                self._broker_sock_dir = str(broker_root)
+            receipts_path = str(Path(receipts_dir or broker_root) / "receipts.jsonl")
             self._broker_server, self._broker = _broker.serve(
                 str(Path(self._broker_sock_dir) / "broker.sock"),
                 ceiling, receipts_path, self.session_id,
@@ -377,6 +387,8 @@ class NeuraSession:
             shutil.rmtree(self.depot_clone_dir, ignore_errors=True)
         if hasattr(self, "_tmp_root"):
             shutil.rmtree(self._tmp_root, ignore_errors=True)
+        if hasattr(self, "_short_sock_dir"):
+            shutil.rmtree(self._short_sock_dir, ignore_errors=True)
 
     def close(self):
         with self._lock:
