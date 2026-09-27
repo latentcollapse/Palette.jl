@@ -285,6 +285,23 @@ class RevivalTest(unittest.TestCase):
         self.assertRegex(lost, r"task_holder \([^)]*\): [^;]*a Task cannot be revived")
         self.assertRegex(lost, r"over_old \([^)]*\): [^;]*earlier definition")
 
+    def test_a_large_report_puts_what_needs_attention_first_and_stays_short(self):
+        # In the 12h run the report reached 23 KB with 170 bindings; the model
+        # sees a long result cut in the middle.
+        self.session("for i in 1:400; @eval $(Symbol(:binding_with_a_long_name_, i)) = [$i, $i]; end; "
+                     "t = @async sleep(1000); f(x) = x")
+        out, r = self.revive("1")
+        self.assertTrue(r["success"], r)
+        lines = [l for l in out.split("\n") if l.startswith("  ")]
+        order = [next(i for i, l in enumerate(lines) if l.startswith(h)) for h in ("  not revived", "  rebuilt from source", "  restored exactly")]
+        self.assertEqual(order, sorted(order), lines)
+        exact = next(l for l in lines if l.startswith("  restored exactly"))
+        self.assertLess(len(exact), 1600)
+        self.assertIn("restored exactly (400):", exact)
+        self.assertIn("more (varinfo() lists every binding)", exact)
+        self.assertIn("t (Task", out)
+        self.assertLess(len(out), 3000)
+
     def test_an_included_module_comes_back_and_a_failed_using_is_not_a_loss(self):
         # The 12h run: `using JSON5Lite` failed (not a registered package),
         # then `include`d the package's module file. Revival replayed the
