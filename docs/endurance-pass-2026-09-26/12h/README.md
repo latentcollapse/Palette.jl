@@ -98,3 +98,20 @@ The smoke test also found that the OpenAI organisation is limited to 200k tokens
 - Negative control: with `idleStopMs: 0` the same test fails ("expected 3 to be less than 3").
 
 **Live run.** The running driver loaded the old tool code, so `tools/reaper.py` applies the same policy from outside. It sends SIGTERM to a `session_cli` whose state directory has had no write for 20 minutes; `session_cli` tears down its sandbox on SIGTERM, as the tool's dispose does. At 04:53:57 it stopped both children's kernels, idle for 41 minutes, and available memory rose from 17 to 19 GB. Stops are logged in `runs/s12--tin1/reaper.jsonl`.
+
+## Build change at the 4 h kill (decided 07:15, deployed 07:22 EDT)
+
+**Why.** From 0 to 4 h, tin1 ran lab `7644239`. The overnight R&D (`docs/NEURAJL_RND_2026-09-27.md`) fixed revival defects that tin1 itself exposed at its 1.5 h kill:
+- a Regex and a RegexMatch were lost;
+- a failed `using` was reported lost;
+- an included package module was not rebuilt.
+
+It also made closures revivable. The fixes had passed the full lab suites: revival 27, session_cli 50, session 12, authority 27, and Julia `Pkg.test`. Each new test fails on the old source.
+
+**What was deployed.** Lab `main` was fast-forwarded to `917b18d` at 07:22, and the trial depot was prewarmed. Five revival tests, run against the deployed build with the trial project and depot, passed at 07:25.
+
+**Who gets the new build.** The running kernel keeps the old build. The 4 h SIGKILL (about 08:09) starts the main kernel on the new build, which revives the old build's snapshot. The two builds use the same manifest format. RLM children started after 07:22 also get the new build.
+
+**What this does to the run's claim.** tin1 is 4 h of `7644239`, then 8 h of `917b18d`, not 12 h of one build. The later kills (6.5, 9 and 11 h) test the new revival code on a real, large state.
+
+**Not deployed.** The snapshot-yield change (branch `rnd/snapshot-yield`). Snapshots of this run's 110 MB state take 28 s, and the median call waits about 9 s for them. The change lets a waiting request go first, but it weakens the "revives the last completed call" guarantee, which one existing test enforces. It needs a design pass, not a deploy under a deadline.
