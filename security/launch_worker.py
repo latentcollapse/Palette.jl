@@ -91,6 +91,14 @@ def resolve_real_julia_binary() -> str:
     requested spawn_child_worker, would have corrupted that whole
     session's ability to receive any further turn after the first one.
     """
+    # An explicit binary wins. Asked under a fresh HOME, the juliaup shim
+    # installs and returns its current default release: an endurance run got
+    # Julia 1.13.1 while the depot was built for 1.12.6.
+    pinned = os.environ.get("NEURAJL_JULIA_BIN")
+    if pinned:
+        if not Path(pinned).is_file():
+            raise RuntimeError(f"NEURAJL_JULIA_BIN is not a file: {pinned}")
+        return pinned
     out = subprocess.run(
         ["julia", "-e", "print(Sys.BINDIR)"], capture_output=True, text=True, check=True, stdin=subprocess.DEVNULL,
     )
