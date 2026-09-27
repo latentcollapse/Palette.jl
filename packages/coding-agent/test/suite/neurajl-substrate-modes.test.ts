@@ -189,9 +189,9 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 				await tool.execute("t1", { code: "x = [1, 2]; y = x; double(v) = 2v" }, undefined, undefined);
 				await expect(
 					tool.execute("t2", { code: "x[1] = 99; s = 0; while true; s += 1; end" }, undefined, undefined),
-				).rejects.toThrow(/revives what it can of the state at the end of the last completed call/);
+				).rejects.toThrow(/revives what it can of the last saved state/);
 				const after = textOf(await tool.execute("t3", { code: "(x, y === x, double(x))" }, undefined, undefined));
-				expect(after).toMatch(/NEW kernel .*which revived the state/);
+				expect(after).toMatch(/NEW kernel .*which revived the last saved state/);
 				expect(after).toMatch(/\[revival\].*end of call 1/);
 				expect(after).toMatch(/restored exactly: x \(Vector\{Int64\}, call 1\), y \(Vector\{Int64\}, call 1\)/);
 				expect(after).toMatch(/rebuilt from source: double \(function, call 1\)/);
@@ -288,7 +288,7 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 				await expect(during).rejects.toThrow(/the kernel stopped/);
 				// The new kernel revives x from the state saved after t1/t3.
 				const after = await tool.execute("t5", { code: "@isdefined(x)" }, undefined, undefined);
-				expect(textOf(after)).toMatch(/NEW kernel[\s\S]*which revived the state[\s\S]*true$/);
+				expect(textOf(after)).toMatch(/NEW kernel[\s\S]*which revived the last saved state[\s\S]*true$/);
 			} finally {
 				await scope.dispose?.();
 				rmSync(workspace, { recursive: true, force: true });

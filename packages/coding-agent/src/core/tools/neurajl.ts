@@ -314,7 +314,7 @@ async function startKernel(
 const KERNEL_STOPPED =
 	"[neurajl: the kernel stopped. Output printed during this call and every binding, function and loaded package are gone; files written to the workspace remain. The next call starts a new kernel.]";
 const KERNEL_STOPPED_REVIVING =
-	"[neurajl: the kernel stopped. Output printed during this call is gone; files written to the workspace remain. The next call starts a new kernel, which revives what it can of the state at the end of the last completed call and says what it could not.]";
+	"[neurajl: the kernel stopped. Output printed during this call is gone; files written to the workspace remain. The next call starts a new kernel, which revives what it can of the last saved state and says which call that was and what it could not revive.]";
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms).unref?.());
@@ -426,7 +426,7 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 						restartedFrom === undefined
 							? ""
 							: kernel.revival
-								? `[neurajl: the previous kernel (epoch ${restartedFrom}) stopped${why}; this call ran in a NEW kernel (epoch ${kernel.epoch}), which revived the state saved at the end of the last completed call. Its report below says what was restored, rebuilt, or lost.]\n`
+								? `[neurajl: the previous kernel (epoch ${restartedFrom}) stopped${why}; this call ran in a NEW kernel (epoch ${kernel.epoch}), which revived the last saved state. Its report below says which call that was, and what was restored, rebuilt, or lost.]\n`
 								: `[neurajl: the previous kernel (epoch ${restartedFrom}) stopped; this call ran in a NEW kernel (epoch ${kernel.epoch}). All earlier bindings, functions and loaded packages are gone.${lostBindings()} Files written to the workspace remain.]\n`;
 					let response: Record<string, unknown>;
 					try {
