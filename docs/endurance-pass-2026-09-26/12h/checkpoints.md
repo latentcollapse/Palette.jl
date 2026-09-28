@@ -550,3 +550,64 @@ emailutils: 0/26 (no ports/emailutils.jl)
 literal: 0/43 (no ports/literal.jl)
 ports total: 2353/2903
 ```
+
+## Checkpoint at 10.02 h (2026-09-27 14:10:31)
+
+- driver alive: True; follow-ups delivered: 36/50 (last: p26-strftime.txt)
+- kernel_rss_mb: 1689
+- driver_rss_mb: 14
+- sandbox_tmp_bytes: 4177271
+- state_root_bytes: 150223141
+- kernel_pid: 2288314
+- neurajl_calls: 1540
+- compactions: 53
+- requests: 2792
+- request_errors: 261
+- cost_usd: 3.5041
+- in: 7903914
+- out: 2838503
+- cacheR: 101428004
+- retries: 182
+- backup_retries: 70
+- stall_aborts: 0
+- recoveries: 38
+- followups_started: 36
+- trace_mb: 24.9
+
+Live port grade:
+
+```
+fnmatch: 178/178
+shlex: 41/41
+textwrap: 70/70
+difflib: 57/57
+difflib2: 50/50
+string: 0/51 (no ports/string.jl)
+heapq: 63/63
+statistics: 179/180  first failures: geometric_mean[[0,1,4]]
+csv: 30/30
+colorsys: 84/84
+bisect: 107/107
+base64: 116/116
+urlparse: 133/133
+posixpath: 111/111
+calendar: 43/43
+fractions: 65/70  first failures: fraction_round["5/2",null] | fraction_round["7/2",null] | fraction_round["-5/2",null]
+json: 40/40
+numeric: 88/88
+struct: 73/73
+graphlib: 24/24
+format: 583/583
+pystr: 216/216
+random: 81/81
+configparser: 28/28
+ipaddress: 47/47
+strftime: 74/74
+checksum: 0/44 (no ports/checksum.jl)
+pprint: 40/40
+itertools: 0/40 (no ports/itertools.jl)
+escape: 0/72 (no ports/escape.jl)
+emailutils: 0/26 (no ports/emailutils.jl)
+literal: 0/43 (no ports/literal.jl)
+ports total: 2621/2903
+```

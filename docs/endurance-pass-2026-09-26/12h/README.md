@@ -152,3 +152,34 @@ The main kernel ran the new build before the scheduled 4 h kill. At 3.56 h the m
   - Those two lists are shortened past 1,500 characters, first to names and then to a count. `varinfo()` has every binding.
   - Short reports keep their exact form.
 - **Checks.** Full suites pass: revival 28, session_cli 50, session 12, authority 27, Julia `Pkg.test`. After the trial depot was prewarmed, the new test and the closure test also passed on the deployed build.
+
+## End of the run: power loss at 10.0 h (14:09:51 EDT)
+
+The machine lost power at 14:09:51, 10.0 h into the 12 h run. The kernel journal of the previous boot ends then, and the next boot was 21:47. Neither the substrate nor the harness failed.
+
+**What was lost.** `/tmp` is RAM-backed, and it held all of the following:
+- the scratchpad: the supervisor's run directory, the trace, the workspace with the model's port files, the pilot traces and the generated goldens;
+- the final grading, including the ISSUES, json5, toml, textkit and logs graders, which were due to run at the deadline.
+
+**What survived:**
+- this README and `checkpoints.md` up to 10.02 h, on the lab disk;
+- the tools in `tools/`: the driver, the supervisor, `spec.py` (which regenerates the goldens deterministically) and the graders;
+- the revival state directories on NVMe;
+- NP2, and the R&D worktrees and depots.
+
+**The 10.02 h checkpoint is the run's final record:**
+
+| Measure | Value |
+|---|---|
+| NeuraJL calls | 1,540 |
+| Model requests | 2,792 |
+| Compactions | 53 |
+| Cost | $3.50 |
+| Follow-ups started | 36 of 50 (up to `p26-strftime`) |
+| Kernel kills survived | 1.5, 4, 6.5 and 9 h scheduled, plus 2 runaway stops |
+| Stalls | 0 |
+| Recoveries after 04:42 | 4 (38 in total) |
+
+Ports stood at **2,621/2,903**:
+- The six ports not yet reached (string, checksum, itertools, escape, emailutils, literal) account for 276 of the cases.
+- On the 26 ports attempted, 2,621 of 2,627 cases pass (99.8%). 24 ports are perfect; statistics is 179/180 and fractions 65/70.
