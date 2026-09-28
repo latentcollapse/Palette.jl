@@ -352,6 +352,15 @@ class TestSessionCli(unittest.TestCase):
         self.assertFalse(r["output"].startswith("[digest of"), r["output"][:80])
         self.assertIn("src/lib.rs:3:5", r["output"])
 
+    def test_stress_runs_a_flaky_command_many_times_in_the_sandbox(self):
+        """A failure that shows up one run in many needs many runs; the report
+        names the first failing run, which STRESS_RUN repeats."""
+        r = self._turn('Neura.stress(PAYLOAD; n=60, jobs=6)', payload="[ $((STRESS_RUN % 20)) -ne 0 ] || { echo race at $STRESS_RUN; exit 2; }")
+        self.assertTrue(r["success"], r)
+        self.assertIn("60 runs in", r["display"])
+        self.assertIn("3 failed (exit codes: 0×57, 2×3)", r["display"])
+        self.assertIn("first failure: run 20 (STRESS_RUN=20) exited 2", r["display"])
+
     def test_background_jobs_are_named_when_they_change(self):
         """A model that started a server or a long build had no word of it
         again until it thought to look, and a failed task was reported as

@@ -2,6 +2,18 @@ using Test
 using Neura
 using JSON
 
+@testset "Stress runner" begin
+    r = Neura.stress("[ \$((STRESS_RUN % 13)) -ne 0 ] || { echo boom at \$STRESS_RUN; exit 3; }"; n=100, jobs=8)
+    @test r.runs == 100 && r.outcomes == Dict(0 => 93, 3 => 7)
+    @test r.first_failure[1] == 13 && occursin("boom at 13", r.first_failure[3])
+    text = sprint(show, MIME"text/plain"(), r)
+    @test occursin("100 runs in", text) && occursin("7 failed (exit codes: 0×93, 3×7)", text) && occursin("STRESS_RUN=13", text)
+    ok = Neura.stress("true"; n=10, jobs=2)
+    @test ok.first_failure === nothing && occursin("0 failed", sprint(show, MIME"text/plain"(), ok))
+    slow = Neura.stress("sleep 1"; n=100, jobs=2, seconds=2)
+    @test 0 < slow.runs < 100 && occursin("of 100 runs", sprint(show, MIME"text/plain"(), slow))
+end
+
 # Run before "EphemeralTool isolation", whose same-process case pirates Base methods for the rest of the process.
 @testset "Output digest" begin
     fx(name) = read(joinpath(@__DIR__, "fixtures", "digest", name), String)

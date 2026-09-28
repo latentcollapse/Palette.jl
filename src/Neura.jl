@@ -602,6 +602,14 @@ function output(n::Integer)
     haskey(Neura.OUTPUTS, n) && return Neura.OUTPUTS[n]
     error("call $n printed nothing, or is older than the last $(Neura.KEEP_OUTPUTS) calls")
 end
+
+"""
+    Neura.stress(cmd; n = 200, jobs = 8, seconds = 45)
+
+Run the shell command `cmd` `n` times, `jobs` at a time, and report the exit
+codes and the first failing run; run `i` sees `STRESS_RUN=i`.
+"""
+stress(cmd::AbstractString; kwargs...) = Neura.stress(cmd; kwargs...)
 end
 
 # Bindings the kernel creates in every session module. They are not the
@@ -1606,6 +1614,7 @@ include("turn.jl")
 include("revival.jl")
 include("digest.jl")
 include("workspace_map.jl")
+include("stress.jl")
 include("precompile_workload.jl")
 
 export KernelState, ExecutionRecord

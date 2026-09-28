@@ -38,6 +38,7 @@ if ccall(:jl_generating_output, Cint, ()) == 1
                     "FAIL: test_a (m.T.test_a)\nFile \"m.py\", line 3, in t\nAssertionError: 1 != 2\n" *
                     "File \"a.ml\", line 1, characters 1-2:\nError: e\n  more\n✖ x (1ms)\n\e[31mred\e[0m\n")
         report_jobs(WorkloadScope)
+        sprint(show, MIME"text/plain"(), stress("exit $((STRESS_RUN % 2))"; n=4, jobs=2, seconds=10))
         let root = mktempdir()
             mkpath(joinpath(root, "src"))
             write(joinpath(root, "src", "lib.rs"), "")
