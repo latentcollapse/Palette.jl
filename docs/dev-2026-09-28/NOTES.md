@@ -106,3 +106,31 @@ No measurable difference. Relay's failures are short, so the digest rarely fires
   - no OpenRouter traffic.
 - **Throughput was lost to the compaction loop.** Uncached input came to 14.1M tokens, against tin2's 1.9M.
 - **Budget:** about $3.10 left on the account.
+
+## QA audit on tin1–3: the compaction loop's real cause (fixed, NP2 `021440738`)
+
+The 60k window was not the whole story. After a compaction, the context was often still above the trigger: late in tin3, the first request after a compaction was 62–66k tokens, against a 44k trigger.
+
+**Cause, found in the entries:**
+- NeuraJL writes a `neurajl_state` note after every compaction. The notes were a median 4.8k characters each, one per compaction, and none was ever dropped.
+- A kept tail that spanned several compactions carried a stack of them: 52k characters on average, and 19 notes in context at the last entry.
+- `findCutPoint` counts only `type === "message"` entries toward `keepRecentTokens`, so the notes were outside the budget.
+- More compactions meant more notes in the tail, which meant still more compactions.
+
+**Fix:**
+- Only the newest note reaches the model, the same rule as for the harness digest.
+- Custom messages now count toward the kept budget.
+
+**Checks:**
+- Build-context tests 18/18; compaction and session-manager 191/191; NeuraJL real-kernel tests 41/41 (with the environment set, so none skipped); `tsgo` clean; biome clean; test policy passes.
+- Red controls: both new build-context tests and the new `findCutPoint` test fail without their fix.
+- `extensions-discovery` and `catalog-assets` fail 20/27 with or without the change, so those failures were already there.
+- Replay of tin3's real entries at its last entry: 19 notes and 272k characters before the fix, 1 note and 140k characters after.
+
+**Still open:**
+1. **Encrypted reasoning** (`thinkingSignature`, 140k+ characters in context) is invisible to `estimateTokens`. Whether OpenAI bills it by length is unknown; the next run should compare reported input tokens against the estimate.
+2. **The summary budget** is 0.8 × `reserveTokens` (about 13k tokens), not tied to the window size. At small windows, the summary alone takes a large share.
+3. **The note's list of bindings is unbounded:** 7.4k characters at 1,000+ bindings. Only one note is now sent, but the list should still be capped.
+4. **Harness pacing** (the server's retry-after and a token bucket) is still to build.
+
+The regression of post-compaction size on content type was inconclusive (R² = 0.17) and is not used as evidence.
