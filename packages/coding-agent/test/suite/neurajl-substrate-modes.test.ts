@@ -105,6 +105,7 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 			writeFileSync(join(harness.tempDir, "marker.txt"), "from-host");
 			const session = await buildSessionIn(harness, {
 				baseToolsFactory: createNeurajlBaseToolsFactory(harness.tempDir, {
+					workspaceMap: false,
 					sessionCliPath: SESSION_CLI_PATH,
 					projectDir: PROJECT_DIR,
 				}),
@@ -146,6 +147,7 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 		async () => {
 			const workspace = mkdtempSync(join(tmpdir(), "neurajl-timeout-"));
 			const scope = createNeurajlBaseToolsFactory(workspace, {
+				workspaceMap: false,
 				sessionCliPath: SESSION_CLI_PATH,
 				projectDir: PROJECT_DIR,
 				turnTimeout: 5,
@@ -179,6 +181,7 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 			const workspace = mkdtempSync(join(tmpdir(), "neurajl-revive-"));
 			const stateRoot = mkdtempSync(join(tmpdir(), "neurajl-revive-state-"));
 			const scope = createNeurajlBaseToolsFactory(workspace, {
+				workspaceMap: false,
 				sessionCliPath: SESSION_CLI_PATH,
 				projectDir: PROJECT_DIR,
 				turnTimeout: 5,
@@ -208,11 +211,46 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 
 	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
 	it.skipIf(skipIfNeurajlUnavailable())(
+		"REAL integration: the workspace map opens the first result and the first after a compaction",
+		async () => {
+			const workspace = mkdtempSync(join(tmpdir(), "neurajl-map-"));
+			writeFileSync(join(workspace, "lib.rs"), "pub fn f() {}\n");
+			const scope = createNeurajlBaseToolsFactory(workspace, {
+				sessionCliPath: SESSION_CLI_PATH,
+				projectDir: PROJECT_DIR,
+				stateRoot: false,
+				workspaceMap: true,
+			})("map-test-session");
+			const tool = scope.tools.neurajl!;
+			try {
+				const first = textOf(await tool.execute("t1", { code: "1 + 1" }, undefined, undefined));
+				expect(first).toMatch(/^\[workspace map\] 1 files/);
+				expect(first).toMatch(/Rust 1/);
+				expect(first).toMatch(/2$/);
+				expect(textOf(await tool.execute("t2", { code: "2 + 2" }, undefined, undefined))).not.toMatch(
+					/workspace map/,
+				);
+				const note = await scope.stateAfterCompaction?.();
+				expect(note?.content).toMatch(/Your next neurajl result opens with a map of the workspace/);
+				expect(textOf(await tool.execute("t3", { code: "3" }, undefined, undefined))).toMatch(/^\[workspace map\]/);
+				expect(textOf(await tool.execute("t4", { code: "4" }, undefined, undefined))).not.toMatch(/workspace map/);
+			} finally {
+				await scope.dispose?.();
+				rmSync(workspace, { recursive: true, force: true });
+			}
+		},
+		// test-policy: allow explicit-test-timeout -- starts a real sandboxed Julia kernel
+		300_000,
+	);
+
+	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+	it.skipIf(skipIfNeurajlUnavailable())(
 		"REAL integration: an idle kernel is stopped and revived on the next call; a long call is never stopped",
 		async () => {
 			const workspace = mkdtempSync(join(tmpdir(), "neurajl-idle-"));
 			const stateRoot = mkdtempSync(join(tmpdir(), "neurajl-idle-state-"));
 			const scope = createNeurajlBaseToolsFactory(workspace, {
+				workspaceMap: false,
 				sessionCliPath: SESSION_CLI_PATH,
 				projectDir: PROJECT_DIR,
 				stateRoot,
@@ -259,6 +297,7 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 		async () => {
 			const workspace = mkdtempSync(join(tmpdir(), "neurajl-abort-"));
 			const scope = createNeurajlBaseToolsFactory(workspace, {
+				workspaceMap: false,
 				sessionCliPath: SESSION_CLI_PATH,
 				projectDir: PROJECT_DIR,
 			})("abort-test-session");
@@ -304,6 +343,7 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 		async () => {
 			const workspace = mkdtempSync(join(tmpdir(), "neurajl-elide-"));
 			const scope = createNeurajlBaseToolsFactory(workspace, {
+				workspaceMap: false,
 				sessionCliPath: SESSION_CLI_PATH,
 				projectDir: PROJECT_DIR,
 				maxOutputChars: 400,
@@ -339,6 +379,7 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 		async () => {
 			const workspace = mkdtempSync(join(tmpdir(), "neurajl-compact-"));
 			const scope = createNeurajlBaseToolsFactory(workspace, {
+				workspaceMap: false,
 				sessionCliPath: SESSION_CLI_PATH,
 				projectDir: PROJECT_DIR,
 			})("compact-test-session");
@@ -363,6 +404,7 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 		async () => {
 			const workspace = mkdtempSync(join(tmpdir(), "neurajl-dispose-"));
 			const scope = createNeurajlBaseToolsFactory(workspace, {
+				workspaceMap: false,
 				sessionCliPath: SESSION_CLI_PATH,
 				projectDir: PROJECT_DIR,
 			})("dispose-test-session");

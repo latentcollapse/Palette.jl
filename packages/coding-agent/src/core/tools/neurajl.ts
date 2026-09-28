@@ -97,6 +97,12 @@ export interface NeurajlToolOptions {
 	 */
 	stateRoot?: string | false;
 	/**
+	 * Open the session's first result, and the first after each compaction, with a compact map of the
+	 * workspace (languages, build and test entry points, git state, recent changes). Default: true, unless
+	 * NEURAJL_WORKSPACE_MAP=0.
+	 */
+	workspaceMap?: boolean;
+	/**
 	 * Stop a kernel that has had no call for this long; the next call revives its saved state. Only applies
 	 * when state is saved (stateRoot is not false). A finished RLM child is kept for the parent's lifetime,
 	 * and without this its kernel is too. Default: 20 minutes. 0 turns it off.
@@ -116,7 +122,7 @@ interface NeurajlKernel {
 	isDead: () => boolean;
 	turn: (
 		code: string,
-		options: { ephemeral?: boolean; payload?: string | Record<string, string> },
+		options: { ephemeral?: boolean; payload?: string | Record<string, string>; map?: boolean },
 		signal: AbortSignal | undefined,
 	) => Promise<Record<string, unknown>>;
 	dispose: () => Promise<void>;
@@ -291,13 +297,14 @@ async function startKernel(
 		epoch: String(hello.epoch),
 		revival: hello.revival === true,
 		isDead: () => deadReason !== undefined,
-		turn: (code, { ephemeral, payload }, signal) => {
+		turn: (code, { ephemeral, payload, map }, signal) => {
 			if (deadReason !== undefined) return Promise.reject(new Error(deadReason));
 			if (signal?.aborted) return Promise.reject(new Error("neurajl: aborted"));
 			const requestId = String(++nextRequestId);
 			const request: Record<string, unknown> = { request_id: requestId, code };
 			if (ephemeral) request.ephemeral = true;
 			if (payload !== undefined) request.payload = payload;
+			if (map) request.map = true;
 			return new Promise<Record<string, unknown>>((resolve, reject) => {
 				// The protocol is one request, one response, in order. A turn
 				// abandoned mid-flight leaves the kernel busy with no way to
@@ -379,6 +386,10 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 		// model is told which ones were lost, so it can rebuild what it needs
 		// instead of relying on its own memory of the session.
 		let lastBindings: string[] = [];
+		// The workspace map opens the session's first result and the first
+		// after each compaction (NEURAJL_WORKSPACE_MAP=0 turns it off for an A/B).
+		const mapEnabled = options?.workspaceMap ?? process.env.NEURAJL_WORKSPACE_MAP !== "0";
+		let mapNext = mapEnabled;
 		const lostBindings = () => (lastBindings.length === 0 ? "" : ` Lost bindings: ${lastBindings.join(", ")}.`);
 		const stoppedNotice = () => (stateDir ? KERNEL_STOPPED_REVIVING : `${KERNEL_STOPPED}${lostBindings()}`);
 		const idleStopMs = stateDir ? (options?.idleStopMs ?? 20 * 60_000) : 0;
@@ -447,9 +458,10 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 					try {
 						response = await kernel.turn(
 							params.code,
-							{ ephemeral: params.ephemeral, payload: params.payload },
+							{ ephemeral: params.ephemeral, payload: params.payload, map: mapNext && !params.ephemeral },
 							signal,
 						);
+						if (!params.ephemeral) mapNext = false;
 					} catch (err) {
 						const stopped = kernel.isDead() ? `\n${stoppedNotice()}` : "";
 						throw new Error(`${notice}${err instanceof Error ? err.message : String(err)}${stopped}`);
@@ -494,13 +506,14 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 				if (process.env.NEURAJL_COMPACTION_NOTE === "0") return null;
 				const kernel = kernelPromise ? await kernelPromise.catch(() => undefined) : undefined;
 				if (!kernel || kernel.isDead()) return null;
+				mapNext = mapEnabled;
 				const detail =
 					lastBindings.length > 0
 						? ` These bindings are defined (with the call that last set each): ${lastBindings.join(", ")}.`
 						: " You have not defined any bindings yet.";
 				return {
 					customType: "neurajl_state",
-					content: `[neurajl-state]\n\nYour NeuraJL kernel persisted through compaction; its bindings, functions, types and loaded packages are still available.${detail}`,
+					content: `[neurajl-state]\n\nYour NeuraJL kernel persisted through compaction; its bindings, functions, types and loaded packages are still available.${detail}${mapEnabled ? " Your next neurajl result opens with a map of the workspace." : ""}`,
 				};
 			},
 			dispose: async () => {
