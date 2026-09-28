@@ -340,6 +340,27 @@ const KERNEL_STOPPED =
 const KERNEL_STOPPED_REVIVING =
 	"[neurajl: the kernel stopped. Output printed during this call is gone; files written to the workspace remain. The next call starts a new kernel, which revives what it can of the last saved state and says which call that was and what it could not revive.]";
 
+/**
+ * A binding list for a note, within `maxChars`. Entries read `name (type, call N)`;
+ * past the budget the most recently set are kept, since the model is likeliest
+ * to be using them, and the rest are counted.
+ */
+export function describeBindings(bindings: string[], maxChars = 2000): string {
+	const joined = bindings.join(", ");
+	if (joined.length <= maxChars) return joined;
+	const callOf = (b: string) => Number(/call (\d+)\)$/.exec(b)?.[1] ?? -1);
+	const byRecency = bindings.map((b, i) => ({ b, i, call: callOf(b) })).sort((x, y) => y.call - x.call || x.i - y.i);
+	const kept = new Set<number>();
+	let used = 0;
+	for (const { b, i } of byRecency) {
+		if (used + b.length + 2 > maxChars) break;
+		kept.add(i);
+		used += b.length + 2;
+	}
+	const shown = bindings.filter((_, i) => kept.has(i));
+	return `${shown.join(", ")}, and ${bindings.length - shown.length} more set earlier (varinfo() lists them all)`;
+}
+
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms).unref?.());
 }
@@ -395,7 +416,8 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 		const mapEnabled = options?.workspaceMap ?? process.env.NEURAJL_WORKSPACE_MAP !== "0";
 		const digestEnabled = options?.outputDigest ?? process.env.NEURAJL_OUTPUT_DIGEST !== "0";
 		let mapNext = mapEnabled;
-		const lostBindings = () => (lastBindings.length === 0 ? "" : ` Lost bindings: ${lastBindings.join(", ")}.`);
+		const lostBindings = () =>
+			lastBindings.length === 0 ? "" : ` Lost bindings: ${describeBindings(lastBindings)}.`;
 		const stoppedNotice = () => (stateDir ? KERNEL_STOPPED_REVIVING : `${KERNEL_STOPPED}${lostBindings()}`);
 		const idleStopMs = stateDir ? (options?.idleStopMs ?? 20 * 60_000) : 0;
 		let idleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -519,7 +541,7 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 				mapNext = mapEnabled;
 				const detail =
 					lastBindings.length > 0
-						? ` These bindings are defined (with the call that last set each): ${lastBindings.join(", ")}.`
+						? ` These bindings are defined (with the call that last set each): ${describeBindings(lastBindings)}.`
 						: " You have not defined any bindings yet.";
 				return {
 					customType: NEURAJL_STATE_CUSTOM_TYPE,
