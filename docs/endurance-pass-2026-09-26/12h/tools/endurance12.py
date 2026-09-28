@@ -22,13 +22,16 @@ ap.add_argument("--kills", default="1.5,4,6.5,9,11"); ap.add_argument("--checkpo
 ap.add_argument("--cost-cap", type=float, default=9.0); ap.add_argument("--queue", type=int, default=0)
 ap.add_argument("--edit-hours", type=float, default=5.0); ap.add_argument("--change-at-calls", type=int, default=70)
 ap.add_argument("--src-edit-at-calls", type=int, default=150); ap.add_argument("--evidence", default="")
+ap.add_argument("--backup", action="store_true", help="fail over to OpenRouter; off by default, since an account without credits turns every blip into a spent recovery")
 ap.add_argument("--prompt", default=""); ap.add_argument("--queue-files", default="")
 a = ap.parse_args()
 
 run = S / "runs" / f"s12--{a.label}"; shutil.rmtree(run, ignore_errors=True)
 for d in ("agent", "rlm", "home"): (run / d).mkdir(parents=True)
 state_root = HOME / ".neurajl-endurance-state" / a.label; shutil.rmtree(state_root, ignore_errors=True); state_root.mkdir(parents=True)
-ws = pathlib.Path(tempfile.mkdtemp(prefix="nje12-ws-")); shutil.copytree(E / "fixture", ws, dirs_exist_ok=True)
+# On NVMe, not /tmp: tin1 lost its workspace to a power cut.
+WS_ROOT = HOME / ".neurajl-runs/tmp"; WS_ROOT.mkdir(parents=True, exist_ok=True)
+ws = pathlib.Path(tempfile.mkdtemp(prefix="nje12-ws-", dir=WS_ROOT)); shutil.copytree(E / "fixture", ws, dirs_exist_ok=True)
 shutil.copy(E / (a.prompt or "prompt.txt"), run / "prompt.txt"); (run / "workspace_path").write_text(str(ws))
 queue = ["f2.txt", "f3.txt", "f4.txt", "f5.txt", "f6.txt", "f7.txt", "f8.txt", "f9.txt", "f10.txt", "f11.txt"] + (E / "queue.txt").read_text().split()
 if a.queue: queue = queue[:a.queue]
@@ -40,10 +43,12 @@ env = {**os.environ, "HOME": str(run / "home"), "ABC_PROMPT_FILE": str(run / "pr
        "NEURAJL_SESSION_CLI": f"{LAB}/security/session_cli.py", "NEURAJL_PROJECT_DIR": str(HOME / ".neurajl-trial/project"),
        "NEURAJL_REPO_DIR": LAB, "JULIA_DEPOT_PATH": str(HOME / ".neurajl-trial/depot"), "NEURAJL_JULIA_BIN": JULIA,
        "NEURAJL_STATE_ROOT": str(state_root), "ABC_NEURAJL_MAX_OUTPUT_CHARS": "12000",
-       "ABC_MODEL": "gpt-6-luna", "ABC_OPENROUTER_PROVIDER": "openai", "ABC_BACKUP": "1",
+       "ABC_MODEL": "gpt-6-luna", "ABC_OPENROUTER_PROVIDER": "openai", "ABC_BACKUP": "1" if a.backup else "0",
        "ABC_OPENAI_KEY_FILE": str(oak), "ABC_OPENROUTER_KEY_FILE": str(ork),
-       "ABC_MAX_REQUESTS": "8000", "ABC_CONTEXT_WINDOW": "100000", "ABC_MAX_OUTPUT_TOKENS": "16000", "ABC_KEEP_RECENT_TOKENS": "16000",
-       "ABC_MAX_RETRIES": "3", "ABC_RETRY_BASE_MS": "5000", "ABC_STALL_MS": "600000", "ABC_MAX_RECOVERIES": "60",
+       # The org allows 200k tokens a minute: a 100k context hit it 292 times in tin2, and 3 retries
+       # from 5 s never reached the next minute.
+       "ABC_MAX_REQUESTS": "8000", "ABC_CONTEXT_WINDOW": "60000", "ABC_MAX_OUTPUT_TOKENS": "16000", "ABC_KEEP_RECENT_TOKENS": "12000",
+       "ABC_MAX_RETRIES": "6", "ABC_RETRY_BASE_MS": "10000", "ABC_STALL_MS": "600000", "ABC_MAX_RECOVERIES": "60",
        "ABC_DEADLINE_MS": str(int(a.hours * 3600_000)),
        "ABC_FOLLOWUP_PROMPTS": ":".join(str(E / q) for q in queue), "ABC_FOLLOWUP_HOOK": str(E / "followup_hook.sh"), "FOLLOWUP_LOG": str(run / "followups.jsonl")}
 evidence = pathlib.Path(a.evidence) if a.evidence else None

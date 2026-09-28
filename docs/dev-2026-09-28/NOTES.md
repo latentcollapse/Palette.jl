@@ -42,3 +42,17 @@ No measurable difference. Relay's failures are short, so the digest rarely fires
 - **Fix:**
   - escape the `$`: a trivial second call now takes 0.55 s;
   - the catch now logs `@warn "precompile workload stopped early"`. Red control: with the bug put back, precompiling prints the warning and names the `UndefVarError`.
+
+## p2-relay-hard A/B (2 runs per arm, build d1c557b)
+
+| arm | solved | minutes | requests | cost |
+|---|---|---|---|---|
+| full | 2/2 | 2.4, 2.2 | 41, 43 | $0.020, $0.014 |
+| digest off | 2/2 | 3.3, 3.9 | 56, 59 | $0.025, $0.030 |
+| map off | 2/2 | 3.9, 2.6 | 75, 47 | $0.023, $0.021 |
+
+- **All six runs solved everything.** The race check passed 200/200 in every run, each fixed with `fetch_add`.
+- **The full build used the fewest requests in both of its runs.** A mean of 42, against 57.5 with the digest off and 61 with the map off. It was also fastest, at 2.3 min against 3.6 and 3.25. With two runs per arm this is a direction, not a result.
+- **The trace instrument has a red control.** The digest count is 0 in the digest-off arm and the map count is 0 in the map-off arm.
+- **The stress runner was adopted 0/6 times, even though the description names it.** Luna checked the race with hand-written `for i in 1:N` loops instead. This fits the design rule: tools named only in the description go unused. Stress stays as an available tool, but it is not a gain.
+- **The scenario still doesn't discriminate.** A mean of 3 minutes is too easy for Luna, and a harder task is needed to separate the arms.
