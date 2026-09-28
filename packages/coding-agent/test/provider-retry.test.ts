@@ -9,10 +9,12 @@ import {
 	parseProviderResetMs,
 	providerParkDecision,
 	providerRetryDelay,
+	providerStreamFailureRetryAfterMs,
 	providerWaitClass,
 	providerWaitDecision,
 	providerWaitJitter,
 	providerWaitPingDelay,
+	retryAfterFromErrorText,
 } from "../src/core/provider-retry.js";
 
 function providerError(kind?: string): AssistantMessage {
@@ -131,6 +133,36 @@ const TEST_WAIT_POLICY: ProviderWaitPolicy = {
 	maxPauseMs: 86_400_000,
 	maxParks: 8,
 };
+
+describe("retryAfterFromErrorText", () => {
+	it("reads the wait OpenAI states in a rate-limit error", () => {
+		const text =
+			"Rate limit reached for gpt-6-luna in organization org-x on tokens per min (TPM): Limit 200000, Used 181697, Requested 20230. Please try again in 578ms. Visit https://platform.openai.com/account/rate-limits to learn more.";
+		expect(retryAfterFromErrorText(text)).toBe(578);
+		expect(retryAfterFromErrorText("... Please try again in 9.567s. Visit ...")).toBe(9567);
+		expect(retryAfterFromErrorText("Please try again in 2s")).toBe(2000);
+	});
+
+	it("returns undefined when the text states no wait", () => {
+		expect(retryAfterFromErrorText("Connection error.")).toBeUndefined();
+		expect(retryAfterFromErrorText(undefined)).toBeUndefined();
+		expect(retryAfterFromErrorText("try again in a few minutes")).toBeUndefined();
+	});
+
+	it("is used when the failure carries no Retry-After", () => {
+		const message = {
+			stopReason: "error",
+			errorMessage: "Rate limit reached ... Please try again in 954ms.",
+			diagnostics: [{ type: "provider_stream_failure", details: { kind: "unknown" } }],
+		} as unknown as AssistantMessage;
+		expect(providerStreamFailureRetryAfterMs(message)).toBe(954);
+		const withHeader = {
+			...message,
+			diagnostics: [{ type: "provider_stream_failure", details: { kind: "unknown", retryAfterMs: 3000 } }],
+		} as unknown as AssistantMessage;
+		expect(providerStreamFailureRetryAfterMs(withHeader)).toBe(3000);
+	});
+});
 
 describe("providerWaitClass", () => {
 	it("classifies quota/subscription exhaustion shapes as quota", () => {

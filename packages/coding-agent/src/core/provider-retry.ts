@@ -63,7 +63,20 @@ export function providerStreamFailureKind(message: AssistantMessage): string | u
 
 export function providerStreamFailureRetryAfterMs(message: AssistantMessage): number | undefined {
 	const value = providerStreamFailureDetails(message)?.retryAfterMs;
-	return typeof value === "number" && value >= 0 ? value : undefined;
+	if (typeof value === "number" && value >= 0) return value;
+	return retryAfterFromErrorText(message.errorMessage);
+}
+
+/**
+ * OpenAI's rate-limit errors state the wait in their text ("Please try again
+ * in 578ms", "... in 9.5s") and reached us without a Retry-After header, so
+ * every retry slept the full backoff however short the server's wait was.
+ */
+export function retryAfterFromErrorText(text: string | undefined): number | undefined {
+	const match = text ? /\btry again in (\d+(?:\.\d+)?)\s*(ms|s)\b/i.exec(text) : null;
+	if (!match) return undefined;
+	const amount = Number(match[1]);
+	return Math.ceil(match[2].toLowerCase() === "ms" ? amount : amount * 1000);
 }
 
 export function providerStreamFailureStatus(message: AssistantMessage): number | undefined {
