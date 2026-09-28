@@ -84,9 +84,19 @@ end
 # becomes /dev/null: a `readline()` or a `run(`cat`)` in turn code used to
 # consume the next request and leave the host waiting for a reply until the
 # turn timed out.
-const PROTO_IN = let fd = ccall(:dup, Cint, (Cint,), 0)
-    fd < 0 && error("dup(0) failed")
-    open(Base.RawFD(fd))
+const PROTO_IN_FD = ccall(:dup, Cint, (Cint,), 0)
+PROTO_IN_FD < 0 && error("dup(0) failed")
+const PROTO_IN = open(Base.RawFD(PROTO_IN_FD))
+
+# Whether the next request has arrived, without reading it. The stream does
+# not read ahead between requests, so bytesavailable alone never saw one that
+# arrived meanwhile; the descriptor is asked directly. A closed input
+# (POLLHUP alone) is not a request: the loop ends after this snapshot, which
+# is then the last chance to save the state.
+function request_waiting()
+    bytesavailable(PROTO_IN) > 0 && return true
+    pfd = Ref((PROTO_IN_FD, Cshort(0x001), Cshort(0)))
+    return ccall(:poll, Cint, (Ptr{Cvoid}, Culong, Cint), pfd, 1, 0) > 0 && (pfd[][3] & 0x001) != 0
 end
 redirect_stdin(open("/dev/null"))
 const SINK = open(joinpath(tempdir(), "neurajl-background-output.log"), "a")
@@ -340,7 +350,7 @@ for line in eachline(PROTO_IN)
                 resp["error"] = "The call exceeded its $(timeout_s)s limit and kept running after being interrupted " *
                                 "for $(Int(INTERRUPT_GRACE_S))s, so the kernel stopped. " *
                                 (isempty(Neura.STATE_DIR[]) ? "Every binding is gone; files written to the workspace remain." :
-                                 "The next call starts a new kernel, which revives what it can of the state at the end of the last completed call and says what it could not.")
+                                 "The next call starts a new kernel, which revives what it can of the last saved state (its report names the call) and says what it could not.")
                 resp["kernel_exit"] = true
                 respond(resp)
                 ccall(:_exit, Cvoid, (Cint,), 3)
@@ -360,7 +370,7 @@ for line in eachline(PROTO_IN)
                                 "processes this call started were stopped. Output printed before the interrupt is above.\n" * resp["error"]
             end
             isempty(resp["error"]) && (resp["error"] = nothing)
-            resp["success"] && (snapshot_call = call)
+            resp["success"] && (snapshot_call = call; Neura.note_completed_call!(call))
         else
             # Fail closed on an unrecognized `kind` -- confirmed by direct
             # testing that an earlier version of this branch ran ANY
@@ -380,11 +390,13 @@ for line in eachline(PROTO_IN)
     resp["error"] = with_hint(get(resp, "error", nothing), code isa String ? code : "")
     respond(resp)
     # The model is reading the reply: save the state this call ended with.
-    # A request already waiting goes first; the next idle point saves the state.
-    if snapshot_call !== nothing && bytesavailable(PROTO_IN) == 0
+    # A request already waiting goes first, until five calls have gone unsaved.
+    if snapshot_call !== nothing
         try
             # Latest world: turn code defined methods (show, ==, enum names) since this loop began.
-            Base.invokelatest(Neura.snapshot_state!, snapshot_call)
+            # A request that arrives meanwhile goes first, while the last saved state is recent.
+            Base.invokelatest(Neura.snapshot_state!, snapshot_call;
+                              waiting=request_waiting)
         catch e
             println(stderr, "[saving the state after call $snapshot_call failed: ", first(sprint(showerror, e), 300), "]")
         end

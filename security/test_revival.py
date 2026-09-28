@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
 Tests for state revival (src/revival.jl): a kernel that replaces a stopped
-one revives the state at the end of the last completed call, and says
-exactly what was restored, rebuilt, stale, different or lost.
+one revives the last saved state, and says exactly what was restored,
+rebuilt, stale, different or lost. A quick snapshot is saved after every
+completed call; a slow one gives way to a waiting request, for at most five
+calls.
 
 The point of most tests here is the opposite of restoring: a revival that
 looks continuous but is wrong is worse than reporting state lost, so each
@@ -15,6 +17,7 @@ Run:
 from __future__ import annotations
 
 import json
+import time
 import os
 import re
 import shutil
@@ -301,6 +304,60 @@ class RevivalTest(unittest.TestCase):
         self.assertIn("more (varinfo() lists every binding)", exact)
         self.assertIn("t (Task", out)
         self.assertLess(len(out), 3000)
+
+    def test_a_request_does_not_wait_for_a_slow_snapshot_until_it_is_five_calls_old(self):
+        # In the 12h run a 98 MB state took 25 s to save after every call, and
+        # the next call waited for it: the check for a waiting request never
+        # saw one, because the stream does not read ahead.
+        k = Kernel(self.ws, self.state, timeout=120)
+        try:
+            k.turn("using Random; Random.seed!(1); "
+                   "for i in 1:40; @eval $(Symbol(:b, i)) = [randstring(24) for _ in 1:60_000]; end")
+            deadline = time.time() + 60   # the first snapshot always completes, and is timed
+            while not Path(self.state, "manifest.json").exists() and time.time() < deadline:
+                time.sleep(0.5)
+            first = self.manifest()
+            self.assertGreater(first["seconds"], 2.0, "the state must be slow to save for this test")
+            k.turn("x = 1")
+            started = time.time()
+            self.assertTrue(k.turn("1 + 1")["success"])
+            waited = time.time() - started
+            for _ in range(6):
+                self.assertTrue(k.turn("1 + 1")["success"])
+            saved_meanwhile = self.manifest()["call"]
+            time.sleep(15)
+            m = self.manifest()
+        finally:
+            k.close()
+        self.assertLess(waited, 0.6 * first["seconds"], f"waited {waited:.2f}s behind a {first['seconds']}s snapshot")
+        self.assertGreaterEqual(saved_meanwhile, 6, "a snapshot five calls old must complete even with requests waiting")
+        self.assertEqual(m["call"], 9, "once idle, the last call's state is saved")
+
+    def test_calls_completed_after_the_saved_state_are_named(self):
+        # A slow snapshot can give way and fall up to four calls behind; a
+        # revival must not let the model believe those calls' work survived.
+        self.session("a = 1", "b = 2")
+        self.assertEqual(Path(self.state, "last_call").read_text(), "2")
+        Path(self.state, "last_call").write_text("5")   # calls 3-5 completed, none saved
+        out, r = self.revive("(a, b)")
+        self.assertEqual(r["data"], [1, 2])
+        self.assertIn("Calls 3–5 completed after this state was saved", out)
+        self.session("c = 3")
+        out, r = self.revive("c")
+        self.assertNotIn("completed after this state was saved", out)
+
+    def test_a_quick_snapshot_never_gives_way(self):
+        # Revival's promise for an ordinary session: the state of the last
+        # completed call, even when the next call arrives at once and kills
+        # the kernel.
+        k = Kernel(self.ws, self.state, timeout=4)
+        k.turn("v = [1, 2, 3]")
+        k.turn("v[1] = 7; w = 2")
+        k.turn("while true; end")
+        k.close()
+        out, r = self.revive("(v, w)")
+        self.assertEqual(r["data"], [[7, 2, 3], 2])
+        self.assertIn("end of call 2", out)
 
     def test_an_included_module_comes_back_and_a_failed_using_is_not_a_loss(self):
         # The 12h run: `using JSON5Lite` failed (not a registered package),

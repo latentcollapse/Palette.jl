@@ -432,22 +432,53 @@ mutable struct Group
     user::Set{String}
 end
 
-"""
-    snapshot_state!(call)
+# The call whose state the last complete snapshot holds, in this kernel, and
+# how long that snapshot took.
+const LAST_SAVED_CALL = Ref(0)
+const LAST_SNAPSHOT_SECONDS = Ref(0.0)
+# When saving takes this long, a snapshot gives way to a waiting request, so
+# the model does not wait for it, until this many calls have gone unsaved. A
+# quick snapshot always completes: the state revived is then the last call's.
+const SLOW_SNAPSHOT_SECONDS = 2.0
+const MAX_UNSAVED_CALLS = 5
 
-Writes the state at the end of `call` to STATE_DIR, replacing the last
-snapshot only once the new one is complete.
 """
-function snapshot_state!(call::Int)
+    note_completed_call!(call)
+
+Records in STATE_DIR that `call` completed. A snapshot can give way and fall
+behind; a revival compares this with the call its snapshot holds and says
+which calls' effects on the kernel it could not bring back.
+"""
+function note_completed_call!(call::Int)
     dir = STATE_DIR[]
     isempty(dir) && return nothing
+    tmp = joinpath(dir, "last_call.tmp")
+    write(tmp, string(call))
+    mv(tmp, joinpath(dir, "last_call"); force=true)
+    return nothing
+end
+
+"""
+    snapshot_state!(call; waiting = () -> false)
+
+Writes the state at the end of `call` to STATE_DIR, replacing the last
+snapshot only once the new one is complete. When the last complete snapshot was
+slow and recent, and `waiting()` says a request is waiting, it stops and
+returns `nothing`; the last complete snapshot stays.
+"""
+function snapshot_state!(call::Int; waiting::Function = () -> false)
+    dir = STATE_DIR[]
+    isempty(dir) && return nothing
+    give_way() = LAST_SNAPSHOT_SECONDS[] >= SLOW_SNAPSHOT_SECONDS && call - LAST_SAVED_CALL[] < MAX_UNSAVED_CALLS && waiting()
+    give_way() && return nothing
     started = time()
     mod = get_kernel_state().eval_module
     consts = Set(n for e in DEFINITION_LOG if e["kind"] == "const" for n in e["names"])
     defnames = Set(n for e in DEFINITION_LOG if e["kind"] in ("def", "include") for n in e["names"])
     bindings = Dict{String, Any}[]
     groups = Group[]
-    for sym in sort!(Base.invokelatest(names, mod; all=true))
+    for (k, sym) in enumerate(sort!(Base.invokelatest(names, mod; all=true)))
+        k % 32 == 0 && give_way() && return nothing
         (sym === nameof(mod) || sym in KERNEL_BINDINGS || startswith(string(sym), '#')) && continue
         Base.invokelatest(isdefined, mod, sym) || continue
         v = Base.invokelatest(getglobal, mod, sym)
@@ -502,6 +533,10 @@ function snapshot_state!(call::Int)
     stored = Dict{String, Any}[]
     total = 0
     for (i, g) in enumerate(groups)
+        if give_way()
+            foreach(f -> rm(joinpath(dir, f * ".tmp"); force=true), written)
+            return nothing
+        end
         bytes = UInt8[]
         ok = try
             bytes = snapshot_bytes(mod, Dict(n => Base.invokelatest(getglobal, mod, Symbol(n)) for n in g.names))
@@ -552,6 +587,8 @@ function snapshot_state!(call::Int)
     tmp = joinpath(dir, "manifest.json.tmp")
     write(tmp, JSON.json(manifest))
     mv(tmp, joinpath(dir, "manifest.json"); force=true)   # the commit point
+    LAST_SAVED_CALL[] = call
+    LAST_SNAPSHOT_SECONDS[] = time() - started
     keep = Set(written)
     for f in readdir(dir)
         startswith(f, "data-") && !(f in keep) && rm(joinpath(dir, f); force=true)
@@ -602,6 +639,8 @@ end
 Rebuilds the last snapshot's state in this kernel, and returns the report the
 first call shows.
 """
+read_or_empty(path) = isfile(path) ? read(path, String) : ""
+
 function revive_state!()
     dir = STATE_DIR[]
     path = joinpath(dir, "manifest.json")
@@ -819,6 +858,10 @@ function finish_revival(m, mod, state, call, pending, failed, errors, changed_fi
 
     push!(lines, "[revival] The previous kernel stopped. This kernel revived the state saved at the end of call $call" *
                  (data_block === nothing ? "." : "; its data could not be restored because $data_block."))
+    last = tryparse(Int, strip(read_or_empty(joinpath(dir, "last_call"))))
+    last !== nothing && last > call &&
+        push!(lines, "  Call$(last == call + 1 ? " $last" : "s $(call + 1)–$last") completed after this state was saved: " *
+                     "what $(last == call + 1 ? "it" : "they") changed in the kernel is lost; files written to the workspace remain.")
     # What needs attention first: a long report is cut in the middle for the
     # model (in the 12h run it reached 23 KB), so the lists that only confirm
     # come last and are shortened.
