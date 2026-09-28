@@ -340,10 +340,19 @@ for line in eachline(PROTO_IN)
             Core.eval(mod, Expr(:global, Expr(:(=), :PAYLOAD, payload)))
             call = length(Neura.get_kernel_state().execution_history) + 1
             (receipt, interrupted, stuck), output = execute_turn(code, timeout_s === nothing ? nothing : Float64(timeout_s))
-            resp["output"] = scrub(output)
+            printed = scrub(output)
             resp["call"] = call
             resp["bindings"] = Neura.binding_list!(Neura.get_kernel_state().eval_module, call)
-            Neura.retain_output!(call, resp["output"])
+            # Neura.output(call) gives back what the call printed, without what
+            # the result adds in front of it below.
+            Neura.retain_output!(call, printed)
+            resp["output"] = Neura.with_digest(printed)
+            # The host asks for the workspace map at the session's first call and
+            # after a compaction; it opens the result, ahead of the call's output.
+            if get(req, "map", false) === true
+                wmap = try Neura.workspace_map() catch e; "[workspace map unavailable: $(first(sprint(showerror, e), 160))]" end
+                resp["output"] = wmap * "\n\n" * resp["output"]
+            end
             if stuck
                 resp["success"] = false
                 resp["data"] = nothing

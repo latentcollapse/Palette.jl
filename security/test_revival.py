@@ -359,6 +359,14 @@ class RevivalTest(unittest.TestCase):
         self.assertEqual(r["data"], [[7, 2, 3], 2])
         self.assertIn("end of call 2", out)
 
+    def test_background_processes_that_stopped_with_the_kernel_are_named(self):
+        # A server started in the background died with the kernel, and the
+        # model went on as if it were still up.
+        self.session("srv = run(`sleep 300`; wait=false); x = 1")
+        out, r = self.revive("x")
+        self.assertEqual(r["data"], 1)
+        self.assertIn("Background processes stopped with the previous kernel: `sleep 300`", out)
+
     def test_an_included_module_comes_back_and_a_failed_using_is_not_a_loss(self):
         # The 12h run: `using JSON5Lite` failed (not a registered package),
         # then `include`d the package's module file. Revival replayed the

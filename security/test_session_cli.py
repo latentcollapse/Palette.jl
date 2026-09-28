@@ -328,6 +328,42 @@ class TestSessionCli(unittest.TestCase):
         r = self._turn("PAYLOAD === nothing", payload={"bad": 1})
         self.assertIs(r["data"], True, "a payload part that is not text is dropped, not bound")
 
+    def test_the_workspace_map_opens_a_result_when_the_host_asks(self):
+        """After a compaction a model rebuilt its picture of the repo from
+        scratch; the host asks for the map at the first call and after each
+        compaction, and it opens that call's result."""
+        Path(self.task_workspace, "src").mkdir(exist_ok=True)
+        Path(self.task_workspace, "src", "lib.rs").write_text("pub fn f() {}\n")
+        Path(self.task_workspace, "Makefile").write_text("build:\n\tcargo build\ntest: build\n\tcargo test\n")
+        r = self._turn("1 + 1", map=True)
+        self.assertTrue(r["success"], r)
+        self.assertTrue(r["output"].startswith("[workspace map]"), r["output"][:200])
+        self.assertIn("Rust 1", r["output"])
+        self.assertIn("Makefile: Makefile targets: build, test", r["output"])
+        self.assertEqual(r["data"], 2)
+        r = self._turn("2 + 2", request_id="2")
+        self.assertNotIn("[workspace map]", r["output"])
+
+    def test_background_jobs_are_named_when_they_change(self):
+        """A model that started a server or a long build had no word of it
+        again until it thought to look, and a failed task was reported as
+        `ans` when the model had named it."""
+        self._turn('job = @async (sleep(3); 42); srv = run(`sleep 300`; wait=false); nothing')
+        r = self._turn("1", request_id="2")
+        self.assertIn("[background jobs: running: task `job`, `sleep 300` (pid", r["output"])
+        r = self._turn("1", request_id="3")
+        self.assertNotIn("[background jobs", r["output"], "an unchanged set is not repeated")
+        time.sleep(4)
+        r = self._turn("kill(srv); 1", request_id="4")
+        self.assertIn("finished: task `job` (fetch(job) returns its value)", r["output"])
+        self.assertIn("running: `sleep 300`", r["output"])
+        time.sleep(1)
+        r = self._turn("bad = @async error(\"boom\"); 1", request_id="5")
+        self.assertIn("nothing is running any more", r["output"])
+        time.sleep(1)
+        r = self._turn("1", request_id="6")
+        self.assertIn("[background: task `bad` failed: boom]", r["output"])
+
     def test_display_does_not_corrupt_the_protocol(self):
         """display() wrote to the stdout captured at startup, which is the
         protocol pipe, and killed the session."""

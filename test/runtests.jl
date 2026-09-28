@@ -2,6 +2,53 @@ using Test
 using Neura
 using JSON
 
+# Run before "EphemeralTool isolation", whose same-process case pirates Base methods for the rest of the process.
+@testset "Output digest" begin
+    fx(name) = read(joinpath(@__DIR__, "fixtures", "digest", name), String)
+    # Real tool output, captured from each toolchain, after a long build log.
+    noise = join(["   Compiling dep-$i v0.1.$i (registry)" for i in 1:150], "\n") * "\n"
+    head(name) = first(split(Neura.with_digest(noise * fx(name)), "\n\n"))
+    @test startswith(head("cargo_build.txt"), "[digest of 185 lines of output: 3 errors]")
+    @test occursin("src/main.rs:3:18  error[E0308]: mismatched types", head("cargo_build.txt"))
+    @test occursin("2 failing tests", head("cargo_test.txt"))
+    @test occursin("src/main.rs:4:23  test tests::adds panicked", head("cargo_test.txt"))
+    @test occursin("a.ts:4:9  error TS2304: Cannot find name 'missing'.", head("tsc.txt"))
+    @test occursin("a.ts:2:19  error TS2322", head("tsc_pretty.txt"))   # ANSI-coloured
+    @test occursin("bin/m.ml:1  error This constant has type string but an expression was expected of type int", head("dune.txt"))
+    @test occursin("./m.go:2:14  error declared and not used: x", head("go_build.txt"))
+    @test occursin("m_test.go:3  test TestAdd: Add(2,2)=0", head("go_test.txt"))
+    @test occursin("test_x.py:3  test test_x.T.test_a: AssertionError: 2 != 3", head("py_unittest.txt"))
+    @test occursin("1 failing test]", head("node_test.txt"))
+    # The whole output still follows the digest.
+    @test endswith(Neura.with_digest(noise * fx("cargo_build.txt")), fx("cargo_build.txt"))
+    # Short output, and long output with nothing failing, are left as they are.
+    @test Neura.with_digest(fx("tsc.txt")) == fx("tsc.txt")
+    @test Neura.with_digest(noise) == noise
+    @test Neura.with_digest("\e[31mred\e[0m plain") == "red plain"
+    # A flood of failures is capped.
+    flood = noise * join(["test t$i ... FAILED" for i in 1:40], "\n")
+    @test occursin("… and 28 more", Neura.with_digest(flood))
+end
+
+@testset "Workspace map" begin
+    root = mktempdir()
+    @test occursin("the workspace is empty", Neura.workspace_map(root))
+    mkpath(joinpath(root, "core", "src")); mkpath(joinpath(root, "api", "src")); mkpath(joinpath(root, "node_modules", "x"))
+    write(joinpath(root, "Cargo.toml"), "[workspace]\nmembers = [\"core\"]\n")
+    write(joinpath(root, "core", "src", "lib.rs"), "pub fn f() {}\n")
+    write(joinpath(root, "api", "package.json"), "{\"scripts\": {\"build\": \"tsc\", \"test\": \"node --test\"}}")
+    write(joinpath(root, "api", "src", "index.ts"), "export const x = 1\n")
+    write(joinpath(root, "node_modules", "x", "a.js"), "")
+    write(joinpath(root, "Makefile"), "build:\n\tcargo build\ntest: build\n\tcargo test\n.PHONY: build test\n")
+    m = Neura.workspace_map(root)
+    @test startswith(m, "[workspace map] 5 files")          # node_modules left out
+    @test occursin("Rust 1", m) && occursin("TypeScript 1", m) && !occursin("JavaScript", m)
+    @test occursin("cargo: Cargo.toml (workspace)", m)
+    @test occursin("npm: api/package.json scripts: build, test", m) || occursin("npm: api/package.json scripts: test, build", m)
+    @test occursin("Makefile: Makefile targets: build, test", m)
+    @test length(m) <= Neura.MAP_MAX_CHARS + 2
+end
+
 @testset "KernelState" begin
     reset_kernel_state()
     state = get_kernel_state()

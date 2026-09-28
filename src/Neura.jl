@@ -1604,6 +1604,8 @@ Exports
 
 include("turn.jl")
 include("revival.jl")
+include("digest.jl")
+include("workspace_map.jl")
 include("precompile_workload.jl")
 
 export KernelState, ExecutionRecord

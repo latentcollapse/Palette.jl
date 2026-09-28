@@ -277,6 +277,77 @@ function drop_reported!(path::String, read_to::Int)
     return 0
 end
 const REPORTED_TASKS = WeakKeyDict{Task, Nothing}()
+const FINISH_REPORTED = WeakKeyDict{Task, Nothing}()
+# What the last jobs line said was running, so an unchanged set is not repeated.
+const LAST_RUNNING = Ref(String[])
+
+# Each Task the session holds, once, under the model's own name before `ans`.
+function bound_tasks(mod::Module)
+    byname = IdDict{Task, Symbol}()
+    for sym in sort!(Base.invokelatest(names, mod; all=true); by=s -> s === :ans)
+        Base.invokelatest(isdefined, mod, sym) || continue
+        t = Base.invokelatest(getglobal, mod, sym)
+        t isa Task && !haskey(byname, t) && (byname[t] = sym)
+    end
+    return sort!(collect(byname); by=p -> string(p[2]))
+end
+
+"""
+    background_processes() -> Vector{Tuple{Int, String, Float64}}
+
+Processes earlier calls left running in the sandbox, as (pid, command line,
+seconds running): the kernel's children, and daemons the sandbox's init
+adopted (a server started with `&`, a database started with pg_ctl).
+"""
+function background_processes()
+    out = Tuple{Int, String, Float64}[]
+    isfile("/proc/uptime") || return out
+    me = getpid()
+    uptime = parse(Float64, split(read("/proc/uptime", String))[1])
+    hz = ccall(:sysconf, Clong, (Cint,), 2)   # _SC_CLK_TCK
+    for p in readdir("/proc")
+        pid = tryparse(Int, p)
+        (pid === nothing || pid == me || pid == 1) && continue
+        stat = try read("/proc/$pid/stat", String) catch; continue end
+        rest = split(stat[findlast(')', stat)+2:end])
+        ppid = parse(Int, rest[2])
+        (ppid == me || ppid == 1) || continue
+        cmd = strip(replace(try read("/proc/$pid/cmdline", String) catch; "" end, '\0' => ' '))
+        (isempty(cmd) || occursin("session_loop.jl", cmd)) && continue
+        push!(out, (pid, cmd, max(0.0, uptime - parse(Float64, rest[20]) / hz)))
+    end
+    return sort!(out; by=first)
+end
+
+fmt_age(s) = s < 60 ? "$(round(Int, s))s" : s < 3600 ? "$(round(Int, s / 60))m" : "$(floor(Int, s / 3600))h$(round(Int, (s % 3600) / 60))m"
+
+# One line on the session's background work, when it changed since the last:
+# what runs, and what finished and waits to be collected.
+function report_jobs(mod::Module)
+    running = String[]; finished = String[]
+    for (t, sym) in bound_tasks(mod)
+        if !istaskdone(t)
+            push!(running, "task `$sym`")
+        elseif !istaskfailed(t) && !haskey(FINISH_REPORTED, t)
+            FINISH_REPORTED[t] = nothing
+            push!(finished, "task `$sym` (fetch($sym) returns its value)")
+        end
+    end
+    procs = background_processes()
+    for (pid, cmd, _) in first(procs, 6)
+        push!(running, "`$(first(cmd, 80))` (pid $pid)")
+    end
+    length(procs) > 6 && push!(running, "$(length(procs) - 6) more processes")
+    changed = running != LAST_RUNNING[]
+    LAST_RUNNING[] = running
+    (changed || !isempty(finished)) || return nothing
+    parts = String[]
+    isempty(running) || push!(parts, "running: " * join(running, ", "))
+    isempty(finished) || push!(parts, "finished: " * join(finished, ", "))
+    isempty(parts) && (parts = ["nothing is running any more"])
+    println("[background jobs: ", join(parts, "; "), "]")
+    return nothing
+end
 
 """
     report_background(mod)
@@ -300,14 +371,13 @@ function report_background(mod::Module)
         length(text) > MAX_BACKGROUND_BYTES && (text = "…" * last(text, MAX_BACKGROUND_BYTES))
         print("[background output since the last call]\n", text, endswith(text, '\n') ? "" : "\n")
     end
-    for sym in Base.invokelatest(names, mod; all=true)
-        Base.invokelatest(isdefined, mod, sym) || continue
-        t = Base.invokelatest(getglobal, mod, sym)
-        t isa Task && istaskfailed(t) && !haskey(REPORTED_TASKS, t) || continue
+    for (t, sym) in bound_tasks(mod)
+        istaskfailed(t) && !haskey(REPORTED_TASKS, t) || continue
         REPORTED_TASKS[t] = nothing
         err = t.result isa Exception ? first(split(sprint(showerror, t.result), '\n')) : repr(t.result)
         println("[background: task `$sym` failed: $err]")
     end
+    report_jobs(mod)
     return nothing
 end
 

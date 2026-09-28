@@ -151,6 +151,7 @@ def main() -> int:
                     ephemeral=bool(req.get("ephemeral", False)),
                     ephemeral_ceiling=req.get("ceiling"),
                     payload=_payload(req.get("payload")),
+                    include_map=req.get("map") is True,
                 )
                 _respond({
                     "request_id": request_id,

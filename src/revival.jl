@@ -580,6 +580,7 @@ function snapshot_state!(call::Int; waiting::Function = () -> false)
         "type_fingerprints" => Dict(t => type_fingerprint(mod, t) for t in usertypes),
         "used_files" => [[p, collect(s), c] for (p, (s, c)) in USED_FILES],
         "workspace_packages" => Dict(string(nameof(mod_)) => Dict(k => collect(v) for (k, v) in snap) for (mod_, snap) in WORKSPACE_PACKAGES),
+        "processes" => [first(cmd, 200) for (_, cmd, _) in background_processes()],
         "bytes" => total, "seconds" => round(time() - started, digits=3))
     for f in written
         mv(joinpath(dir, f * ".tmp"), joinpath(dir, f); force=true)
@@ -862,6 +863,9 @@ function finish_revival(m, mod, state, call, pending, failed, errors, changed_fi
     last !== nothing && last > call &&
         push!(lines, "  Call$(last == call + 1 ? " $last" : "s $(call + 1)–$last") completed after this state was saved: " *
                      "what $(last == call + 1 ? "it" : "they") changed in the kernel is lost; files written to the workspace remain.")
+    procs = String.(get(m, "processes", String[]))
+    isempty(procs) || push!(lines, "  Background processes stopped with the previous kernel: " *
+                                   join(("`$(first(c, 100))`" for c in procs), ", ") * ". Start them again if you need them.")
     # What needs attention first: a long report is cut in the middle for the
     # model (in the 12h run it reached 23 KB), so the lists that only confirm
     # come last and are shortened.

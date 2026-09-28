@@ -1,0 +1,34 @@
+   Compiling rs v0.1.0 (/work/rs)
+error[E0425]: cannot find value `undefined_name` in this scope
+ --> src/main.rs:5:20
+  |
+5 |     println!("{}", undefined_name + x + y);
+  |                    ^^^^^^^^^^^^^^ not found in this scope
+
+error[E0308]: mismatched types
+ --> src/main.rs:3:18
+  |
+3 |     let x: i32 = "five";
+  |            ---   ^^^^^^ expected `i32`, found `&str`
+  |            |
+  |            expected due to this
+
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+ --> src/main.rs:4:13
+  |
+4 |     let y = add(1);
+  |             ^^^--- argument #2 of type `i32` is missing
+  |
+note: function defined here
+ --> src/main.rs:1:4
+  |
+1 | fn add(a: i32, b: i32) -> i32 { a + b }
+  |    ^^^         ------
+help: provide the argument
+  |
+4 |     let y = add(1, /* i32 */);
+  |                  +++++++++++
+
+Some errors have detailed explanations: E0061, E0308, E0425.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `rs` (bin "rs") due to 3 previous errors

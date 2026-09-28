@@ -30,6 +30,28 @@ if ccall(:jl_generating_output, Cint, ()) == 1
             binding_list!(WorkloadScope, 1)
         end
         execute_turn("1", nothing)
+        # The result's additions: the digest of long output, the jobs line, and
+        # the workspace map, which opens a session's first result and took 8.7 s
+        # there compiled cold.
+        with_digest(repeat("   Compiling dep v0.1.0\n", 200) * "error[E0308]: mismatched types\n --> src/lib.rs:3:5\n" *
+                    "a.ts(2,19): error TS2322: x\ntest t ... FAILED\n--- FAIL: TestX (0.00s)\n    x_test.go:3: m\n" *
+                    "FAIL: test_a (m.T.test_a)\nFile \"m.py\", line 3, in t\nAssertionError: 1 != 2\n" *
+                    "File \"a.ml\", line 1, characters 1-2:\nError: e\n  more\n✖ x (1ms)\n\e[31mred\e[0m\n")
+        report_jobs(WorkloadScope)
+        let root = mktempdir()
+            mkpath(joinpath(root, "src"))
+            write(joinpath(root, "src", "lib.rs"), "")
+            write(joinpath(root, "Cargo.toml"), "[workspace]\n")
+            write(joinpath(root, "package.json"), "{\"scripts\": {\"test\": \"x\"}}")
+            write(joinpath(root, "Makefile"), "build:\n\ttrue\n")
+            workspace_map(root)
+            try
+                run(pipeline(`git -C $root init -q`; stdout=devnull, stderr=devnull))
+                workspace_map(root)
+            catch
+            end
+            rm(root; recursive=true, force=true)
+        end
         # Saving and reviving state: the first snapshot of a new kernel ran
         # this code cold, and a harness closing the session right after the
         # reply killed it before it finished.
