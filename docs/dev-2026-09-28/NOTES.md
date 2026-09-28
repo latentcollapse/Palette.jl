@@ -56,3 +56,53 @@ No measurable difference. Relay's failures are short, so the digest rarely fires
 - **The trace instrument has a red control.** The digest count is 0 in the digest-off arm and the map count is 0 in the map-off arm.
 - **The stress runner was adopted 0/6 times, even though the description names it.** Luna checked the race with hand-written `for i in 1:N` loops instead. This fits the design rule: tools named only in the description go unused. Stress stays as an available tool, but it is not a gain.
 - **The scenario still doesn't discriminate.** A mean of 3 minutes is too easy for Luna, and a harder task is needed to separate the arms.
+
+## Afternoon (Matt's go-ahead): tin3, stress demoted, p3-relay-large
+
+- **tin3** runs on the fixed harness: 60k context, 6 retries from 10 s, no OpenRouter, workspace on NVMe. Budget: $5.61 on the account, with $1.50 in reserve.
+- **Stress removed from the NP2 tool description.** It was never committed as a revert: the unpushed commit that added it was dropped instead. `Neura.stress` stays in the kernel.
+- **p3-relay-large** is at `~/.neurajl-runs/harness/njl/scenarios/p3-relay-large`. It is p2's 7 bugs plus 6 features from `SPEC.md`:
+  - Rust quantiles and backoff;
+  - a TypeScript query-string codec;
+  - OCaml FFD packing;
+  - a SQL priority migration and query;
+  - a Go INI parser.
+- **p3 controls:**
+  - the reference solution passes every stage, 200/200 on the race;
+  - the untouched fixture fails every real stage (`load` always passes; it only generates noise);
+  - features alone leave the old bugs failing;
+  - an edited test is caught.
+- **Two authoring defects caught by the controls before any pilot ran:**
+  - the spec and a test disagreed on indented key lines;
+  - p2's `check.sh` inserted rows without naming columns, which broke once migration 003 added two. That would have made p3 unsolvable.
+- **Next:** one calibration run on p3 after tin3 (they share the token limit), then the A/B if it runs 20+ minutes.
+
+## tin3 finding: a 60k context causes a compaction loop
+
+- **Symptom:** compactions went from 17 in hour 1 to 47 in hour 2, and cost doubled.
+- **Cause:**
+  - Every request carries about 30k tokens of fixed overhead: the system prompt, tool descriptions, the compaction summary and the harness state.
+  - Compaction triggers at 60k − 16k reserved output = 44k.
+  - Once the 12k kept-recent window refills, the context sits at the threshold. In two bursts (19:44–19:48 and 19:58–20:01 UTC) it compacted after nearly every tool call.
+- **Cost:** each compaction breaks the prompt cache, so cached input drops to 1,510 tokens and the rest is billed at full price.
+- **The workspace map adds to it:** by design, it opens the first result after every compaction.
+- **Lesson:** shrinking the context to stay under OpenAI's per-minute token limit (200k) traded rate-limit errors for compaction loops.
+- **Fix for the next run:**
+  - a context of about 100k;
+  - client-side pacing: a rolling one-minute token bucket, plus the server's retry-after;
+  - output reserve 8k.
+- tin3 was left running as-is. Its compactions under pressure are continuity data too.
+
+## tin3 result (ended at 3.9 h by the $2.50 cost cap)
+
+- **Grades:**
+  - issues 13/13, batches 11/11 and 5/5;
+  - textkit 61/61; json5 perfect; toml 45/45 valid and 15/15 invalid;
+  - health checks 6/6 sessions ok.
+- **Ports: 934, over 4 complete ports** (fnmatch, difflib, base64, format), with **no partial ports**. tin2 had 17 complete, with many half-done.
+- **Continuity held:**
+  - 255 compactions and a kernel kill at 1.5 h, with no broken work;
+  - 19 recoveries, against 60 for tin2;
+  - no OpenRouter traffic.
+- **Throughput was lost to the compaction loop.** Uncached input came to 14.1M tokens, against tin2's 1.9M.
+- **Budget:** about $3.10 left on the account.
