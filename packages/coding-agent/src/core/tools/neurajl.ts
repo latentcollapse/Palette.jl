@@ -32,7 +32,7 @@ const PAYLOAD_DESCRIPTION =
 	"Text bound as PAYLOAD for this call only, such as the complete contents of a file to write with write(path, PAYLOAD). It is not parsed as Julia, so quotes, triple quotes, $ and backslashes need no escaping.";
 // Experiment switch (NEURAJL_PAYLOAD_PARTS=1): payload may also be named texts,
 // so an edit's old and new text both travel outside Julia's string syntax.
-const CODE_DESCRIPTION_PARTS = `${CODE_DESCRIPTION.slice(0, CODE_DESCRIPTION.lastIndexOf(" To write"))} To write a file's full text, put the text in payload and call write(path, PAYLOAD); to edit a file, put the old and new text in payload as {"old": ..., "new": ...} and call write(path, replace(read(path, String), PAYLOAD["old"] => PAYLOAD["new"])). Either way, do not embed file text in a Julia string literal.`;
+const CODE_DESCRIPTION_PARTS = `${CODE_DESCRIPTION.slice(0, CODE_DESCRIPTION.lastIndexOf(" To write"))} To write a file's full text, put the text in payload and call write(path, PAYLOAD); to edit a file, put the old and new text in payload as {"old": ..., "new": ...} and call write(path, replace(read(path, String), PAYLOAD["old"] => PAYLOAD["new"])); to run a shell script of more than one line, put it in payload and call bash(PAYLOAD). Do not embed file text or scripts in a Julia string literal.`;
 const PAYLOAD_PARTS_DESCRIPTION =
 	'Text bound as PAYLOAD for this call only, or, for an edit or anything needing several texts, an object of named texts such as {"old": ..., "new": ...}, read as PAYLOAD["old"] and PAYLOAD["new"]. It is not parsed as Julia, so quotes, triple quotes, $ and backslashes need no escaping.';
 
@@ -57,7 +57,8 @@ function neurajlSchemaFor(parts: boolean) {
 const neurajlSchema = neurajlSchemaFor(true);
 
 export type NeurajlToolInput = Static<typeof neurajlSchema>;
-const payloadParts = () => process.env.NEURAJL_PAYLOAD_PARTS === "1";
+// Named payload texts are the default; NEURAJL_PAYLOAD_PARTS=0 restores the single-string form for an A/B.
+const payloadParts = () => process.env.NEURAJL_PAYLOAD_PARTS !== "0";
 
 export interface NeurajlToolDetails {
 	success: boolean;
@@ -357,7 +358,7 @@ function neurajlDescription(options: NeurajlToolOptions | undefined): string {
 			? 'To write a file\'s text, put the text in payload and call write(path, PAYLOAD); to edit, give payload as {"old": ..., "new": ...} and use PAYLOAD["old"] and PAYLOAD["new"]. A payload is not parsed as Julia, so it needs no escaping.'
 			: "To write a file's text, put the text in payload and call write(path, PAYLOAD): the payload is not parsed as Julia, so it needs no escaping.",
 		"A package loaded from the workspace is reloaded when its source files change, so code and tests run in the kernel see your edits.",
-		`Each call may run for ${timeout}s. Waiting work (sleep, run, reading a process or file) is then interrupted and the kernel keeps every binding; compute that never yields cannot be interrupted, so the kernel stops and the next call starts a fresh one and says so.`,
+		`Each call may run for ${timeout}s. Waiting work (sleep, run, reading a process or file) is then interrupted and the kernel keeps every binding; compute that never yields cannot be interrupted, so the kernel stops and the next call starts a fresh one and says so. Start longer work (a build, a test suite) in the background, job = @async sh"cargo build 2>&1", and collect it in a later call with fetch(job); a background failure is reported at the next call.`,
 		`Loadable packages: ${loadable}.${options?.network ? "" : " There is no network access, so Pkg.add cannot install more."} kernelinfo() describes the kernel; varinfo() lists your bindings.`,
 	].join(" ");
 }
