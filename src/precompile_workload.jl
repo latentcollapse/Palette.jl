@@ -38,7 +38,7 @@ if ccall(:jl_generating_output, Cint, ()) == 1
                     "FAIL: test_a (m.T.test_a)\nFile \"m.py\", line 3, in t\nAssertionError: 1 != 2\n" *
                     "File \"a.ml\", line 1, characters 1-2:\nError: e\n  more\n✖ x (1ms)\n\e[31mred\e[0m\n")
         report_jobs(WorkloadScope)
-        sprint(show, MIME"text/plain"(), stress("exit $((STRESS_RUN % 2))"; n=4, jobs=2, seconds=10))
+        sprint(show, MIME"text/plain"(), stress("exit \$((STRESS_RUN % 2))"; n=4, jobs=2, seconds=10))
         let root = mktempdir()
             mkpath(joinpath(root, "src"))
             write(joinpath(root, "src", "lib.rs"), "")
@@ -62,7 +62,9 @@ if ccall(:jl_generating_output, Cint, ()) == 1
         empty!(DEFINITION_LOG)
         snapshot_state!(6)
         revive_state!()
-    catch
+    catch e
+        # Everything after the failing line goes uncompiled, and the kernel's first calls are slow.
+        @warn "precompile workload stopped early" exception=(e, catch_backtrace())
     finally
         isempty(STATE_DIR[]) || rm(STATE_DIR[]; recursive=true, force=true)
         STATE_DIR[] = ""
