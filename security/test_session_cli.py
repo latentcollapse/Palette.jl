@@ -312,6 +312,22 @@ class TestSessionCli(unittest.TestCase):
         self.assertFalse(r["success"], r)
         self.assertNotIn("interpolated", r["error"])
 
+    def test_named_payload_texts_carry_an_edit(self):
+        """An edit needs two texts, the old and the new, and a single payload
+        held one, so models embedded both in Julia literals and met quoting
+        errors (2 or more texts in 90% of the pilot's inline writes)."""
+        old = 'x = "$a"\n"""\n    f(x)\n"""\n'
+        new = 'x = "\\$b"  # \\ and """ kept\n'
+        Path(self.task_workspace, "e.jl").write_text("head\n" + old + "tail\n")
+        r = self._turn('p = "e.jl"; s = read(p, String); occursin(PAYLOAD["old"], s) || error("no"); '
+                       'write(p, replace(s, PAYLOAD["old"] => PAYLOAD["new"])); sort(collect(keys(PAYLOAD)))',
+                       payload={"old": old, "new": new})
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["data"], ["new", "old"])
+        self.assertEqual(Path(self.task_workspace, "e.jl").read_text(), "head\n" + new + "tail\n")
+        r = self._turn("PAYLOAD === nothing", payload={"bad": 1})
+        self.assertIs(r["data"], True, "a payload part that is not text is dropped, not bound")
+
     def test_display_does_not_corrupt_the_protocol(self):
         """display() wrote to the stdout captured at startup, which is the
         protocol pipe, and killed the session."""
