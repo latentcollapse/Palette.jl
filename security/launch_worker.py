@@ -106,6 +106,44 @@ def resolve_real_julia_binary() -> str:
     return str(Path(bindir) / "julia")
 
 
+SANDBOX_USER = "neura"
+# The sandbox sets these itself; a task environment cannot move them.
+SANDBOX_OWNED_ENV = {"PATH", "HOME", "USER", "LOGNAME", "LANG", "JULIA_DEPOT_PATH", "JULIA_PROJECT", "JULIA_LOAD_PATH",
+                     "JULIA_PKG_OFFLINE", "NEURAJL_REPO_DIR", "NEURAJL_STATE_DIR", "NEURAJL_BROKER_SOCKET"}
+
+
+def read_task_env(path: str | None) -> dict[str, str]:
+    """A benchmark's toolchain activation (OCAMLLIB, GOROOT, CONDA_PREFIX, ...),
+    as KEY=VALUE lines, given to the kernel as the other contestants get it."""
+    if not path:
+        return {}
+    env = {}
+    for line in Path(path).read_text().splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        key, sep, value = line.partition("=")
+        if not sep or not key.strip().isidentifier():
+            raise RuntimeError(f"NIRA_TASK_ENV: not a KEY=VALUE line: {line!r}")
+        if key.strip() not in SANDBOX_OWNED_ENV:
+            env[key.strip()] = value
+    return env
+
+
+def identity_files() -> Path:
+    """passwd and group files naming the sandbox's uid 1000, written once per host."""
+    etc = Path(tempfile.gettempdir()) / f"neurajl-etc-{os.getuid()}"
+    passwd = f"{SANDBOX_USER}:x:1000:1000:NeuraJL sandbox:/run/neurajl/home:/bin/bash\n"
+    group = f"{SANDBOX_USER}:x:1000:\n"
+    if not (etc / "passwd").is_file() or (etc / "passwd").read_text() != passwd:
+        etc.mkdir(mode=0o755, exist_ok=True)
+        for name, text in (("passwd", passwd), ("group", group)):
+            tmp = etc / f".{name}.{os.getpid()}"
+            tmp.write_text(text)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, etc / name)
+    return etc
+
+
 def build_bwrap_argv(
     *,
     workspace_dir: str,
@@ -123,6 +161,7 @@ def build_bwrap_argv(
     task_tools = os.environ.get("NIRA_TASK_TOOLS")
     if task_tools and not Path(task_tools, "bin").is_dir():
         raise RuntimeError(f"NIRA_TASK_TOOLS has no bin directory: {task_tools}")
+    task_env = read_task_env(os.environ.get("NIRA_TASK_ENV"))
 
     argv = [
         "bwrap",
@@ -185,6 +224,10 @@ def build_bwrap_argv(
         argv += ["--ro-bind", path, path]
     if broker_socket_dir:
         argv += ["--ro-bind", broker_socket_dir, broker_socket_dir]
+    # A user the sandbox's uid resolves to: whoami, initdb, ssh and git's
+    # identity lookups failed without one.
+    etc = identity_files()
+    argv += ["--ro-bind", str(etc / "passwd"), "/etc/passwd", "--ro-bind", str(etc / "group"), "/etc/group"]
     # The persistent kernel's saved state (src/revival.jl), outside the task
     # workspace so it never shows up among the task's files. Ephemeral
     # children are never given it.
@@ -202,8 +245,12 @@ def build_bwrap_argv(
         "--setenv", "PATH", f"{task_tools}/bin:{julia_toolchain_dir}/bin:/usr/bin:/bin" if task_tools
         else f"{julia_toolchain_dir}/bin:/usr/bin:/bin",
         "--setenv", "LANG", "en_US.UTF-8",
+        "--setenv", "USER", SANDBOX_USER,
+        "--setenv", "LOGNAME", SANDBOX_USER,
         "--chdir", workspace_dir,
     ]
+    for key, value in task_env.items():
+        argv += ["--setenv", key, value]
     if broker_socket_dir:
         argv += ["--setenv", "NEURAJL_BROKER_SOCKET", str(Path(broker_socket_dir) / "broker.sock")]
     if not network_enabled:

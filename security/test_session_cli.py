@@ -631,6 +631,36 @@ class TestSessionCli(unittest.TestCase):
             proc.stdout.close()
             shutil.rmtree(tools, ignore_errors=True)
 
+    def test_task_environment_and_a_named_user_reach_the_kernel(self):
+        """A task's toolchain needs its activation (OCaml looked for its library
+        at the build machine's path without OCAMLLIB, tsc without CONDA_PREFIX),
+        and initdb and whoami failed with no user for uid 1000. The other
+        contestants get both from the host."""
+        env_file = Path(tempfile.mkdtemp(prefix="neurajl-task-env-"), "task-env")
+        env_file.write_text("# activation\nOCAMLLIB=/opt/ocaml/lib\nGREETING=a b=c\nPATH=/evil\nHOME=/evil\n\n")
+        proc = subprocess.Popen(
+            [sys.executable, CLI, "--project-dir", PROJECT_DIR, "--ceiling", "{}",
+             "--workspace-dir", self.task_workspace, "--turn-timeout", "20"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, bufsize=1, env={**os.environ, "NIRA_TASK_ENV": str(env_file)},
+        )
+        try:
+            self.assertEqual(json.loads(proc.stdout.readline())["kind"], "HELLO")
+            code = ('(ENV["OCAMLLIB"], ENV["GREETING"], ENV["HOME"], occursin("/evil", ENV["PATH"]), '
+                    'strip(read(`whoami`, String)), ENV["USER"])')
+            for i, ephemeral in enumerate((False, True)):
+                proc.stdin.write(json.dumps({"request_id": str(i), "code": code, "ephemeral": ephemeral}) + "\n")
+                proc.stdin.flush()
+                r = json.loads(proc.stdout.readline())
+                self.assertTrue(r["success"], r)
+                self.assertEqual(r["data"], ["/opt/ocaml/lib", "a b=c", "/run/neurajl/home", False, "neura", "neura"],
+                                 f"ephemeral={ephemeral}")
+        finally:
+            proc.stdin.close()
+            proc.wait(timeout=60)
+            proc.stdout.close()
+            shutil.rmtree(env_file.parent, ignore_errors=True)
+
     def test_workspace_package_loads_ahead_of_the_kernels_copy(self):
         """The kernel's environment has OrderedCollections (DataFrames needs
         it). A model working on OrderedCollections appended the workspace to
