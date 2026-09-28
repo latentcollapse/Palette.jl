@@ -152,6 +152,7 @@ def main() -> int:
                     ephemeral_ceiling=req.get("ceiling"),
                     payload=_payload(req.get("payload")),
                     include_map=req.get("map") is True,
+                    digest=req.get("digest") is not False,
                 )
                 _respond({
                     "request_id": request_id,

@@ -346,7 +346,8 @@ for line in eachline(PROTO_IN)
             # Neura.output(call) gives back what the call printed, without what
             # the result adds in front of it below.
             Neura.retain_output!(call, printed)
-            resp["output"] = Neura.with_digest(printed)
+            # The host can turn the digest off for an A/B of its effect ("digest": false).
+            resp["output"] = get(req, "digest", true) === false ? Neura.strip_ansi(printed) : Neura.with_digest(printed)
             # The host asks for the workspace map at the session's first call and
             # after a compaction; it opens the result, ahead of the call's output.
             if get(req, "map", false) === true

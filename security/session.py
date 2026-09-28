@@ -240,7 +240,8 @@ class NeuraSession:
         return not self._closed and self._proc.poll() is None
 
     def turn(self, code: str, *, ephemeral: bool = False, ephemeral_ceiling: dict | None = None,
-             payload: str | dict[str, str] | None = None, include_map: bool = False) -> dict:
+             payload: str | dict[str, str] | None = None, include_map: bool = False,
+             digest: bool = True) -> dict:
         """Send one script to the persistent worker and block for its one
         response. Raises SessionDeadError if the process is gone -- never
         silently relaunches; a new process would mean a new epoch, i.e. a
@@ -283,6 +284,8 @@ class NeuraSession:
                 req["payload"] = payload
             if include_map:
                 req["map"] = True
+            if not digest:
+                req["digest"] = False
             try:
                 self._proc.stdin.write(json.dumps(req) + "\n")
                 self._proc.stdin.flush()

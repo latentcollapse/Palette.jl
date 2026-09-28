@@ -344,6 +344,14 @@ class TestSessionCli(unittest.TestCase):
         r = self._turn("2 + 2", request_id="2")
         self.assertNotIn("[workspace map]", r["output"])
 
+    def test_the_digest_can_be_turned_off_for_an_ab(self):
+        code = 'print(repeat("   Compiling dep v0.1.0\\n", 300)); println("error[E0308]: mismatched types\\n --> src/lib.rs:3:5")'
+        r = self._turn(code)
+        self.assertTrue(r["output"].startswith("[digest of"), r["output"][:80])
+        r = self._turn(code, request_id="2", digest=False)
+        self.assertFalse(r["output"].startswith("[digest of"), r["output"][:80])
+        self.assertIn("src/lib.rs:3:5", r["output"])
+
     def test_background_jobs_are_named_when_they_change(self):
         """A model that started a server or a long build had no word of it
         again until it thought to look, and a failed task was reported as
