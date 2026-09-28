@@ -395,9 +395,16 @@ export function findCutPoint(
 
 	for (let i = endIndex - 1; i >= startIndex; i--) {
 		const entry = entries[i];
-		if (entry.type !== "message") continue;
-		const messageTokens = estimateTokens(entry.message);
-		accumulatedTokens += messageTokens;
+		// Custom messages reach the model too; leaving them out let the kept tail outgrow its budget.
+		if (entry.type === "custom_message") {
+			const content = typeof entry.content === "string" ? entry.content : JSON.stringify(entry.content);
+			accumulatedTokens += Math.ceil(content.length / 4);
+			if (accumulatedTokens < keepRecentTokens) continue;
+		} else if (entry.type !== "message") {
+			continue;
+		} else {
+			accumulatedTokens += estimateTokens(entry.message);
+		}
 		if (accumulatedTokens >= keepRecentTokens) {
 			// No cut point at/after i (trailing tool results): keep only the final turn, not everything.
 			cutIndex = cutPoints[cutPoints.length - 1];

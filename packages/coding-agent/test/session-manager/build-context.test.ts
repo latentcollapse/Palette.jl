@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HARNESS_DIGEST_CUSTOM_TYPE } from "../../src/core/messages.js";
+import { HARNESS_DIGEST_CUSTOM_TYPE, NEURAJL_STATE_CUSTOM_TYPE } from "../../src/core/messages.js";
 import {
 	type BranchSummaryEntry,
 	buildSessionContext,
@@ -81,6 +81,16 @@ function chain(...specs: string[]): SessionEntry[] {
 				customType: "extension.note",
 				content: text,
 				display: true,
+			});
+		} else if (kind === "j") {
+			entries.push({
+				type: "custom_message",
+				id,
+				parentId,
+				timestamp: T,
+				customType: NEURAJL_STATE_CUSTOM_TYPE,
+				content: text,
+				display: false,
 			});
 		} else if (kind === "t") {
 			entries.push({ type: "thinking_level_change", id, parentId, timestamp: T, thinkingLevel: text });
@@ -194,6 +204,29 @@ describe("buildSessionContext", () => {
 	it("handles orphaned entries gracefully", () => {
 		const entries: SessionEntry[] = [msg("1", null, "user", "hello"), msg("2", "missing", "assistant", "orphan")];
 		expect(buildSessionContext(entries, "2").messages).toHaveLength(1);
+	});
+
+	describe("NeuraJL state notes", () => {
+		it("keeps only the newest note", () => {
+			const ctx = buildSessionContext(
+				chain("u hello", "j state-a", "a reply", "j state-b", "u again", "j state-c", "a done"),
+			);
+			const notes = ctx.messages.filter(
+				(m) => (m as { customType?: string }).customType === NEURAJL_STATE_CUSTOM_TYPE,
+			);
+			expect(notes.map((m) => (m as { content: string }).content)).toEqual(["state-c"]);
+			expect(ctx.messages.map((m) => m.role)).toEqual(["user", "assistant", "user", "custom", "assistant"]);
+		});
+
+		it("keeps only the newest note across a compaction's kept tail", () => {
+			const ctx = buildSessionContext(
+				chain("u q", "j state-old", "a kept", "c Summary|2", "j state-new", "u after"),
+			);
+			const notes = ctx.messages.filter(
+				(m) => (m as { customType?: string }).customType === NEURAJL_STATE_CUSTOM_TYPE,
+			);
+			expect(notes.map((m) => (m as { content: string }).content)).toEqual(["state-new"]);
+		});
 	});
 
 	describe("harness digest dedupe", () => {

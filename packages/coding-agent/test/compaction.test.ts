@@ -229,6 +229,38 @@ describe("findCutPoint", () => {
 		const result = findCutPoint(entries, 0, entries.length, keepRecentTokens);
 		expect(result).toMatchObject(expected);
 	});
+
+	it("counts custom messages toward the kept budget", () => {
+		// Each note is ~1,000 tokens; the messages alone are tiny, so a cut that
+		// ignored the notes would keep everything.
+		const note = (): SessionEntry => {
+			const id = `test-id-${entryCounter++}`;
+			const entry: SessionEntry = {
+				type: "custom_message",
+				id,
+				parentId: lastId,
+				timestamp: new Date().toISOString(),
+				customType: "neurajl_state",
+				content: "n".repeat(4000),
+				display: false,
+			};
+			lastId = id;
+			return entry;
+		};
+		const entries: SessionEntry[] = [
+			createMessageEntry(createUserMessage("Turn 1")),
+			note(),
+			createMessageEntry(createAssistantMessage("A1")),
+			createMessageEntry(createUserMessage("Turn 2")),
+			note(),
+			createMessageEntry(createAssistantMessage("A2")),
+			createMessageEntry(createUserMessage("Turn 3")),
+			note(),
+			createMessageEntry(createAssistantMessage("A3")),
+		];
+		const result = findCutPoint(entries, 0, entries.length, 1500);
+		expect(result.firstKeptEntryIndex).toBeGreaterThanOrEqual(3);
+	});
 });
 
 describe("prepareCompaction with small sessions", () => {

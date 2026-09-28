@@ -6,6 +6,7 @@ import { type Static, Type } from "typebox";
 import { getShellEnv, killProcessTree, trackDetachedChildPid, untrackDetachedChildPid } from "../../utils/shell.js";
 import type { SessionBaseToolsFactory } from "../agent-session.js";
 import type { ToolDefinition } from "../extensions/types.js";
+import { NEURAJL_STATE_CUSTOM_TYPE } from "../messages.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 /**
@@ -521,7 +522,7 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 						? ` These bindings are defined (with the call that last set each): ${lastBindings.join(", ")}.`
 						: " You have not defined any bindings yet.";
 				return {
-					customType: "neurajl_state",
+					customType: NEURAJL_STATE_CUSTOM_TYPE,
 					content: `[neurajl-state]\n\nYour NeuraJL kernel persisted through compaction; its bindings, functions, types and loaded packages are still available.${detail}${mapEnabled ? " Your next neurajl result opens with a map of the workspace." : ""}`,
 				};
 			},

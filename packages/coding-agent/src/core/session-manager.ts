@@ -29,6 +29,7 @@ import {
 	createCompactionSummaryMessage,
 	createCustomMessage,
 	HARNESS_DIGEST_CUSTOM_TYPE,
+	NEURAJL_STATE_CUSTOM_TYPE,
 } from "./messages.js";
 import {
 	addAssistantUsage,
@@ -512,6 +513,18 @@ export function buildSessionContext(
 		}
 	}
 
+	// A NeuraJL state note is written after every compaction, and a kept tail
+	// can span several; the older ones describe a kernel that has since moved
+	// on, and at one per compaction they grew the tail past its budget.
+	let newestNeurajlStateEntryId: string | undefined;
+	for (let i = path.length - 1; i >= 0; i--) {
+		const entry = path[i];
+		if (entry.type === "custom_message" && entry.customType === NEURAJL_STATE_CUSTOM_TYPE) {
+			newestNeurajlStateEntryId = entry.id;
+			break;
+		}
+	}
+
 	const compactionIdx = compaction ? path.findIndex((e) => e.type === "compaction" && e.id === compaction.id) : -1;
 	// True when the compaction snapshot is the newest digest in context, so every
 	// digest custom message is older and skipped entirely.
@@ -530,6 +543,9 @@ export function buildSessionContext(
 			target.push(entry.message);
 		} else if (entry.type === "custom_message") {
 			if (entry.customType === HARNESS_DIGEST_CUSTOM_TYPE && entry.id !== keepDigestEntryId) {
+				return;
+			}
+			if (entry.customType === NEURAJL_STATE_CUSTOM_TYPE && entry.id !== newestNeurajlStateEntryId) {
 				return;
 			}
 			target.push(
