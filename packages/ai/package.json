@@ -107,7 +107,7 @@
 		"node": ">=20.0.0"
 	},
 	"devDependencies": {
-		"@types/node": "^24.3.0",
+		"@types/node": "^26.6.2",
 		"canvas": "^3.2.0",
 		"vitest": "^4.1.10",
 		"yaml": "^2.9.0"
