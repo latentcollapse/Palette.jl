@@ -1,0 +1,167 @@
+From 4767842a0f31250b3cd4fc3a99dd869a0c51bac9 Mon Sep 17 00:00:00 2001
+From: Matt C <latentcollapse@gmail.com>
+Date: Sat, 26 Sep 2026 05:08:53 -0400
+Subject: [PATCH 29/42] np2: start the NeuraJL kernel with the session, and
+ name the call behind elided output
+
+- The kernel starts when the session's tools are built, so its startup
+  (about 3s) overlaps the model's first request instead of delaying the
+  first call.
+- An elision notice says which call's full output Neura.output(n) returns.
+- The tool description says workspace packages reload when edited: the
+  model's reasonable prior is that a kernel goes stale, which made a julia
+  subprocess the rational place to run tests.
+- The timeout test asserted the old contract (every timeout stops the
+  kernel). Waiting work is now interrupted with the kernel kept; compute
+  that never yields still stops it. The test checks both.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../coding-agent/src/core/tools/neurajl.ts    | 29 ++++++++++--
+ .../suite/neurajl-substrate-modes.test.ts     | 47 +++++++++++++++++--
+ 2 files changed, 67 insertions(+), 9 deletions(-)
+
+diff --git a/packages/coding-agent/src/core/tools/neurajl.ts b/packages/coding-agent/src/core/tools/neurajl.ts
+index b8832004e..81de7d83e 100644
+--- a/packages/coding-agent/src/core/tools/neurajl.ts
++++ b/packages/coding-agent/src/core/tools/neurajl.ts
+@@ -99,9 +99,13 @@ function requiredSetting(value: string | undefined, name: string): string {
+ 	return value;
+ }
+ 
+-export function truncateMiddle(text: string, maxChars: number | undefined): { text: string; truncated: boolean } {
++export function truncateMiddle(
++	text: string,
++	maxChars: number | undefined,
++	fullText?: string,
++): { text: string; truncated: boolean } {
+ 	if (maxChars === undefined || text.length <= maxChars) return { text, truncated: false };
+-	const notice = `\n[... ${text.length - maxChars} characters elided ...]\n`;
++	const notice = `\n[... ${text.length - maxChars} characters elided${fullText ? `; ${fullText}` : ""} ...]\n`;
+ 	const keep = Math.max(0, maxChars - notice.length);
+ 	const head = Math.ceil(keep / 2);
+ 	return { text: text.slice(0, head) + notice + text.slice(text.length - (keep - head)), truncated: true };
+@@ -315,6 +319,7 @@ function neurajlDescription(options: NeurajlToolOptions | undefined): string {
+ 		"Execute Julia in this session's persistent NeuraJL kernel. The working directory is the task workspace; read and edit files with Julia's file I/O. Bindings, functions, types and loaded packages persist across calls, and ans is the last call's value. Printed output and the last expression's value are returned.",
+ 		'Shell: sh"cmd" (or bash("cmd")) runs bash, so pipes, globs, redirects and && work, and returns ShellResult(exitcode, stdout, stderr) after printing the output. In sh"..." the $ belongs to the shell; in an ordinary "..." string it is Julia interpolation. run(`prog args`) starts one program without a shell.',
+ 		"To write a file's text, put the text in payload and call write(path, PAYLOAD): the payload is not parsed as Julia, so it needs no escaping.",
++		"A package loaded from the workspace is reloaded when its source files change, so code and tests run in the kernel see your edits.",
+ 		`Each call may run for ${timeout}s. Waiting work (sleep, run, reading a process or file) is then interrupted and the kernel keeps every binding; compute that never yields cannot be interrupted, so the kernel stops and the next call starts a fresh one and says so.`,
+ 		`Loadable packages: ${loadable}.${options?.network ? "" : " There is no network access, so Pkg.add cannot install more."} kernelinfo() describes the kernel; varinfo() lists your bindings.`,
+ 	].join(" ");
+@@ -322,7 +327,8 @@ function neurajlDescription(options: NeurajlToolOptions | undefined): string {
+ 
+ /**
+  * `SessionBaseToolsFactory` for NeuraJL: one kernel per agent session,
+- * including each RLM child, started lazily on the first call.
++ * including each RLM child, started when the session's tools are built so
++ * that its startup overlaps the model's first request.
+  */
+ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlToolOptions): SessionBaseToolsFactory {
+ 	return (_sessionId: string) => {
+@@ -346,6 +352,11 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
+ 			return { kernel, restartedFrom };
+ 		}
+ 
++		// Started lazily, the first call waited for the whole startup (~3s).
++		// A start that fails here is retried by that first call, which then
++		// reports the failure.
++		liveKernel().catch(() => undefined);
++
+ 		const definition: ToolDefinition<typeof neurajlSchema, NeurajlToolDetails> = {
+ 			name: "neurajl",
+ 			label: "neurajl",
+@@ -373,7 +384,17 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
+ 					const stopped = kernel.isDead() ? `\n${KERNEL_STOPPED}` : "";
+ 					throw new Error(`${notice}${err instanceof Error ? err.message : String(err)}${stopped}`);
+ 				}
+-				const { text, truncated } = truncateMiddle(formatNeurajlResponse(response), options?.maxOutputChars);
++				// The kernel keeps what each call printed, so elided output can be
++				// read back in pieces instead of recomputed.
++				const fullText =
++					typeof response.call === "number"
++						? `Neura.output(${response.call}) returns everything this call printed${response.success === true ? ", and ans its value" : ""}`
++						: undefined;
++				const { text, truncated } = truncateMiddle(
++					formatNeurajlResponse(response),
++					options?.maxOutputChars,
++					fullText,
++				);
+ 				if (response.session_dead === true) throw new Error(`${notice}${text}\n${KERNEL_STOPPED}`);
+ 				if (response.success !== true) throw new Error(`${notice}${text}`);
+ 				return {
+diff --git a/packages/coding-agent/test/suite/neurajl-substrate-modes.test.ts b/packages/coding-agent/test/suite/neurajl-substrate-modes.test.ts
+index 3723d4f68..596b227bf 100644
+--- a/packages/coding-agent/test/suite/neurajl-substrate-modes.test.ts
++++ b/packages/coding-agent/test/suite/neurajl-substrate-modes.test.ts
+@@ -142,7 +142,7 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
+ 
+ 	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+ 	it.skipIf(skipIfNeurajlUnavailable())(
+-		"REAL integration: a timed-out turn stops the kernel and the next call says it runs in a new one",
++		"REAL integration: a timed-out wait keeps the kernel; compute that never yields stops it and the next call says so",
+ 		async () => {
+ 			const workspace = mkdtempSync(join(tmpdir(), "neurajl-timeout-"));
+ 			const scope = createNeurajlBaseToolsFactory(workspace, {
+@@ -153,10 +153,14 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
+ 			const tool = scope.tools.neurajl!;
+ 			try {
+ 				await tool.execute("t1", { code: "x = 1" }, undefined, undefined);
+-				await expect(tool.execute("t2", { code: "sleep(30)" }, undefined, undefined)).rejects.toThrow(
+-					/turn_timeout[\s\S]*the kernel stopped/,
+-				);
+-				const after = await tool.execute("t3", { code: "@isdefined(x)" }, undefined, undefined);
++				const waited = tool.execute("t2", { code: "sleep(30)" }, undefined, undefined);
++				await expect(waited).rejects.toThrow(/Interrupted[\s\S]*every binding are intact/);
++				await expect(waited).rejects.not.toThrow(/the kernel stopped/);
++				expect(textOf(await tool.execute("t3", { code: "x" }, undefined, undefined))).toBe("1");
++				await expect(
++					tool.execute("t4", { code: "s = 0; while true; s += 1; end" }, undefined, undefined),
++				).rejects.toThrow(/the kernel stopped/);
++				const after = await tool.execute("t5", { code: "@isdefined(x)" }, undefined, undefined);
+ 				expect(textOf(after)).toMatch(/NEW kernel[\s\S]*false$/);
+ 			} finally {
+ 				await scope.dispose?.();
+@@ -211,6 +215,39 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
+ 		300_000,
+ 	);
+ 
++	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
++	it.skipIf(skipIfNeurajlUnavailable())(
++		"REAL integration: elided output names the call whose full output the kernel kept",
++		async () => {
++			const workspace = mkdtempSync(join(tmpdir(), "neurajl-elide-"));
++			const scope = createNeurajlBaseToolsFactory(workspace, {
++				sessionCliPath: SESSION_CLI_PATH,
++				projectDir: PROJECT_DIR,
++				maxOutputChars: 400,
++			})("elide-test-session");
++			const tool = scope.tools.neurajl!;
++			try {
++				const long = textOf(
++					await tool.execute("t1", { code: 'for i in 1:500; println("line ", i); end' }, undefined, undefined),
++				);
++				expect(long).toMatch(/characters elided; Neura\.output\(1\) returns everything this call printed, and ans its value/);
++				expect(long).not.toContain("line 250\n");
++				const back = await tool.execute(
++					"t2",
++					{ code: 'o = Neura.output(1); (length(split(o, "\\n"; keepempty=false)), occursin("line 250\\n", o))' },
++					undefined,
++					undefined,
++				);
++				expect(textOf(back)).toBe("(500, true)");
++			} finally {
++				await scope.dispose?.();
++				rmSync(workspace, { recursive: true, force: true });
++			}
++		},
++		// test-policy: allow explicit-test-timeout -- starts a real sandboxed Julia kernel
++		300_000,
++	);
++
+ 	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+ 	it.skipIf(skipIfNeurajlUnavailable())(
+ 		"REAL integration: dispose terminates the kernel and later calls fail",
+-- 
+2.55.0
+

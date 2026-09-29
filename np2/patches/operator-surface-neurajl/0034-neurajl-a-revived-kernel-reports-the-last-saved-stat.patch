@@ -1,0 +1,66 @@
+From 25f9d0528aac2988e2a6288f62bebcb2b69a156c Mon Sep 17 00:00:00 2001
+From: Matt C <latentcollapse@gmail.com>
+Date: Sun, 27 Sep 2026 08:06:00 -0400
+Subject: [PATCH 34/42] neurajl: a revived kernel reports the last saved state,
+ not the last completed call
+
+A slow snapshot can now give way to a waiting request (lab rnd/snapshot-yield),
+so the state a new kernel revives may be a few calls old; the kernel's own
+report names the call and the calls whose effects were lost.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ packages/coding-agent/src/core/tools/neurajl.ts             | 4 ++--
+ .../coding-agent/test/suite/neurajl-substrate-modes.test.ts | 6 +++---
+ 2 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/packages/coding-agent/src/core/tools/neurajl.ts b/packages/coding-agent/src/core/tools/neurajl.ts
+index 9626e54da..fd0c1760e 100644
+--- a/packages/coding-agent/src/core/tools/neurajl.ts
++++ b/packages/coding-agent/src/core/tools/neurajl.ts
+@@ -314,7 +314,7 @@ async function startKernel(
+ const KERNEL_STOPPED =
+ 	"[neurajl: the kernel stopped. Output printed during this call and every binding, function and loaded package are gone; files written to the workspace remain. The next call starts a new kernel.]";
+ const KERNEL_STOPPED_REVIVING =
+-	"[neurajl: the kernel stopped. Output printed during this call is gone; files written to the workspace remain. The next call starts a new kernel, which revives what it can of the state at the end of the last completed call and says what it could not.]";
++	"[neurajl: the kernel stopped. Output printed during this call is gone; files written to the workspace remain. The next call starts a new kernel, which revives what it can of the last saved state and says which call that was and what it could not revive.]";
+ 
+ function sleep(ms: number): Promise<void> {
+ 	return new Promise((resolve) => setTimeout(resolve, ms).unref?.());
+@@ -426,7 +426,7 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
+ 						restartedFrom === undefined
+ 							? ""
+ 							: kernel.revival
+-								? `[neurajl: the previous kernel (epoch ${restartedFrom}) stopped${why}; this call ran in a NEW kernel (epoch ${kernel.epoch}), which revived the state saved at the end of the last completed call. Its report below says what was restored, rebuilt, or lost.]\n`
++								? `[neurajl: the previous kernel (epoch ${restartedFrom}) stopped${why}; this call ran in a NEW kernel (epoch ${kernel.epoch}), which revived the last saved state. Its report below says which call that was, and what was restored, rebuilt, or lost.]\n`
+ 								: `[neurajl: the previous kernel (epoch ${restartedFrom}) stopped; this call ran in a NEW kernel (epoch ${kernel.epoch}). All earlier bindings, functions and loaded packages are gone.${lostBindings()} Files written to the workspace remain.]\n`;
+ 					let response: Record<string, unknown>;
+ 					try {
+diff --git a/packages/coding-agent/test/suite/neurajl-substrate-modes.test.ts b/packages/coding-agent/test/suite/neurajl-substrate-modes.test.ts
+index 49416cff7..863446253 100644
+--- a/packages/coding-agent/test/suite/neurajl-substrate-modes.test.ts
++++ b/packages/coding-agent/test/suite/neurajl-substrate-modes.test.ts
+@@ -189,9 +189,9 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
+ 				await tool.execute("t1", { code: "x = [1, 2]; y = x; double(v) = 2v" }, undefined, undefined);
+ 				await expect(
+ 					tool.execute("t2", { code: "x[1] = 99; s = 0; while true; s += 1; end" }, undefined, undefined),
+-				).rejects.toThrow(/revives what it can of the state at the end of the last completed call/);
++				).rejects.toThrow(/revives what it can of the last saved state/);
+ 				const after = textOf(await tool.execute("t3", { code: "(x, y === x, double(x))" }, undefined, undefined));
+-				expect(after).toMatch(/NEW kernel .*which revived the state/);
++				expect(after).toMatch(/NEW kernel .*which revived the last saved state/);
+ 				expect(after).toMatch(/\[revival\].*end of call 1/);
+ 				expect(after).toMatch(/restored exactly: x \(Vector\{Int64\}, call 1\), y \(Vector\{Int64\}, call 1\)/);
+ 				expect(after).toMatch(/rebuilt from source: double \(function, call 1\)/);
+@@ -288,7 +288,7 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
+ 				await expect(during).rejects.toThrow(/the kernel stopped/);
+ 				// The new kernel revives x from the state saved after t1/t3.
+ 				const after = await tool.execute("t5", { code: "@isdefined(x)" }, undefined, undefined);
+-				expect(textOf(after)).toMatch(/NEW kernel[\s\S]*which revived the state[\s\S]*true$/);
++				expect(textOf(after)).toMatch(/NEW kernel[\s\S]*which revived the last saved state[\s\S]*true$/);
+ 			} finally {
+ 				await scope.dispose?.();
+ 				rmSync(workspace, { recursive: true, force: true });
+-- 
+2.55.0
+

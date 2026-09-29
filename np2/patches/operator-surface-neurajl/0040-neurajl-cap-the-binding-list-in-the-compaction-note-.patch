@@ -1,0 +1,107 @@
+From 1ea0071be888a790d3e44342248c163679ff3238 Mon Sep 17 00:00:00 2001
+From: Matt C <latentcollapse@gmail.com>
+Date: Mon, 28 Sep 2026 19:25:32 -0400
+Subject: [PATCH 40/42] neurajl: cap the binding list in the compaction note
+ and the lost-bindings notice
+
+tin3's note listed 1,000+ bindings in 7.4k characters. Past 2,000 characters
+the most recently set bindings are kept and the rest are counted, with a
+pointer to varinfo(). Red control: the two capping tests fail uncapped.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../coding-agent/src/core/tools/neurajl.ts    | 26 ++++++++++++++--
+ .../test/neurajl-bindings.test.ts             | 30 +++++++++++++++++++
+ 2 files changed, 54 insertions(+), 2 deletions(-)
+ create mode 100644 packages/coding-agent/test/neurajl-bindings.test.ts
+
+diff --git a/packages/coding-agent/src/core/tools/neurajl.ts b/packages/coding-agent/src/core/tools/neurajl.ts
+index ec85db75d..c62702af0 100644
+--- a/packages/coding-agent/src/core/tools/neurajl.ts
++++ b/packages/coding-agent/src/core/tools/neurajl.ts
+@@ -340,6 +340,27 @@ const KERNEL_STOPPED =
+ const KERNEL_STOPPED_REVIVING =
+ 	"[neurajl: the kernel stopped. Output printed during this call is gone; files written to the workspace remain. The next call starts a new kernel, which revives what it can of the last saved state and says which call that was and what it could not revive.]";
+ 
++/**
++ * A binding list for a note, within `maxChars`. Entries read `name (type, call N)`;
++ * past the budget the most recently set are kept, since the model is likeliest
++ * to be using them, and the rest are counted.
++ */
++export function describeBindings(bindings: string[], maxChars = 2000): string {
++	const joined = bindings.join(", ");
++	if (joined.length <= maxChars) return joined;
++	const callOf = (b: string) => Number(/call (\d+)\)$/.exec(b)?.[1] ?? -1);
++	const byRecency = bindings.map((b, i) => ({ b, i, call: callOf(b) })).sort((x, y) => y.call - x.call || x.i - y.i);
++	const kept = new Set<number>();
++	let used = 0;
++	for (const { b, i } of byRecency) {
++		if (used + b.length + 2 > maxChars) break;
++		kept.add(i);
++		used += b.length + 2;
++	}
++	const shown = bindings.filter((_, i) => kept.has(i));
++	return `${shown.join(", ")}, and ${bindings.length - shown.length} more set earlier (varinfo() lists them all)`;
++}
++
+ function sleep(ms: number): Promise<void> {
+ 	return new Promise((resolve) => setTimeout(resolve, ms).unref?.());
+ }
+@@ -395,7 +416,8 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
+ 		const mapEnabled = options?.workspaceMap ?? process.env.NEURAJL_WORKSPACE_MAP !== "0";
+ 		const digestEnabled = options?.outputDigest ?? process.env.NEURAJL_OUTPUT_DIGEST !== "0";
+ 		let mapNext = mapEnabled;
+-		const lostBindings = () => (lastBindings.length === 0 ? "" : ` Lost bindings: ${lastBindings.join(", ")}.`);
++		const lostBindings = () =>
++			lastBindings.length === 0 ? "" : ` Lost bindings: ${describeBindings(lastBindings)}.`;
+ 		const stoppedNotice = () => (stateDir ? KERNEL_STOPPED_REVIVING : `${KERNEL_STOPPED}${lostBindings()}`);
+ 		const idleStopMs = stateDir ? (options?.idleStopMs ?? 20 * 60_000) : 0;
+ 		let idleTimer: ReturnType<typeof setTimeout> | undefined;
+@@ -519,7 +541,7 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
+ 				mapNext = mapEnabled;
+ 				const detail =
+ 					lastBindings.length > 0
+-						? ` These bindings are defined (with the call that last set each): ${lastBindings.join(", ")}.`
++						? ` These bindings are defined (with the call that last set each): ${describeBindings(lastBindings)}.`
+ 						: " You have not defined any bindings yet.";
+ 				return {
+ 					customType: NEURAJL_STATE_CUSTOM_TYPE,
+diff --git a/packages/coding-agent/test/neurajl-bindings.test.ts b/packages/coding-agent/test/neurajl-bindings.test.ts
+new file mode 100644
+index 000000000..d78eaaaea
+--- /dev/null
++++ b/packages/coding-agent/test/neurajl-bindings.test.ts
+@@ -0,0 +1,30 @@
++import { describe, expect, it } from "vitest";
++import { describeBindings } from "../src/core/tools/neurajl.js";
++
++describe("describeBindings", () => {
++	it("lists short sets in full, in the kernel's order", () => {
++		const list = ["a (Int64, call 3)", "b (String, call 1)"];
++		expect(describeBindings(list)).toBe("a (Int64, call 3), b (String, call 1)");
++	});
++
++	it("keeps the most recently set bindings within the budget and counts the rest", () => {
++		// 400 bindings of ~30 characters: about 12,000 characters uncapped.
++		const list = Array.from(
++			{ length: 400 },
++			(_, i) => `binding_${String(i).padStart(3, "0")} (Int64, call ${i + 1})`,
++		);
++		const text = describeBindings(list, 2000);
++		expect(text.length).toBeLessThan(2100);
++		expect(text).toContain("binding_399 (Int64, call 400)");
++		expect(text).not.toContain("binding_000 ");
++		const shown = (text.match(/\(Int64, call \d+\)/g) ?? []).length;
++		expect(text).toContain(`and ${400 - shown} more set earlier (varinfo() lists them all)`);
++	});
++
++	it("keeps the kept bindings in the kernel's order", () => {
++		const list = ["old (Int64, call 1)", "newest (Int64, call 9)", "newer (Int64, call 5)"];
++		expect(describeBindings(list, 50)).toBe(
++			"newest (Int64, call 9), newer (Int64, call 5), and 1 more set earlier (varinfo() lists them all)",
++		);
++	});
++});
+-- 
+2.55.0
+

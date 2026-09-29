@@ -1,0 +1,315 @@
+From 920d1987a736870b8947db629e2ce88f7fca7705 Mon Sep 17 00:00:00 2001
+From: Matt C <latentcollapse@gmail.com>
+Date: Mon, 21 Sep 2026 06:20:16 -0400
+Subject: [PATCH 01/42] Add neurabash as an additive code-execution tool
+ alongside ipython
+
+NIRA-Prime integration, first pass. Adds `neurabash` to the ToolName
+registry as a second, separate tool - not a replacement for `ipython`.
+
+Scope deliberately narrow: one-shot `--neura-profile=<profile> -c <code>`
+per call (NeuraBash's ephemeral-session mode), no session persistence
+across calls yet. ipython.ts's kernel remains the only path for RLM
+sub-agent spawning, the Python skills bridge, file-edit diffs, and
+attachments - NeuraBash has no equivalent for any of those yet, so
+removing ipython would silently break them. Full scope and open
+decisions are in the decision doc for Matt.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+---
+ packages/coding-agent/src/core/sdk.ts         |   6 +-
+ packages/coding-agent/src/core/tools/index.ts |  20 +-
+ .../coding-agent/src/core/tools/neurabash.ts  | 209 ++++++++++++++++++
+ 3 files changed, 232 insertions(+), 3 deletions(-)
+ create mode 100644 packages/coding-agent/src/core/tools/neurabash.ts
+
+diff --git a/packages/coding-agent/src/core/sdk.ts b/packages/coding-agent/src/core/sdk.ts
+index 5c32cc5f7..77e01f970 100644
+--- a/packages/coding-agent/src/core/sdk.ts
++++ b/packages/coding-agent/src/core/sdk.ts
+@@ -24,7 +24,7 @@ import { DefaultResourceLoader } from "./resource-loader.js";
+ import { getDefaultSessionDir, SessionManager } from "./session-manager.js";
+ import { SettingsManager } from "./settings-manager.js";
+ import { time } from "./timings.js";
+-import { createBashTool, createEditTool, createIpythonTool, withFileMutationQueue } from "./tools/index.js";
++import { createBashTool, createEditTool, createIpythonTool, createNeurabashTool, withFileMutationQueue } from "./tools/index.js";
+ 
+ export interface CreateAgentSessionOptions extends AgentSessionCreationOptions {
+ 	/** Working directory for project-local discovery. Default: process.cwd() */
+@@ -107,7 +107,9 @@ export type { CreateRlmSubagentRuntimeOptions, RlmSubagentRuntime, SubagentRunti
+ export type { Skill } from "./skills.js";
+ export type { Tool } from "./tools/index.js";
+ 
+-export { createBashTool, createEditTool, createIpythonTool, withFileMutationQueue };
++export { createBashTool, createEditTool, createIpythonTool, createNeurabashTool, withFileMutationQueue };
++
++// Helper Functions
+ 
+ function getDefaultAgentDir(): string {
+ 	return getAgentDir();
+diff --git a/packages/coding-agent/src/core/tools/index.ts b/packages/coding-agent/src/core/tools/index.ts
+index 7465c8edc..f61473cea 100644
+--- a/packages/coding-agent/src/core/tools/index.ts
++++ b/packages/coding-agent/src/core/tools/index.ts
+@@ -27,6 +27,14 @@ export {
+ 	type IpythonToolInput,
+ 	type IpythonToolOptions,
+ } from "./ipython.js";
++export {
++	createNeurabashTool,
++	createNeurabashToolDefinition,
++	type NeurabashSecurityProfile,
++	type NeurabashToolDetails,
++	type NeurabashToolInput,
++	type NeurabashToolOptions,
++} from "./neurabash.js";
+ export {
+ 	DEFAULT_MAX_BYTES,
+ 	DEFAULT_MAX_LINES,
+@@ -41,17 +49,27 @@ export {
+ import type { AgentTool } from "@earendil-works/pi-agent-core";
+ import type { ToolDefinition } from "../extensions/types.js";
+ import { createIpythonToolDefinition, type IpythonToolOptions } from "./ipython.js";
++import { createNeurabashToolDefinition, type NeurabashToolOptions } from "./neurabash.js";
+ 
+ export type Tool = AgentTool<any>;
+ export type ToolDef = ToolDefinition<any, any>;
+-export type ToolName = "ipython";
++export type ToolName = "ipython" | "neurabash";
+ 
+ export interface ToolsOptions {
+ 	ipython?: IpythonToolOptions;
++	/**
++	 * NIRA-Prime: additive alongside ipython, not a replacement. See
++	 * packages/coding-agent/src/core/tools/neurabash.ts for scope/rationale.
++	 * Unset NEURABASH_BIN / options.neurabash.binPath means the tool exists in
++	 * the registry but fails closed with a clear message on first use, rather
++	 * than being silently absent.
++	 */
++	neurabash?: NeurabashToolOptions;
+ }
+ 
+ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): Record<ToolName, ToolDef> {
+ 	return {
+ 		ipython: createIpythonToolDefinition(cwd, options?.ipython),
++		neurabash: createNeurabashToolDefinition(cwd, options?.neurabash),
+ 	};
+ }
+diff --git a/packages/coding-agent/src/core/tools/neurabash.ts b/packages/coding-agent/src/core/tools/neurabash.ts
+new file mode 100644
+index 000000000..884c06ac4
+--- /dev/null
++++ b/packages/coding-agent/src/core/tools/neurabash.ts
+@@ -0,0 +1,209 @@
++import { existsSync, mkdirSync } from "node:fs";
++import { homedir } from "node:os";
++import { join } from "node:path";
++import { spawn } from "child_process";
++import { type Static, Type } from "typebox";
++import { getShellEnv, killProcessTree, trackDetachedChildPid, untrackDetachedChildPid } from "../../utils/shell.js";
++import { waitForChildProcess } from "../../utils/child-process.js";
++import type { ToolDefinition } from "../extensions/types.js";
++import { OutputAccumulator } from "./output-accumulator.js";
++import { wrapToolDefinition } from "./tool-definition-wrapper.js";
++import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
++import type { AgentTool } from "@earendil-works/pi-agent-core";
++
++/**
++ * NIRA-Prime integration point: exposes NeuraBash (Project-LIRA-NeuraBash) as a
++ * second, additive code-execution tool alongside `ipython`, NOT a replacement.
++ *
++ * Scope deliberately kept narrow for this first pass:
++ *  - one-shot `--neura-profile=<profile> -c <code>` per call (NeuraBash's own
++ *    "ephemeral logical session by default" mode, spec RT-009), not the
++ *    persistent daemon session / binding-across-calls model NeuraBash also
++ *    supports. Session persistence (bindings, Forge tools surviving across
++ *    calls the way IPython's kernel namespace does) is real future work, not
++ *    done here — see the decision doc for why.
++ *  - no RLM sub-agent spawning, no Python-skills bridge, no diff/attachment
++ *    display protocol, no inter-agent messaging. ipython.ts's kernel owns all
++ *    of that today; NeuraBash has no equivalent yet. Removing ipython would
++ *    silently break those, so it stays.
++ */
++
++const neurabashSchema = Type.Object({
++	code: Type.String({
++		description:
++			"NeuraBash source to execute: ordinary Bash, or Bash with `|!>` JUL stages for exact math, matrices, and typed symbolic computation. Session state does not persist between calls yet — each call is an independent, ephemeral NeuraBash invocation.",
++	}),
++});
++
++export type NeurabashToolInput = Static<typeof neurabashSchema>;
++
++export interface NeurabashToolDetails {
++	exitCode?: number | null;
++	durationMs?: number;
++	profile?: NeurabashSecurityProfile;
++}
++
++/**
++ * Security Kernel V1 profiles (docs/SECURITY_KERNEL_V1_REPORT.md in the
++ * NeuraBash repo, 2026-09-21). `workspace` is the closest match to the
++ * ordinary bash/ipython tools' existing read-write-cwd semantics and is the
++ * default here. `inherit` is deliberately not a sandbox; it is not offered
++ * as a default.
++ */
++export type NeurabashSecurityProfile = "readonly" | "workspace" | "sandbox";
++
++export interface NeurabashToolOptions {
++	/** Absolute path to the neurabash binary. No default: an unset/missing binary fails closed. */
++	binPath?: string;
++	/** Default: "workspace". */
++	profile?: NeurabashSecurityProfile;
++	/**
++	 * Persistent Julia depot / runtime directory, reused across calls so package
++	 * precompilation and the daemon actually stay warm. Defaults under
++	 * `~/.prime-agent/neurabash/`. A fresh temp dir per call would work but pays
++	 * NeuraBash's full cold-start cost (multi-second per the current benchmark
++	 * report) on every single invocation.
++	 */
++	depotDir?: string;
++	runtimeDir?: string;
++	env?: Record<string, string>;
++	/** Command timeout in seconds. Default: no timeout. */
++	timeout?: number;
++}
++
++function defaultStateDir(): string {
++	return join(homedir(), ".prime-agent", "neurabash");
++}
++
++function resolveEnv(cwd: string, options: NeurabashToolOptions | undefined): NodeJS.ProcessEnv {
++	const depotDir = options?.depotDir ?? join(defaultStateDir(), "depot");
++	const runtimeDir = options?.runtimeDir ?? join(defaultStateDir(), "runtime");
++	for (const dir of [depotDir, runtimeDir]) {
++		if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
++	}
++	return {
++		...getShellEnv(),
++		...options?.env,
++		JULIA_DEPOT_PATH: depotDir,
++		XDG_RUNTIME_DIR: runtimeDir,
++	};
++}
++
++function resolveBinPath(options: NeurabashToolOptions | undefined): string | undefined {
++	return options?.binPath ?? process.env.NEURABASH_BIN;
++}
++
++export function createNeurabashToolDefinition(
++	cwd: string,
++	options?: NeurabashToolOptions,
++): ToolDefinition<typeof neurabashSchema, NeurabashToolDetails> {
++	const profile = options?.profile ?? "workspace";
++
++	return {
++		name: "neurabash",
++		label: "neurabash",
++		description:
++			"Execute code through NeuraBash: ordinary Bash, or Bash extended with the native `|!>` typed trapdoor into Julia for exact math, matrix/vector operations, and (as the standard library grows) broader symbolic computation. Runs sandboxed under NeuraBash's Security Kernel V1. Prefer this over guessing at arithmetic or symbolic manipulation in-context; prefer `ipython` for RLM sub-agent spawning, Python skills, and anything needing session state to persist across calls.",
++		promptSnippet: "neurabash - sandboxed Bash + typed Julia (|!>) for exact computation",
++		executionMode: "sequential",
++		parameters: neurabashSchema,
++		execute: async (_toolCallId, params, signal) => {
++			const binPath = resolveBinPath(options);
++			if (!binPath || !existsSync(binPath)) {
++				return {
++					content: [
++						{
++							type: "text",
++							text: `neurabash binary not found (checked NEURABASH_BIN / options.binPath: ${binPath ?? "(unset)"}). NeuraBash must be built (scripts/build.sh in the NeuraBash repo) and NEURABASH_BIN pointed at build/bin/neurabash before this tool can run.`,
++						},
++					],
++					isError: true,
++				};
++			}
++
++			const env = resolveEnv(cwd, options);
++			const started = Date.now();
++			const output = new OutputAccumulator({ tempFilePrefix: "prime-agent-neurabash" });
++
++			const exitCode = await new Promise<number | null>((resolve, reject) => {
++				const child = spawn(binPath, [`--neura-profile=${profile}`, "-c", params.code], {
++					cwd,
++					env,
++					stdio: ["ignore", "pipe", "pipe"],
++				});
++				if (child.pid) trackDetachedChildPid(child.pid);
++
++				let timeoutHandle: NodeJS.Timeout | undefined;
++				let timedOut = false;
++				if (options?.timeout) {
++					timeoutHandle = setTimeout(() => {
++						timedOut = true;
++						if (child.pid) killProcessTree(child.pid);
++					}, options.timeout * 1000);
++				}
++
++				child.stdout?.on("data", (d: Buffer) => output.append(d));
++				child.stderr?.on("data", (d: Buffer) => output.append(d));
++
++				const onAbort = () => {
++					if (child.pid) killProcessTree(child.pid);
++				};
++				if (signal) {
++					if (signal.aborted) onAbort();
++					else signal.addEventListener("abort", onAbort, { once: true });
++				}
++
++				waitForChildProcess(child)
++					.then((code) => {
++						if (child.pid) untrackDetachedChildPid(child.pid);
++						if (timeoutHandle) clearTimeout(timeoutHandle);
++						if (signal) signal.removeEventListener("abort", onAbort);
++						if (signal?.aborted) {
++							reject(new Error("aborted"));
++							return;
++						}
++						if (timedOut) {
++							reject(new Error(`timeout:${options?.timeout}`));
++							return;
++						}
++						resolve(code);
++					})
++					.catch((err) => {
++						if (child.pid) untrackDetachedChildPid(child.pid);
++						if (timeoutHandle) clearTimeout(timeoutHandle);
++						if (signal) signal.removeEventListener("abort", onAbort);
++						reject(err);
++					});
++			}).catch((err: unknown) => {
++				output.finish();
++				const snapshot = output.snapshot({ persistIfTruncated: true });
++				const text = snapshot.content || "";
++				if (err instanceof Error && err.message === "aborted") {
++					throw new Error(`${text ? `${text}\n\n` : ""}NeuraBash execution aborted`);
++				}
++				if (err instanceof Error && err.message.startsWith("timeout:")) {
++					throw new Error(`${text ? `${text}\n\n` : ""}NeuraBash execution timed out after ${options?.timeout}s`);
++				}
++				throw err;
++			});
++
++			output.finish();
++			const snapshot = output.snapshot({ persistIfTruncated: true });
++			await output.closeTempFile();
++			let text = snapshot.content || "(no output)";
++			if (snapshot.truncation.truncated) {
++				text += `\n\n[Output truncated at ${formatSize(DEFAULT_MAX_BYTES)} / ${DEFAULT_MAX_LINES} lines. Full output: ${snapshot.fullOutputPath}]`;
++			}
++
++			const details: NeurabashToolDetails = { exitCode, durationMs: Date.now() - started, profile };
++			// PIPE-005 in the NeuraBash spec: a typed Error returned as data exits 0.
++			// Only a genuinely raised/nonzero shell status is a tool error here.
++			const isError = exitCode !== 0 && exitCode !== null;
++			return { content: [{ type: "text", text }], details, isError };
++		},
++	};
++}
++
++export function createNeurabashTool(cwd: string, options?: NeurabashToolOptions): AgentTool<typeof neurabashSchema> {
++	return wrapToolDefinition(createNeurabashToolDefinition(cwd, options));
++}
+-- 
+2.55.0
+

@@ -1,0 +1,100 @@
+From 1339109a9d55c35a2ce4f4da5df91b3d2fa57774 Mon Sep 17 00:00:00 2001
+From: Matt C <latentcollapse@gmail.com>
+Date: Mon, 28 Sep 2026 19:29:50 -0400
+Subject: [PATCH 41/42] retry: take the wait an error states in its text when
+ no Retry-After came with it
+
+OpenAI's TPM errors say "Please try again in 578ms" and arrived without a
+header, so every tin3 retry slept the full backoff (a flat 10 s against
+stated waits of 0.6-9.6 s). Red control: the new integration test fails
+without the fallback.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../coding-agent/src/core/provider-retry.ts   | 15 ++++++++-
+ .../coding-agent/test/provider-retry.test.ts  | 32 +++++++++++++++++++
+ 2 files changed, 46 insertions(+), 1 deletion(-)
+
+diff --git a/packages/coding-agent/src/core/provider-retry.ts b/packages/coding-agent/src/core/provider-retry.ts
+index 57b3c4908..9dca8db45 100644
+--- a/packages/coding-agent/src/core/provider-retry.ts
++++ b/packages/coding-agent/src/core/provider-retry.ts
+@@ -63,7 +63,20 @@ export function providerStreamFailureKind(message: AssistantMessage): string | u
+ 
+ export function providerStreamFailureRetryAfterMs(message: AssistantMessage): number | undefined {
+ 	const value = providerStreamFailureDetails(message)?.retryAfterMs;
+-	return typeof value === "number" && value >= 0 ? value : undefined;
++	if (typeof value === "number" && value >= 0) return value;
++	return retryAfterFromErrorText(message.errorMessage);
++}
++
++/**
++ * OpenAI's rate-limit errors state the wait in their text ("Please try again
++ * in 578ms", "... in 9.5s") and reached us without a Retry-After header, so
++ * every retry slept the full backoff however short the server's wait was.
++ */
++export function retryAfterFromErrorText(text: string | undefined): number | undefined {
++	const match = text ? /\btry again in (\d+(?:\.\d+)?)\s*(ms|s)\b/i.exec(text) : null;
++	if (!match) return undefined;
++	const amount = Number(match[1]);
++	return Math.ceil(match[2].toLowerCase() === "ms" ? amount : amount * 1000);
+ }
+ 
+ export function providerStreamFailureStatus(message: AssistantMessage): number | undefined {
+diff --git a/packages/coding-agent/test/provider-retry.test.ts b/packages/coding-agent/test/provider-retry.test.ts
+index 1c2b6391a..b3666f4c8 100644
+--- a/packages/coding-agent/test/provider-retry.test.ts
++++ b/packages/coding-agent/test/provider-retry.test.ts
+@@ -9,10 +9,12 @@ import {
+ 	parseProviderResetMs,
+ 	providerParkDecision,
+ 	providerRetryDelay,
++	providerStreamFailureRetryAfterMs,
+ 	providerWaitClass,
+ 	providerWaitDecision,
+ 	providerWaitJitter,
+ 	providerWaitPingDelay,
++	retryAfterFromErrorText,
+ } from "../src/core/provider-retry.js";
+ 
+ function providerError(kind?: string): AssistantMessage {
+@@ -132,6 +134,36 @@ const TEST_WAIT_POLICY: ProviderWaitPolicy = {
+ 	maxParks: 8,
+ };
+ 
++describe("retryAfterFromErrorText", () => {
++	it("reads the wait OpenAI states in a rate-limit error", () => {
++		const text =
++			"Rate limit reached for gpt-6-luna in organization org-x on tokens per min (TPM): Limit 200000, Used 181697, Requested 20230. Please try again in 578ms. Visit https://platform.openai.com/account/rate-limits to learn more.";
++		expect(retryAfterFromErrorText(text)).toBe(578);
++		expect(retryAfterFromErrorText("... Please try again in 9.567s. Visit ...")).toBe(9567);
++		expect(retryAfterFromErrorText("Please try again in 2s")).toBe(2000);
++	});
++
++	it("returns undefined when the text states no wait", () => {
++		expect(retryAfterFromErrorText("Connection error.")).toBeUndefined();
++		expect(retryAfterFromErrorText(undefined)).toBeUndefined();
++		expect(retryAfterFromErrorText("try again in a few minutes")).toBeUndefined();
++	});
++
++	it("is used when the failure carries no Retry-After", () => {
++		const message = {
++			stopReason: "error",
++			errorMessage: "Rate limit reached ... Please try again in 954ms.",
++			diagnostics: [{ type: "provider_stream_failure", details: { kind: "unknown" } }],
++		} as unknown as AssistantMessage;
++		expect(providerStreamFailureRetryAfterMs(message)).toBe(954);
++		const withHeader = {
++			...message,
++			diagnostics: [{ type: "provider_stream_failure", details: { kind: "unknown", retryAfterMs: 3000 } }],
++		} as unknown as AssistantMessage;
++		expect(providerStreamFailureRetryAfterMs(withHeader)).toBe(3000);
++	});
++});
++
+ describe("providerWaitClass", () => {
+ 	it("classifies quota/subscription exhaustion shapes as quota", () => {
+ 		// Real shapes from daemon logs (2026-09-10): ChatGPT-plan usage limit, prime-inference throttle.
+-- 
+2.55.0
+

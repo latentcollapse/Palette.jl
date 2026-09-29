@@ -1,0 +1,168 @@
+From 932454cd40a89ce8b2f0236dec709c550faed0d9 Mon Sep 17 00:00:00 2001
+From: Matt C <latentcollapse@gmail.com>
+Date: Tue, 22 Sep 2026 01:40:05 -0400
+Subject: [PATCH 05/42] Add Gate 2 driver script; fix break-glass wording
+ precision
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- scripts/run-neura-session.ts: launches a real Prime Agent session in
+  NEURA mode through the actual public createAgentSession entry point
+  (baseToolsOverride, initialActiveToolNames: ["neurabash"],
+  includeGoals: false). Not a permanent CLI flag — baseToolsOverride
+  takes real AgentTool instances, and Prime's args parser has no
+  pattern for passing objects through string flags; threading a
+  research-only mode through the whole CLI pipeline would be
+  infrastructure built ahead of evidence. This is the small driver
+  the chassis plan's Gate 2 section names as the actual prerequisite.
+  Fails loudly if NEURABASH_BIN is unset, per the same section's
+  warning that a silent fail-closed would pass Gate 2's letter while
+  NeuraBash never ran.
+
+- neurabash-preferred.ts: the original "prefer neurabash" note didn't
+  distinguish "avoid ipython for computation" from "ipython remains
+  the only path to sub-agent spawning, diffs, attachments, compaction,
+  and self-refinement today, use it normally for those." A "break
+  glass" framing without that distinction risks the model avoiding
+  ipython for tasks that genuinely need it, which would be a real
+  functional regression dressed up as a clean experimental result.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+---
+ .../extensions/neurabash-preferred.ts         |   8 +-
+ scripts/run-neura-session.ts                  | 100 ++++++++++++++++++
+ 2 files changed, 104 insertions(+), 4 deletions(-)
+ create mode 100644 scripts/run-neura-session.ts
+
+diff --git a/packages/coding-agent/examples/extensions/neurabash-preferred.ts b/packages/coding-agent/examples/extensions/neurabash-preferred.ts
+index f60bc2a69..7953f600f 100644
+--- a/packages/coding-agent/examples/extensions/neurabash-preferred.ts
++++ b/packages/coding-agent/examples/extensions/neurabash-preferred.ts
+@@ -17,13 +17,13 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+ const SUBSTRATE_PREFERENCE_NOTE = [
+ 	"## Substrate preference (this session)",
+ 	"",
+-	"Both `neurabash` and `ipython` are available. Neither is categorically better — this is a task-fit choice, not a language preference:",
++	"Both `neurabash` and `ipython` are available. Neither is categorically better — this is a task-fit choice, not a language preference. Two different situations call for two different defaults; do not collapse them into one blanket rule:",
+ 	"",
+-	"- Reach for `neurabash` first for exact computation: arithmetic, linear algebra, symbolic manipulation, anything where a wrong-but-plausible answer is worse than a slower correct one. It executes under a real security kernel, and its typed `|!>` stages don't round-trip through text between steps.",
+-	"- Reach for `ipython` when the job is genuinely Python-shaped: an existing Python/data-science library is the right tool, you need a rich persistent namespace across many turns, or you're driving another system through its own Python interface.",
++	"- **Exact computation** — arithmetic, linear algebra, symbolic manipulation, anything where a wrong-but-plausible answer is worse than a slower correct one — reach for `neurabash` first. It executes under a real security kernel, and its typed `|!>` stages don't round-trip through text between steps.",
++	"- **Capabilities `neurabash` cannot do yet** — spawning a sub-agent, writing a file diff, attaching an image, compacting your own context, self-refining a repeated pattern, an existing Python/data-science library being the right tool, or driving another system through its own Python interface — use `ipython` normally, without hesitation. These are not edge cases or a fallback of last resort; today they are the only path to that capability, full stop. Avoiding `ipython` for these would make the session worse, not more disciplined.",
+ 	"- Before building anything new in either substrate, check whether an existing operation or a previously built tool already does the job.",
+ 	"",
+-	"This note exists so a comparison between substrate choices is possible. It is not an instruction to avoid Python.",
++	"This note exists so a comparison between substrate choices is possible. It is not an instruction to avoid Python, and it is not a 'legacy, last resort' framing for `ipython` — everything in the second bullet is first-class, current functionality.",
+ ].join("\n");
+ 
+ export default function neurabashPreferred(pi: ExtensionAPI) {
+diff --git a/scripts/run-neura-session.ts b/scripts/run-neura-session.ts
+new file mode 100644
+index 000000000..6f0de6552
+--- /dev/null
++++ b/scripts/run-neura-session.ts
+@@ -0,0 +1,100 @@
++/**
++ * Gate 2 driver: launch a real Prime Agent session in NEURA mode.
++ *
++ * This is deliberately not a permanent CLI flag. baseToolsOverride takes
++ * actual AgentTool instances, and Prime's CLI args are string/boolean flags
++ * with no existing pattern for passing objects through — threading a
++ * research-only mode through that whole pipeline would be exactly the kind
++ * of infrastructure-before-evidence this project has been careful to avoid
++ * today. This script calls the real createAgentSession entry point
++ * directly instead.
++ *
++ * Usage:
++ *   NEURABASH_BIN=/path/to/build/bin/neurabash \
++ *     npx tsx scripts/run-neura-session.ts "your task prompt" [--profile workspace|readonly|sandbox]
++ *
++ * What this actually exercises, matching CHASSIS_DECISION_PLAN_2026-09-21.md
++ * Gate 2: no ipython kernel constructed (baseToolsOverride), no
++ * REPL_CONTROL_PROMPT doctrine (hasIpython computed from the real active
++ * tool list), goals off (includeGoals: false — an active goal in this mode
++ * throws rather than silently degrading, see agent-session.ts). Each call
++ * to the neurabash tool is still ephemeral (Gate 3, NeuraBash-side
++ * persistent session client, is not built yet) — report results as
++ * "ephemeral NeuraBash vs. persistent IPython", not unqualified, per the
++ * plan's named confound.
++ */
++import { getAgentDir } from "../packages/coding-agent/src/config.js";
++import { AuthStorage } from "../packages/coding-agent/src/core/auth-storage.js";
++import { ModelRegistry } from "../packages/coding-agent/src/core/model-registry.js";
++import { createAgentSession } from "../packages/coding-agent/src/core/sdk.js";
++import { createNeurabashTool } from "../packages/coding-agent/src/core/tools/neurabash.js";
++import { SessionManager } from "../packages/coding-agent/src/core/session-manager.js";
++import { SettingsManager } from "../packages/coding-agent/src/core/settings-manager.js";
++import { findInitialModel } from "../packages/coding-agent/src/core/model-resolver.js";
++import { DefaultResourceLoader } from "../packages/coding-agent/src/core/resource-loader.js";
++
++const args = process.argv.slice(2);
++const profileIdx = args.indexOf("--profile");
++const profile = profileIdx >= 0 ? (args[profileIdx + 1] as "workspace" | "readonly" | "sandbox") : "workspace";
++const promptText = args.filter((a, i) => a !== profile && i !== profileIdx).join(" ").trim();
++
++if (!promptText) {
++	console.error('Usage: npx tsx scripts/run-neura-session.ts "task prompt" [--profile workspace|readonly|sandbox]');
++	process.exit(64);
++}
++
++if (!process.env.NEURABASH_BIN) {
++	console.error(
++		"NEURABASH_BIN is not set. This is a real Gate 2 prerequisite, not an implementation detail:" +
++			" if it's unset, neurabash.ts fails closed with a text error, and a model that handles that" +
++			" gracefully would pass the letter of the test while NeuraBash never actually ran. Set it to" +
++			" a real built binary before counting this run.",
++	);
++	process.exit(69);
++}
++
++const cwd = process.cwd();
++const agentDir = getAgentDir();
++const authStorage = AuthStorage.create();
++const modelRegistry = ModelRegistry.create(authStorage);
++const settingsManager = SettingsManager.create(cwd, agentDir);
++const resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
++await resourceLoader.reload();
++
++const { model } = await findInitialModel({ modelRegistry, settingsManager });
++if (!model) {
++	console.error("No model available. Configure a provider (see packages/coding-agent/docs/providers.md) first.");
++	process.exit(69);
++}
++
++console.log(`[run-neura-session] model=${model.provider}/${model.id} profile=${profile} cwd=${cwd}`);
++
++const { session } = await createAgentSession({
++	cwd,
++	agentDir,
++	authStorage,
++	modelRegistry,
++	settingsManager,
++	resourceLoader,
++	model,
++	sessionManager: SessionManager.create(cwd, agentDir),
++	baseToolsOverride: { neurabash: createNeurabashTool(cwd, { profile }) },
++	initialActiveToolNames: ["neurabash"],
++	includeGoals: false,
++});
++
++console.log(`[run-neura-session] active tools: ${session.getActiveToolNames().join(", ")}`);
++console.log(`[run-neura-session] ipython tool definition present: ${session.getToolDefinition("ipython") !== undefined}`);
++
++session.subscribe((event) => {
++	if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
++		process.stdout.write(event.assistantMessageEvent.delta);
++	}
++});
++
++await session.prompt(promptText);
++
++console.log("\n\n[run-neura-session] --- transcript ---");
++for (const msg of session.messages) {
++	console.log(JSON.stringify(msg, null, 2));
++}
+-- 
+2.55.0
+
