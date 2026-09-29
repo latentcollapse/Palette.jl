@@ -134,3 +134,34 @@ The 60k window was not the whole story. After a compaction, the context was ofte
 4. **Harness pacing** (the server's retry-after and a token bucket) is still to build.
 
 The regression of post-compaction size on content type was inconclusive (R² = 0.17) and is not used as evidence.
+
+## Open tickets, closed (NP2 local commits; driver and harness on NVMe)
+
+1. **Binding list capped** (`1ea0071be`). The compaction note and the lost-bindings notice now list at most 2,000 characters. Past that, the most recently set bindings are kept, the rest are counted, and the note points to `varinfo()`. Red control: the cap tests fail without it.
+2. **Summary budget: closed with no change.** `historySummaryCompletionBudget` caps the summary's *output*; it is not a length target.
+   - Lowering it would cut summaries off mid-sentence.
+   - On a reasoning model, it could return an empty summary, because the cap also covers reasoning tokens.
+   - tin3's summaries ran from 0.35k to 6.8k tokens, with no upward trend: under 7% of a 100k window.
+3. **Retries and pacing.** The real defects were not in the pacing itself:
+   - **The server's stated wait was never used** (`1339109a9`). OpenAI's TPM errors carry "try again in 578ms" in the text, with no header, so every retry slept the flat 10 s base. The wait is now parsed from the text. Red control done.
+   - **A driver race turned retries into recoveries.** All 19 of tin3's recoveries fired 10.0 s ± 25 ms after a retry began. `waitForHeadlessIdle` returned in the gap between the retry's sleep and its re-issued request, so the recovery prompt replaced the retry. The driver now waits until neither retrying nor streaming. In tin4, retries reach attempts 2–6, where tin3 had only attempt 1.
+   - **A latent trap:** `maxRetryDelayMs` 12 s makes any longer server wait fail the turn. It is now 60 s.
+   - **Settings, both runners:** a 100k window, 8k output, a 16k kept tail, and a 2 s retry base.
+   - **Token bucket not built.** The server states the exact wait, and retries now honour it.
+4. **Encrypted reasoning is billed** (`326061256`).
+   - **Measurement:** on tin4's first 53 consecutive requests, before any compaction, the growth in billed input fits text plus signatures at R² 0.958. Text alone fits at 0.546.
+   - **Rates:** 0.13 tokens per signature character, and 0.32 per text character.
+   - **The gap:** signatures outweighed text, 258k to 192k characters, and `estimateTokens` ignored them.
+   - **Fix:** signatures now count at one token per 8 characters. Red control done.
+   - **The instrument had failed twice first.** Rebuilding each request's context from the entries fit at R² ≈ 0. The cause was one entry pooling RLM child usage (60k input + 599k cached) and failed requests reporting zero usage. Differencing consecutive successful requests in the linear stretch before any compaction worked.
+
+**Suites:** 243 tests pass across compaction, session-manager, provider-retry, bindings and the NeuraJL real-kernel suites, with none skipped. `tsgo` and biome are clean.
+
+**tin4 live check:** 1 compaction in 33 minutes (tin3: 17 in its first hour). The kill at 0.42 h went through. There was 1 recovery, a legitimate one after 6 rate-limited attempts.
+
+**tin4 final (45 min, $0.16):**
+- 147 NeuraJL calls, the same pace as tin3's first 45 minutes.
+- **2 compactions**, against about 13 for tin3 in the same span.
+- 1 recovery, a legitimate one; 130 retries absorbed the rate limit. The kernel kill went through.
+- **Grades:** 12/13 issues. The 13th is the requirement change delivered at minute 23, still in progress at the deadline. The batch, json5 and toml zeros are follow-ups the 45 minutes never reached; no follow-up had started.
+- The compaction loop is gone, and retries no longer become recoveries.

@@ -45,10 +45,10 @@ env = {**os.environ, "HOME": str(run / "home"), "ABC_PROMPT_FILE": str(run / "pr
        "NEURAJL_STATE_ROOT": str(state_root), "ABC_NEURAJL_MAX_OUTPUT_CHARS": "12000",
        "ABC_MODEL": "gpt-6-luna", "ABC_OPENROUTER_PROVIDER": "openai", "ABC_BACKUP": "1" if a.backup else "0",
        "ABC_OPENAI_KEY_FILE": str(oak), "ABC_OPENROUTER_KEY_FILE": str(ork),
-       # The org allows 200k tokens a minute: a 100k context hit it 292 times in tin2, and 3 retries
-       # from 5 s never reached the next minute.
-       "ABC_MAX_REQUESTS": "8000", "ABC_CONTEXT_WINDOW": "60000", "ABC_MAX_OUTPUT_TOKENS": "16000", "ABC_KEEP_RECENT_TOKENS": "12000",
-       "ABC_MAX_RETRIES": "6", "ABC_RETRY_BASE_MS": "10000", "ABC_STALL_MS": "600000", "ABC_MAX_RECOVERIES": "60",
+       # The org allows 200k tokens a minute. Retries wait the longer of the backoff and the wait the
+       # error states (NP2 parses "try again in 578ms"); tin3 slept a flat 10 s on waits of 0.6-9.6 s.
+       "ABC_MAX_REQUESTS": "8000", "ABC_CONTEXT_WINDOW": "100000", "ABC_MAX_OUTPUT_TOKENS": "8000", "ABC_KEEP_RECENT_TOKENS": "16000",
+       "ABC_MAX_RETRIES": "6", "ABC_RETRY_BASE_MS": "2000", "ABC_STALL_MS": "600000", "ABC_MAX_RECOVERIES": "60",
        "ABC_DEADLINE_MS": str(int(a.hours * 3600_000)),
        "ABC_FOLLOWUP_PROMPTS": ":".join(str(E / q) for q in queue), "ABC_FOLLOWUP_HOOK": str(E / "followup_hook.sh"), "FOLLOWUP_LOG": str(run / "followups.jsonl")}
 evidence = pathlib.Path(a.evidence) if a.evidence else None
