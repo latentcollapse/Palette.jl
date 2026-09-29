@@ -106,7 +106,7 @@ function writeFullySync(fd: number, data: Buffer): void {
 	}
 }
 
-function capCellSourceCode(code: string | undefined): string | undefined {
+export function capCellSourceCode(code: string | undefined): string | undefined {
 	if (code === undefined || code.length <= MAX_CELL_SOURCE_CHARS) return code;
 	return `${code.slice(0, MAX_CELL_SOURCE_CHARS)}${CELL_SOURCE_TRUNCATION_MARKER}`;
 }

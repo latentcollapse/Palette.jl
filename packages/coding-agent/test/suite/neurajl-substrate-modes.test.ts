@@ -20,10 +20,12 @@ import { existsSync, mkdtempSync, readFileSync, readlinkSync, rmSync, watch, wri
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAgentSession, createNeurajlBaseToolsFactory } from "../../src/core/sdk.js";
 import { SessionManager } from "../../src/core/session-manager.js";
+import { NEURAJL_RLM_REQUEST_TYPES } from "../../src/core/tools/neurajl.js";
 import { createTestResourceLoader } from "../utilities.js";
 import { createHarness, type Harness } from "./harness.js";
 
@@ -420,4 +422,119 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 		// test-policy: allow explicit-test-timeout -- starts a real sandboxed Julia kernel; a cold precompile alone takes ~40s
 		300_000,
 	);
+
+	describe("REAL integration: RLM children from Julia code", () => {
+		const rlmCeiling = { host_request: { allowed_types: [...NEURAJL_RLM_REQUEST_TYPES] } };
+
+		async function rlmSession(ceiling: Record<string, unknown>, turnTimeout = 60) {
+			harness = await createHarness({ tools: [] });
+			const session = await buildSessionIn(harness, {
+				baseToolsFactory: createNeurajlBaseToolsFactory(harness.tempDir, {
+					workspaceMap: false,
+					sessionCliPath: SESSION_CLI_PATH,
+					projectDir: PROJECT_DIR,
+					ceiling,
+					turnTimeout,
+					stateRoot: mkdtempSync(join(tmpdir(), "neurajl-rlm-state-")),
+				}),
+				initialActiveToolNames: ["neurajl"],
+				includeGoals: false,
+			});
+			const tool = session.getToolDefinition("neurajl")!;
+			let n = 0;
+			const call = (code: string) => tool.execute(`t${++n}`, { code }, undefined, undefined, undefined as never);
+			return { session, tool, call, harness };
+		}
+
+		// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+		it.skipIf(skipIfNeurajlUnavailable())(
+			"spawns and collects in one call and across calls, reports a failing child, and keeps the parent's ceiling",
+			async () => {
+				const { session, tool, call, harness: h } = await rlmSession(rlmCeiling);
+				expect(tool.description).toContain("Neura.rlm.spawn");
+				h.setResponses([fauxAssistantMessage("forty-two")]);
+				const one = textOf(
+					await call(
+						'h = Neura.rlm.spawn("what is 40 + 2?"; name = "adder"); ' +
+							"r = only(Neura.rlm.collect(h; timeout_ms = 40_000)); (r.status, r.settled, r.answer_preview)",
+					),
+				);
+				expect(one).toContain('("done", true, "forty-two")');
+				// The child is a real child of this session, with the same substrate and ceiling.
+				const rows = (await session.listRlmSubagents()).subagents;
+				expect(rows.map((r) => r.session_name)).toEqual(["adder"]);
+				const child = session.getRlmChildSession(rows[0]!.rlm_child_id)!;
+				expect(child.getActiveToolNames()).toEqual(["neurajl"]);
+				expect(child.getToolDefinition("neurajl")!.description).toBe(tool.description);
+
+				// Spawned in one call, collected in a later one.
+				h.setResponses([fauxAssistantMessage("second answer")]);
+				await call('h2 = Neura.rlm.spawn("another"; name = "second"); h2.name');
+				const later = textOf(await call("only(Neura.rlm.collect(h2; timeout_ms = 40_000)).answer_preview"));
+				expect(later).toContain('"second answer"');
+				expect(
+					textOf(await call('join(sort([s.session_name for s in Neura.rlm.list_subagents()]), ",")')),
+				).toContain('"adder,second"');
+
+				// A child whose model fails: Julia reports exactly what the chassis reports.
+				h.setResponses(
+					Array.from({ length: 6 }, () =>
+						fauxAssistantMessage("", { stopReason: "error", errorMessage: "child provider exploded" }),
+					),
+				);
+				const failed = textOf(
+					await call(
+						'f = Neura.rlm.spawn("fail"; name = "failing"); r = only(Neura.rlm.collect(f; timeout_ms = 40_000)); ' +
+							'string(r.rlm_child_id, "|", r.status, "|", r.error)',
+					),
+				);
+				const [failedId, julStatus, julError] = failed.replace(/^"|"$/g, "").split("|");
+				const chassis = (await session.collectRlmChildren([failedId!], 0)).results[0]!;
+				expect([julStatus, julError]).toEqual([chassis.status, String(chassis.error ?? "nothing")]);
+				h.setResponses([]);
+
+				// The host's own errors reach Julia as errors.
+				await expect(call('Neura.rlm.spawn("dup"; name = "adder")')).rejects.toThrow(/adder/);
+				await expect(call('Neura.rlm.delete_subagent("nobody")')).rejects.toThrow(/nobody/);
+				expect(textOf(await call('Neura.rlm.delete_subagent("second").session_name'))).toContain('"second"');
+			},
+			// test-policy: allow explicit-test-timeout -- starts real sandboxed Julia kernels for the parent and each child
+			600_000,
+		);
+
+		// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+		it.skipIf(skipIfNeurajlUnavailable())(
+			"without the permission nothing is spawned, and the description does not offer it",
+			async () => {
+				const { session, tool, call } = await rlmSession({});
+				expect(tool.description).not.toContain("Neura.rlm");
+				await expect(call('Neura.rlm.spawn("x"; name = "w")')).rejects.toThrow(
+					/host_request not in this session's ceiling/,
+				);
+				expect((await session.listRlmSubagents()).subagents).toEqual([]);
+			},
+			// test-policy: allow explicit-test-timeout -- starts a real sandboxed Julia kernel
+			300_000,
+		);
+
+		// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+		it.skipIf(skipIfNeurajlUnavailable())(
+			"a child outlives the kernel that spawned it, and the revived kernel finds it",
+			async () => {
+				const { call, harness: h } = await rlmSession(rlmCeiling, 8);
+				h.setResponses([fauxAssistantMessage("survived")]);
+				await call('h = Neura.rlm.spawn("outlive me"; name = "survivor"); h.name');
+				await expect(call("s = 0; while true; s += 1; end")).rejects.toThrow(/the kernel stopped/);
+				const after = textOf(
+					await call(
+						'r = only(Neura.rlm.collect("survivor"; timeout_ms = 5_000)); (r.session_name, r.answer_preview)',
+					),
+				);
+				expect(after).toMatch(/NEW kernel/);
+				expect(after).toContain('("survivor", "survived")');
+			},
+			// test-policy: allow explicit-test-timeout -- starts real sandboxed Julia kernels and kills one
+			600_000,
+		);
+	});
 });

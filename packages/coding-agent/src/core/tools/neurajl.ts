@@ -4,8 +4,10 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { type Static, Type } from "typebox";
 import { getShellEnv, killProcessTree, trackDetachedChildPid, untrackDetachedChildPid } from "../../utils/shell.js";
-import type { SessionBaseToolsFactory } from "../agent-session.js";
+import type { SessionBaseToolsFactory, SessionBaseToolsHost } from "../agent-session.js";
 import type { ToolDefinition } from "../extensions/types.js";
+import type { HostRequestHandlers } from "../kernel/index.js";
+import { capCellSourceCode } from "../kernel/repl-manager.js";
 import { NEURAJL_STATE_CUSTOM_TYPE } from "../messages.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
@@ -172,6 +174,7 @@ async function startKernel(
 	cwd: string,
 	options: NeurajlToolOptions | undefined,
 	stateDir: string | undefined,
+	hostHandlers: (() => HostRequestHandlers) | undefined,
 ): Promise<NeurajlKernel> {
 	const cliPath = requiredSetting(options?.sessionCliPath ?? process.env.NEURAJL_SESSION_CLI, "session_cli.py path");
 	const projectDir = requiredSetting(
@@ -213,6 +216,37 @@ async function startKernel(
 		rejectHello = reject;
 	});
 	let helloSeen = false;
+	// Source of the call in flight, or the last one: the tag the host puts on
+	// what a request creates, as the IPython kernel's requests carry.
+	let currentCode: string | undefined;
+	let handlers: HostRequestHandlers | undefined;
+
+	// A request the kernel makes while a call runs (or from a background task
+	// after it returned): answered by the same handlers the IPython kernel uses.
+	const answerHostRequest = (id: string, data: unknown) => {
+		void (async () => {
+			let reply: Record<string, unknown>;
+			try {
+				if (typeof data !== "object" || data === null || Array.isArray(data)) {
+					throw new Error("host request payload must be an object");
+				}
+				const payload = data as Record<string, unknown>;
+				if (typeof payload.type !== "string" || payload.type.length === 0) {
+					throw new Error("host request payload must have a string type");
+				}
+				handlers ??= hostHandlers?.();
+				const handler = handlers?.[payload.type];
+				if (!handler) throw new Error(`host request type "${payload.type}" is not available in this session`);
+				reply = {
+					status: "ok",
+					result: await handler({ ...payload, cellSourceCode: capCellSourceCode(currentCode) }),
+				};
+			} catch (error) {
+				reply = { status: "error", error: error instanceof Error ? error.message : String(error) };
+			}
+			if (deadReason === undefined) child.stdin?.write(`${JSON.stringify({ host_reply: id, reply })}\n`);
+		})();
+	};
 
 	const markDead = (reason: string) => {
 		if (deadReason === undefined) deadReason = reason;
@@ -253,6 +287,10 @@ async function startKernel(
 					rejectHello(new Error(reason));
 					markDead(reason);
 				}
+				continue;
+			}
+			if (message.event === "host_request") {
+				if (typeof message.id === "string") answerHostRequest(message.id, message.data);
 				continue;
 			}
 			const requestId =
@@ -304,6 +342,7 @@ async function startKernel(
 			if (deadReason !== undefined) return Promise.reject(new Error(deadReason));
 			if (signal?.aborted) return Promise.reject(new Error("neurajl: aborted"));
 			const requestId = String(++nextRequestId);
+			currentCode = code;
 			const request: Record<string, unknown> = { request_id: requestId, code };
 			if (ephemeral) request.ephemeral = true;
 			if (payload !== undefined) request.payload = payload;
@@ -379,6 +418,25 @@ function projectPackages(projectDir: string | undefined): string[] {
 	return [...deps.matchAll(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/gm)].map((m) => m[1]).filter((name) => name !== "Neura");
 }
 
+/**
+ * The host request types behind Neura.rlm. A session gets them only when its
+ * ceiling names them: `ceiling: { host_request: { allowed_types: NEURAJL_RLM_REQUEST_TYPES } }`.
+ */
+export const NEURAJL_RLM_REQUEST_TYPES = [
+	"rlm.run",
+	"rlm.create_session",
+	"rlm.find_models",
+	"rlm.list_subagents",
+	"rlm.collect",
+	"rlm.progress.note",
+	"rlm.delete_subagent",
+] as const;
+
+function allowsRlm(options: NeurajlToolOptions | undefined): boolean {
+	const cap = options?.ceiling?.host_request as { allowed_types?: unknown } | undefined;
+	return Array.isArray(cap?.allowed_types) && cap.allowed_types.includes("rlm.run");
+}
+
 function neurajlDescription(options: NeurajlToolOptions | undefined): string {
 	const timeout = options?.turnTimeout ?? 60;
 	const packages = projectPackages(options?.projectDir ?? process.env.NEURAJL_PROJECT_DIR);
@@ -391,6 +449,11 @@ function neurajlDescription(options: NeurajlToolOptions | undefined): string {
 			: "To write a file's text, put the text in payload and call write(path, PAYLOAD): the payload is not parsed as Julia, so it needs no escaping.",
 		"A package loaded from the workspace is reloaded when its source files change, so code and tests run in the kernel see your edits.",
 		`Each call may run for ${timeout}s. Waiting work (sleep, run, reading a process or file) is then interrupted and the kernel keeps every binding; compute that never yields cannot be interrupted, so the kernel stops and the next call starts a fresh one and says so. Start longer work (a build, a test suite) in the background, job = @async sh"cargo build 2>&1", and collect it in a later call with fetch(job); a background failure is reported at the next call.`,
+		...(allowsRlm(options)
+			? [
+					'Sub-agents from code: h = Neura.rlm.spawn("task"; name = "worker") starts one and returns at once; Neura.rlm.collect(h; timeout_ms = 30_000) returns its result when it settles (timeout_ms = 0 gives a snapshot). Spawn several in a loop and collect them together; a child that outlasts a call is collected in a later call. Neura.rlm.list_subagents() lists them.',
+				]
+			: []),
 		`Loadable packages: ${loadable}.${options?.network ? "" : " There is no network access, so Pkg.add cannot install more."} kernelinfo() describes the kernel; varinfo() lists your bindings.`,
 	].join(" ");
 }
@@ -401,7 +464,7 @@ function neurajlDescription(options: NeurajlToolOptions | undefined): string {
  * that its startup overlaps the model's first request.
  */
 export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlToolOptions): SessionBaseToolsFactory {
-	return (sessionId: string) => {
+	return (sessionId: string, host?: SessionBaseToolsHost) => {
 		const stateRoot = options?.stateRoot ?? join(tmpdir(), "neurajl-state");
 		const stateDir = stateRoot === false ? undefined : join(stateRoot, sessionId.replace(/[^A-Za-z0-9._-]/g, "_"));
 		let kernelPromise: Promise<NeurajlKernel> | undefined;
@@ -445,7 +508,7 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 				if (current) await current.dispose();
 			}
 			const restartedFrom = lastEpoch;
-			kernelPromise = startKernel(cwd, options, stateDir);
+			kernelPromise = startKernel(cwd, options, stateDir, host?.hostHandlers);
 			const kernel = await kernelPromise;
 			lastEpoch = kernel.epoch;
 			return { kernel, restartedFrom };

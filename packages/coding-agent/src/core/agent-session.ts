@@ -509,7 +509,19 @@ const MAX_OUTPUT_LIMIT_CONTINUATIONS = 3;
 const OUTPUT_LIMIT_CONTINUATION_TEXT =
 	"[output limit] Your previous reply was cut off at the output token limit before you finished. Continue the task from where you stopped.";
 
-export type SessionBaseToolsFactory = (sessionId: string) => {
+/**
+ * What a base-tools factory may use from its session: the host handlers a
+ * kernel's mid-call requests go to (RLM children, model info, goals), the
+ * same set the IPython kernel is given.
+ */
+export interface SessionBaseToolsHost {
+	hostHandlers: () => HostRequestHandlers;
+}
+
+export type SessionBaseToolsFactory = (
+	sessionId: string,
+	host?: SessionBaseToolsHost,
+) => {
 	tools: Record<string, AgentTool>;
 	/** Release resources owned by this specific agent session. */
 	dispose?: () => void | Promise<void>;
@@ -1839,7 +1851,10 @@ export class AgentSession {
 		}
 		this._baseToolsFactory = config.baseToolsFactory;
 		this._modelRequestBudget = config.modelRequestBudget;
-		const baseToolsScope = config.baseToolsFactory?.(this.sessionId);
+		// Lazy: the handlers close over this session, which is still being constructed here.
+		const baseToolsScope = config.baseToolsFactory?.(this.sessionId, {
+			hostHandlers: () => this._createKernelHostHandlers(),
+		});
 		this._baseToolsOverride = baseToolsScope?.tools ?? config.baseToolsOverride;
 		if (baseToolsScope?.dispose) this.registerDisposeCallback(baseToolsScope.dispose);
 		this._baseToolsStateAfterCompaction = baseToolsScope?.stateAfterCompaction;
