@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-NeuraJL session bridge -- a thin, persistent stdio wrapper around
+Palette session bridge -- a thin, persistent stdio wrapper around
 `NeuraSession`, for a host process in a DIFFERENT language (Node, via
 Prime-Agent's `baseToolsFactory`) to spawn ONCE per agent session and drive
 for that session's whole lifetime, instead of shelling out fresh per call.
 
-This is the missing piece between what NeuraJL already proves
+This is the missing piece between what Palette already proves
 (security/session.py's NeuraSession: real state persistence, real epoch
 handshake, real authority fence, all adversarially tested) and an actual
 chassis integration: Prime-Agent's tool boundary is TypeScript calling a

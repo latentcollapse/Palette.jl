@@ -1,4 +1,4 @@
-/** One scored D (NeuraJL) trial. The task fixture is process.cwd(). */
+/** One scored D (Palette) trial. The task fixture is process.cwd(). */
 import { execFileSync } from "node:child_process";
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { type AssistantMessage, type Model, modelsAreEqual } from "@earendil-works/pi-ai";
@@ -22,14 +22,14 @@ const promptFile = process.env.ABC_PROMPT_FILE;
 const traceFile = process.env.ABC_TRACE_FILE;
 const agentDir = process.env.ABC_AGENT_DIR;
 const rlmSessionDir = process.env.ABC_RLM_SESSION_DIR;
-const sessionCliPath = process.env.NEURAJL_SESSION_CLI;
-const projectDir = process.env.NEURAJL_PROJECT_DIR;
-const repoDir = process.env.NEURAJL_REPO_DIR;
-const maxOutputChars = Number(process.env.ABC_NEURAJL_MAX_OUTPUT_CHARS);
-if (!promptFile || !traceFile || !agentDir || !rlmSessionDir || !(sessionCliPath || process.env.NEURAJL_HOST_BIN) || !projectDir || !repoDir) {
+const sessionCliPath = process.env.PALETTE_SESSION_CLI;
+const projectDir = process.env.PALETTE_PROJECT_DIR;
+const repoDir = process.env.PALETTE_REPO_DIR;
+const maxOutputChars = Number(process.env.ABC_PALETTE_MAX_OUTPUT_CHARS);
+if (!promptFile || !traceFile || !agentDir || !rlmSessionDir || !(sessionCliPath || process.env.PALETTE_HOST_BIN) || !projectDir || !repoDir) {
 	throw new Error("Missing A/B/C trial configuration");
 }
-if (!Number.isSafeInteger(maxOutputChars) || maxOutputChars <= 0) throw new Error("Invalid NeuraJL output cap");
+if (!Number.isSafeInteger(maxOutputChars) || maxOutputChars <= 0) throw new Error("Invalid Palette output cap");
 const configuredBaseUrl = process.env.ABC_BASE_URL;
 const modelId = process.env.ABC_MODEL ?? "nvidia/nemotron-3-ultra-550b-a55b:free";
 const requestedProvider = process.env.ABC_MODEL_PROVIDER;
@@ -136,8 +136,8 @@ const stallMs = Number(process.env.ABC_STALL_MS ?? 0);
 const maxRecoveries = Number(process.env.ABC_MAX_RECOVERIES ?? 0);
 const deadline = process.env.ABC_DEADLINE_MS ? Date.now() + Number(process.env.ABC_DEADLINE_MS) : Number.POSITIVE_INFINITY;
 const cwd = process.cwd();
-// NEURAJL_RLM_ONLY=1 leaves out the rlm tool: sub-agents only through Julia's Neura.rlm.
-const operatorToolNames = process.env.NEURAJL_RLM_ONLY === "1" ? ["neurajl"] : ["neurajl", "rlm"];
+// PALETTE_RLM_ONLY=1 leaves out the rlm tool: sub-agents only through Julia's Neura.rlm.
+const operatorToolNames = process.env.PALETTE_RLM_ONLY === "1" ? ["palette"] : ["palette", "rlm"];
 const retryPolicy = {
 	enabled: true,
 	maxRetries: Number(process.env.ABC_MAX_RETRIES ?? 3),
@@ -217,9 +217,9 @@ const { session } = await createAgentSession({
 		repoDir,
 		turnTimeout: toolTimeoutMs / 1000,
 		maxOutputChars,
-		...(process.env.NEURAJL_STATE_ROOT ? { stateRoot: process.env.NEURAJL_STATE_ROOT } : {}),
-		// NEURAJL_RLM=1: the kernel may start and collect sub-agents itself (Neura.rlm).
-		...(process.env.NEURAJL_RLM === "1"
+		...(process.env.PALETTE_STATE_ROOT ? { stateRoot: process.env.PALETTE_STATE_ROOT } : {}),
+		// PALETTE_RLM=1: the kernel may start and collect sub-agents itself (Neura.rlm).
+		...(process.env.PALETTE_RLM === "1"
 			? { ceiling: { host_request: { allowed_types: [...NEURAJL_RLM_REQUEST_TYPES] } } }
 			: {}),
 	}),
@@ -241,8 +241,8 @@ const persistTrace = () => {
 		temporaryTraceFile,
 		JSON.stringify(
 			{
-				stack: "nira-neurajl",
-				operatorTools: ["neurajl"],
+				stack: "nira-palette",
+				operatorTools: ["palette"],
 				sharedTools: ["rlm"],
 				toolInventory: activeTools,
 				model: model.provider + "/" + model.id,
@@ -358,12 +358,12 @@ async function runPrompt(text: string) {
 }
 try {
 	if (JSON.stringify(activeTools) !== JSON.stringify([...operatorToolNames].sort())) {
-		throw new Error(`NeuraJL tool inventory mismatch: ${activeTools.join(", ")}`);
+		throw new Error(`Palette tool inventory mismatch: ${activeTools.join(", ")}`);
 	}
-	if (session.getToolDefinition("ipython")) throw new Error("IPython leaked into NeuraJL condition");
-	if (!session.getToolDefinition("neurajl")) throw new Error("NeuraJL operator surface is missing");
+	if (session.getToolDefinition("ipython")) throw new Error("IPython leaked into Palette condition");
+	if (!session.getToolDefinition("palette")) throw new Error("Palette operator surface is missing");
 	if (process.env.ABC_PREFLIGHT_ONLY === "1") {
-		console.log(JSON.stringify({ preflight: true, stack: "nira-neurajl", activeTools }));
+		console.log(JSON.stringify({ preflight: true, stack: "nira-palette", activeTools }));
 	} else {
 		await runPrompt(readFileSync(promptFile, "utf8"));
 		// Endurance runs: further work arrives in the same session once the previous batch is done.

@@ -1,5 +1,5 @@
 """
-Neura — Experiment 001: NeuraJL operator surface, built on IJulia
+Neura — Experiment 001: Palette operator surface, built on IJulia
 
 This module implements a persistent Julia/IJulia kernel operator surface that:
 - Maintains state across executions (Phase 1)
@@ -686,11 +686,11 @@ function kernelinfo()
         String[]
     end
     loaded = sort!([String(nameof(m)) for m in values(Base.loaded_modules) if String(nameof(m)) in deps])
-    timeout = get(ENV, "NEURAJL_TURN_TIMEOUT", "")
+    timeout = get(ENV, "PALETTE_TURN_TIMEOUT", "")
     offline = get(ENV, "JULIA_PKG_OFFLINE", "") == "true"
     nbind = length(varinfo(mod).rows)
     println("""
-        NeuraJL kernel: Julia $(VERSION), $(Threads.nthreads()) thread(s), $(nbind) binding(s), $(Base.format_bytes(Base.gc_live_bytes())) live
+        Palette kernel: Julia $(VERSION), $(Threads.nthreads()) thread(s), $(nbind) binding(s), $(Base.format_bytes(Base.gc_live_bytes())) live
         workspace  $(pwd()) (read/write; files outlive the kernel)
         persists   bindings, functions, types and loaded packages, until the kernel stops
         time limit $(isempty(timeout) ? "set by the host" : timeout * "s") per call. Waiting work (sleep, run, read, I/O) is interrupted and the kernel keeps its state;
@@ -1105,8 +1105,8 @@ end
     record_tool_capsule(tool_id, code, result, duration_ms)
 
 Appends one mechanical, non-authoritative provenance record for a retired
-ephemeral tool to `provenance.jsonl` under `ENV["NEURAJL_PROVENANCE_DIR"]`,
-or `.neurajl/` relative to `pwd()` when that is unset. A persistent session
+ephemeral tool to `provenance.jsonl` under `ENV["PALETTE_PROVENANCE_DIR"]`,
+or `.palette/` relative to `pwd()` when that is unset. A persistent session
 sets it to the sandbox's private home, because there `pwd()` is the agent's
 task workspace and the log would show up among the task's own files.
 
@@ -1121,10 +1121,10 @@ authorization: nothing in this codebase reads this file to decide whether
 to permit anything, and it is never treated as such.
 """
 function record_tool_capsule(tool_id::String, code::String, result::OperationResult, duration_ms::Float64)
-    dir = get(ENV, "NEURAJL_PROVENANCE_DIR", joinpath(pwd(), ".neurajl"))
+    dir = get(ENV, "PALETTE_PROVENANCE_DIR", joinpath(pwd(), ".palette"))
     mkpath(dir)
     capsule = Dict{String,Any}(
-        "schema" => "neurajl.tool_capsule.v1",
+        "schema" => "palette.tool_capsule.v1",
         "tool_id" => tool_id,
         "source_hash" => bytes2hex(sha256(code)),
         "source" => code,
@@ -1494,7 +1494,7 @@ docs/CAPABILITY_MODEL.md and docs/EXPERIMENT_002_AUTHORITY.md.
 This is the ONLY code path in this package that can reach outside the
 sandbox's own bounded filesystem/network envelope. It does not perform any
 external effect itself: it connects to the host capability broker over the
-Unix socket named by the `NEURAJL_BROKER_SOCKET` environment variable (set
+Unix socket named by the `PALETTE_BROKER_SOCKET` environment variable (set
 by `security/launch_worker.py`, reachable only because that one socket path
 was explicitly bind-mounted into this sandbox), sends one JSON request, and
 returns the broker's JSON response. The broker -- a separate process
@@ -1510,12 +1510,12 @@ and try the effect directly (raw `write`, raw `Sockets.connect`, `ccall`,
 and what stops that is the OS-level sandbox boundary this process runs
 inside, not this function's cooperation.
 
-Throws if `NEURAJL_BROKER_SOCKET` is unset (no broker configured for this
+Throws if `PALETTE_BROKER_SOCKET` is unset (no broker configured for this
 session -- e.g. running unsandboxed) or if the connection fails.
 """
 function request_capability(category::String, params::Dict=Dict{String,Any}(); timeout_s::Real=320.0)
-    sock_path = get(ENV, "NEURAJL_BROKER_SOCKET", "")
-    isempty(sock_path) && error("NEURAJL_BROKER_SOCKET is not set -- no capability broker is available in this session")
+    sock_path = get(ENV, "PALETTE_BROKER_SOCKET", "")
+    isempty(sock_path) && error("PALETTE_BROKER_SOCKET is not set -- no capability broker is available in this session")
     req = Dict("id" => string(uuid4()), "category" => category, "params" => params)
     conn = connect(sock_path)
     # `timeout_s` was accepted but never referenced anywhere in this

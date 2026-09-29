@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NeuraJL contained worker launcher -- the first trust domain.
+Palette contained worker launcher -- the first trust domain.
 
 Builds a bubblewrap sandbox around a real, unrestricted `julia` process:
 full language semantics inside (eval, ccall, run, Base, Pkg, metaprogramming
@@ -94,10 +94,10 @@ def resolve_real_julia_binary() -> str:
     # An explicit binary wins. Asked under a fresh HOME, the juliaup shim
     # installs and returns its current default release: an endurance run got
     # Julia 1.13.1 while the depot was built for 1.12.6.
-    pinned = os.environ.get("NEURAJL_JULIA_BIN")
+    pinned = os.environ.get("PALETTE_JULIA_BIN")
     if pinned:
         if not Path(pinned).is_file():
-            raise RuntimeError(f"NEURAJL_JULIA_BIN is not a file: {pinned}")
+            raise RuntimeError(f"PALETTE_JULIA_BIN is not a file: {pinned}")
         return pinned
     out = subprocess.run(
         ["julia", "-e", "print(Sys.BINDIR)"], capture_output=True, text=True, check=True, stdin=subprocess.DEVNULL,
@@ -109,7 +109,7 @@ def resolve_real_julia_binary() -> str:
 SANDBOX_USER = "neura"
 # The sandbox sets these itself; a task environment cannot move them.
 SANDBOX_OWNED_ENV = {"PATH", "HOME", "USER", "LOGNAME", "LANG", "JULIA_DEPOT_PATH", "JULIA_PROJECT", "JULIA_LOAD_PATH",
-                     "JULIA_PKG_OFFLINE", "NEURAJL_REPO_DIR", "NEURAJL_STATE_DIR", "NEURAJL_BROKER_SOCKET"}
+                     "JULIA_PKG_OFFLINE", "PALETTE_REPO_DIR", "PALETTE_STATE_DIR", "PALETTE_BROKER_SOCKET"}
 
 
 def read_task_env(path: str | None) -> dict[str, str]:
@@ -131,8 +131,8 @@ def read_task_env(path: str | None) -> dict[str, str]:
 
 def identity_files() -> Path:
     """passwd and group files naming the sandbox's uid 1000, written once per host."""
-    etc = Path(tempfile.gettempdir()) / f"neurajl-etc-{os.getuid()}"
-    passwd = f"{SANDBOX_USER}:x:1000:1000:NeuraJL sandbox:/run/neurajl/home:/bin/bash\n"
+    etc = Path(tempfile.gettempdir()) / f"palette-etc-{os.getuid()}"
+    passwd = f"{SANDBOX_USER}:x:1000:1000:Palette sandbox:/run/palette/home:/bin/bash\n"
     group = f"{SANDBOX_USER}:x:1000:\n"
     if not (etc / "passwd").is_file() or (etc / "passwd").read_text() != passwd:
         etc.mkdir(mode=0o755, exist_ok=True)
@@ -185,9 +185,9 @@ def build_bwrap_argv(
         "--proc", "/proc",
         "--dev", "/dev",
         "--tmpfs", "/tmp",
-        "--dir", "/run/neurajl",
-        "--tmpfs", "/run/neurajl",
-        "--dir", "/run/neurajl/home",
+        "--dir", "/run/palette",
+        "--tmpfs", "/run/palette",
+        "--dir", "/run/palette/home",
         "--clearenv",
         "--die-with-parent",
         "--new-session",
@@ -232,16 +232,16 @@ def build_bwrap_argv(
     # workspace so it never shows up among the task's files. Ephemeral
     # children are never given it.
     if state_dir:
-        argv += ["--bind", state_dir, state_dir, "--setenv", "NEURAJL_STATE_DIR", state_dir]
+        argv += ["--bind", state_dir, state_dir, "--setenv", "PALETTE_STATE_DIR", state_dir]
     argv += [
-        "--setenv", "HOME", "/run/neurajl/home",
+        "--setenv", "HOME", "/run/palette/home",
         "--setenv", "JULIA_DEPOT_PATH", julia_depot,
         "--setenv", "JULIA_PROJECT", project_dir,
         # The session project stays loadable after turn code activates
         # another one; a model's routine `Pkg.activate(".")` used to hide
         # every package it had. `@v#.#` is where package_management installs.
         "--setenv", "JULIA_LOAD_PATH", f"@:{project_dir}:@v#.#:@stdlib",
-        "--setenv", "NEURAJL_REPO_DIR", repo_dir,
+        "--setenv", "PALETTE_REPO_DIR", repo_dir,
         "--setenv", "PATH", f"{task_tools}/bin:{julia_toolchain_dir}/bin:/usr/bin:/bin" if task_tools
         else f"{julia_toolchain_dir}/bin:/usr/bin:/bin",
         "--setenv", "LANG", "en_US.UTF-8",
@@ -252,7 +252,7 @@ def build_bwrap_argv(
     for key, value in task_env.items():
         argv += ["--setenv", key, value]
     if broker_socket_dir:
-        argv += ["--setenv", "NEURAJL_BROKER_SOCKET", str(Path(broker_socket_dir) / "broker.sock")]
+        argv += ["--setenv", "PALETTE_BROKER_SOCKET", str(Path(broker_socket_dir) / "broker.sock")]
     if not network_enabled:
         # Without it Pkg.add spends ~18s per package on DNS retries before
         # failing, and a few adds in one turn outlast the turn limit.
@@ -279,7 +279,7 @@ def create_session_depot(real_depot: str | None = None, clone_root: str | None =
     share one.
     """
     depot = real_depot or default_depot()
-    root = clone_root or str(Path(depot).parent / ".neurajl-depot-clones")
+    root = clone_root or str(Path(depot).parent / ".palette-depot-clones")
     Path(root).mkdir(parents=True, exist_ok=True)
     return _clone_depot(depot, root)
 

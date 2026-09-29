@@ -16,12 +16,12 @@ function with_fake_broker(f, reply)
         write(conn, JSON.json(reply(req["params"]["type"], req["params"]["payload"])) * "\n")
         close(conn)
     end
-    old = get(ENV, "NEURAJL_BROKER_SOCKET", nothing)
-    ENV["NEURAJL_BROKER_SOCKET"] = path
+    old = get(ENV, "PALETTE_BROKER_SOCKET", nothing)
+    ENV["PALETTE_BROKER_SOCKET"] = path
     try
         f(seen)
     finally
-        old === nothing ? delete!(ENV, "NEURAJL_BROKER_SOCKET") : (ENV["NEURAJL_BROKER_SOCKET"] = old)
+        old === nothing ? delete!(ENV, "PALETTE_BROKER_SOCKET") : (ENV["PALETTE_BROKER_SOCKET"] = old)
         close(server)
     end
 end
@@ -35,7 +35,7 @@ ok(result) = Dict("approved" => true, "result" => Dict("status" => "ok", "result
                                     "settled" => true, "answer_preview" => "42", "session_name" => "w")])) :
                                 t == "rlm.list_subagents" ? ok(Dict("subagents" => [Dict("rlm_child_id" => "c1",
                                     "session_name" => "w", "session_dir" => "/s/c1", "status" => "running",
-                                    "activity" => Dict("kind" => "executing", "tool_name" => "neurajl"))])) :
+                                    "activity" => Dict("kind" => "executing", "tool_name" => "palette"))])) :
                                 t == "rlm.find_models" ? ok(Dict("models" => [Dict("provider" => "openai", "id" => "luna",
                                     "name" => "Luna", "selector" => "openai/luna")])) :
                                 t == "rlm.progress.note" ? ok(Dict("accepted" => false, "retry_after_ms" => 900)) :
@@ -393,12 +393,12 @@ end
 
     # every retirement leaves a mechanical, content-addressed provenance
     # record -- cold by default (a file on disk), never preloaded
-    prov_path = joinpath(pwd(), ".neurajl", "provenance.jsonl")
+    prov_path = joinpath(pwd(), ".palette", "provenance.jsonl")
     @test isfile(prov_path)
     lines = readlines(prov_path)
     @test length(lines) >= 5
     last_record = JSON.parse(lines[end])
-    @test last_record["schema"] == "neurajl.tool_capsule.v1"
+    @test last_record["schema"] == "palette.tool_capsule.v1"
     @test haskey(last_record, "source_hash")
     @test length(last_record["source_hash"]) == 64  # sha256 hex
     @test last_record["disposition"] == "RETIRED"  # this one succeeded
@@ -411,7 +411,7 @@ end
     @test failed_record["success"] == false
     @test failed_record["disposition"] == "FAILED"
 
-    rm(joinpath(pwd(), ".neurajl"); recursive=true, force=true)
+    rm(joinpath(pwd(), ".palette"); recursive=true, force=true)
 end
 
 @testset "Session module helpers" begin

@@ -38,7 +38,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
-# The broker and worker launcher under test: the Rust host when NEURAJL_HOST_BIN is set.
+# The broker and worker launcher under test: the Rust host when PALETTE_HOST_BIN is set.
 from host_adapter import B, create_session_depot, run_worker  # noqa: E402
 
 REPO_DIR = str(Path(__file__).resolve().parent.parent)
@@ -47,7 +47,7 @@ REPO_DIR = str(Path(__file__).resolve().parent.parent)
 # `IJulia` available. Point this at your own dev environment via env var;
 # defaults to the path this session actually used.
 PROJECT_DIR = os.environ.get(
-    "NEURAJL_TEST_PROJECT_DIR",
+    "PALETTE_TEST_PROJECT_DIR",
     "/tmp/claude-1000/-mnt-d-Code-Projects/c3c092a4-acab-472c-b26c-e9672fac8468/scratchpad/ijulia-harness-env",
 )
 
@@ -80,7 +80,7 @@ def _skip_if_no_bwrap():
 def _skip_if_no_project():
     if not Path(PROJECT_DIR).exists():
         raise unittest.SkipTest(
-            f"no Julia dev project at {PROJECT_DIR} -- set NEURAJL_TEST_PROJECT_DIR "
+            f"no Julia dev project at {PROJECT_DIR} -- set PALETTE_TEST_PROJECT_DIR "
             "to a project with Neura (dev-installed from this repo) and IJulia"
         )
 
@@ -100,7 +100,7 @@ class SandboxTestCase(unittest.TestCase):
     def setUp(self):
         _skip_if_no_bwrap()
         _skip_if_no_project()
-        self.tmp = tempfile.mkdtemp(prefix="neurajl-test-")
+        self.tmp = tempfile.mkdtemp(prefix="palette-test-")
         self.workspace = os.path.join(self.tmp, "workspace")
         os.makedirs(self.workspace, exist_ok=True)
 
@@ -140,7 +140,7 @@ class TestSandboxContainment(SandboxTestCase):
         self.assertIn("No such file", r.stdout)
 
     def test_ephemeral_tmp_write_does_not_reach_host(self):
-        marker = f"neurajl-test-{os.getpid()}-{time.time_ns()}"
+        marker = f"palette-test-{os.getpid()}-{time.time_ns()}"
         host_path = f"/tmp/{marker}.txt"
         self.assertFalse(os.path.exists(host_path))
         r = self.run_script(f'write("{host_path}", "pwned")')

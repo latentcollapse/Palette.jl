@@ -282,13 +282,13 @@ impl Broker {
         let Some(script) = p.get("script").and_then(Value::as_str) else {
             return Err(Denied("spawn_child_worker requires a string 'script'".into()));
         };
-        let ws = util::mkdtemp("neurajl-child-ws-").map_err(|e| Internal(e.to_string()))?;
+        let ws = util::mkdtemp("palette-child-ws-").map_err(|e| Internal(e.to_string()))?;
         let child_depot = if requested.get("package_management").is_some() {
             Some(sandbox::create_session_depot(None).map_err(Internal)?)
         } else {
             None
         };
-        let sock_dir = util::mkdtemp("neurajl-child-broker-").map_err(|e| Internal(e.to_string()))?;
+        let sock_dir = util::mkdtemp("palette-child-broker-").map_err(|e| Internal(e.to_string()))?;
         let result = (|| {
             let child = Arc::new(Broker::new(BrokerConfig {
                 ceiling: requested.clone(),

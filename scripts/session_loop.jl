@@ -1,6 +1,6 @@
 #!/usr/bin/env julia
 #=
-NeuraJL persistent session loop -- runs inside the sandboxed worker, kept
+Palette persistent session loop -- runs inside the sandboxed worker, kept
 alive across many turns instead of one `-e script` per launch.
 
 Protocol: newline-delimited JSON on stdin/stdout, one request per line, one
@@ -39,7 +39,7 @@ testing, not sufficient as an authority boundary: `Core.eval(Base,
 RUNTIME -- extends a foreign module's method table with zero syntactic
 trace in the submitted source for any parse-time check to see. No static
 checker can fully police a language with reflective `eval`, and
-crippling `eval` itself would violate NeuraJL's own "unbounded power
+crippling `eval` itself would violate Palette's own "unbounded power
 inside the sandbox" thesis. The fix is not a smarter checker; it's
 putting the boundary underneath the language instead of inside it:
 `EPHEMERAL` spawns a real, disposable, OS-sandboxed CHILD process via the
@@ -99,12 +99,12 @@ function request_waiting()
     return ccall(:poll, Cint, (Ptr{Cvoid}, Culong, Cint), pfd, 1, 0) > 0 && (pfd[][3] & 0x001) != 0
 end
 redirect_stdin(open("/dev/null"))
-const SINK = open(joinpath(tempdir(), "neurajl-background-output.log"), "a")
+const SINK = open(joinpath(tempdir(), "palette-background-output.log"), "a")
 redirect_stdout(SINK)
 redirect_stderr(SINK)
 # Read back at the start of each call (Neura.report_background).
 Neura.SINK[] = SINK
-Neura.SINK_PATH[] = joinpath(tempdir(), "neurajl-background-output.log")
+Neura.SINK_PATH[] = joinpath(tempdir(), "palette-background-output.log")
 Neura.SINK_READ[] = filesize(Neura.SINK_PATH[])
 
 # `display(x)` goes through the display stack, whose TextDisplay was built at
@@ -219,7 +219,7 @@ Neura.workspace_package_first!(pwd())
 # The host's state directory, where each completed call's state is saved for
 # a kernel that replaces this one. A revived kernel takes the old eval
 # module's name: values of kernel-defined types deserialize only into it.
-Neura.STATE_DIR[] = get(ENV, "NEURAJL_STATE_DIR", "")
+Neura.STATE_DIR[] = get(ENV, "PALETTE_STATE_DIR", "")
 Neura.INITIAL_ENV[] = Dict{String,String}(ENV)
 let name = Neura.revival_module_name()
     name === nothing || (Neura.GLOBAL_STATE[] = Neura.KernelState(Module(Symbol(name))))

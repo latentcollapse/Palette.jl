@@ -35,7 +35,7 @@ pub struct SessionOptions {
     pub ceiling: Value,
     pub network_enabled: bool,
     pub receipts_dir: Option<String>,
-    /// This session's own scratch root, created here and deleted on close. Default ~/.neurajl-sessions/<id>.
+    /// This session's own scratch root, created here and deleted on close. Default ~/.palette-sessions/<id>.
     pub scratch_root: Option<String>,
     pub turn_timeout: f64,
     pub task_workspace_dir: Option<String>,
@@ -95,7 +95,7 @@ fn dead(msg: impl Into<String>) -> SessionError {
 
 impl NeuraSession {
     pub fn start(o: SessionOptions, stop: Arc<AtomicBool>) -> Result<NeuraSession, SessionError> {
-        let session_id = format!("neurajl-{}", util::hex(16));
+        let session_id = format!("palette-{}", util::hex(16));
         let mut cleanup = Cleanup::default();
         match Self::start_inner(&o, &session_id, &mut cleanup, stop) {
             Ok(s) => Ok(s),
@@ -111,7 +111,7 @@ impl NeuraSession {
     fn start_inner(o: &SessionOptions, session_id: &str, cleanup: &mut Cleanup, stop: Arc<AtomicBool>)
         -> Result<NeuraSession, SessionError> {
         let err = |e: String| dead(e);
-        let tmp_root = o.scratch_root.as_deref().map(PathBuf::from).unwrap_or_else(|| util::home().join(".neurajl-sessions").join(session_id));
+        let tmp_root = o.scratch_root.as_deref().map(PathBuf::from).unwrap_or_else(|| util::home().join(".palette-sessions").join(session_id));
         fs::create_dir_all(&tmp_root).map_err(|e| err(e.to_string()))?;
         cleanup.tmp_root = Some(tmp_root.clone());
         let workspace = match &o.task_workspace_dir {
@@ -177,9 +177,9 @@ impl NeuraSession {
             state_dir: o.state_dir.as_deref(),
         }).map_err(err)?;
         let mut setenv = |k: &str, v: String| argv.extend(["--setenv".to_string(), k.to_string(), v]);
-        setenv("NEURAJL_PROVENANCE_DIR", "/run/neurajl/home/.neurajl".into());
-        setenv("NEURAJL_TURN_TIMEOUT", util::fmt_g(o.turn_timeout));
-        for name in ["NEURAJL_STATE_MAX_BINDING_BYTES", "NEURAJL_STATE_MAX_BYTES"] {
+        setenv("PALETTE_PROVENANCE_DIR", "/run/palette/home/.palette".into());
+        setenv("PALETTE_TURN_TIMEOUT", util::fmt_g(o.turn_timeout));
+        for name in ["PALETTE_STATE_MAX_BINDING_BYTES", "PALETTE_STATE_MAX_BYTES"] {
             if let Ok(v) = std::env::var(name) {
                 setenv(name, v);
             }

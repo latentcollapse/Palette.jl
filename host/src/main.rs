@@ -1,11 +1,11 @@
-//! neurajl-host: the host side of NeuraJL -- the sandbox launcher, the
+//! palette-host: the host side of Palette -- the sandbox launcher, the
 //! persistent session bridge and the capability broker -- as one binary.
 //!
-//!   neurajl-host session    --project-dir P [--ceiling C] [--workspace-dir W] [--state-dir S] ...
-//!   neurajl-host run-worker --workspace W --project P --repo R --script CODE [--broker-socket-dir D] [--timeout S]
-//!   neurajl-host broker     --socket PATH --ceiling C --receipts FILE [--session-id ID] [--project P --repo R --depot D]
-//!   neurajl-host subset     REQUESTED_JSON PARENT_JSON
-//!   neurajl-host prewarm    --project-dir P [--repo-dir R]
+//!   palette-host session    --project-dir P [--ceiling C] [--workspace-dir W] [--state-dir S] ...
+//!   palette-host run-worker --workspace W --project P --repo R --script CODE [--broker-socket-dir D] [--timeout S]
+//!   palette-host broker     --socket PATH --ceiling C --receipts FILE [--session-id ID] [--project P --repo R --depot D]
+//!   palette-host subset     REQUESTED_JSON PARENT_JSON
+//!   palette-host prewarm    --project-dir P [--repo-dir R]
 
 mod broker;
 mod cli;
@@ -112,7 +112,7 @@ fn prewarm(argv: &[String]) -> Result<i32, String> {
     let project = std::fs::canonicalize(f.get("project-dir").ok_or("--project-dir is required")?).map_err(|e| e.to_string())?;
     let repo = std::fs::canonicalize(f.get("repo-dir").cloned().unwrap_or_else(cli::default_repo_dir)).map_err(|e| e.to_string())?;
     let julia = sandbox::resolve_julia()?;
-    let workspace = util::mkdtemp("neurajl-prewarm-").map_err(|e| e.to_string())?;
+    let workspace = util::mkdtemp("palette-prewarm-").map_err(|e| e.to_string())?;
     let depot = sandbox::default_depot();
     // No depot clone: the real depot is bound writable at its own path.
     let mut argv = sandbox::build_bwrap_argv(&sandbox::SandboxSpec {
@@ -141,12 +141,12 @@ fn main() {
         Some("broker") => run_broker(rest),
         Some("subset") => subset(rest),
         Some("prewarm") => prewarm(rest),
-        _ => Err("usage: neurajl-host session|run-worker|broker|subset|prewarm ...".into()),
+        _ => Err("usage: palette-host session|run-worker|broker|subset|prewarm ...".into()),
     };
     std::process::exit(match code {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("neurajl-host: {e}");
+            eprintln!("palette-host: {e}");
             2
         }
     });

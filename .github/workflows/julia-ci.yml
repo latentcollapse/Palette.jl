@@ -86,7 +86,7 @@ jobs:
         mkdir -p "$GITHUB_WORKSPACE/jupyter-data"
         JUPYTER_DATA_DIR="$GITHUB_WORKSPACE/jupyter-data" julia --project=ijulia-env -e '
           using IJulia
-          IJulia.installkernel("NeuraJLTest", "--project=$(abspath("ijulia-env"))")
+          IJulia.installkernel("PaletteTest", "--project=$(abspath("ijulia-env"))")
         '
 
     - name: Install jupyter_client
@@ -129,10 +129,10 @@ jobs:
 
     - name: Run the authority-fence suite
       env:
-        NEURAJL_TEST_PROJECT_DIR: ${{ github.workspace }}/security-test-env
+        PALETTE_TEST_PROJECT_DIR: ${{ github.workspace }}/security-test-env
       run: python3 security/test_authority.py -v
 
     - name: Run the persistent-session suite
       env:
-        NEURAJL_TEST_PROJECT_DIR: ${{ github.workspace }}/security-test-env
+        PALETTE_TEST_PROJECT_DIR: ${{ github.workspace }}/security-test-env
       run: python3 security/test_session.py -v

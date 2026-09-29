@@ -41,7 +41,7 @@ from host_adapter import session_cmd  # noqa: E402
 REPO_DIR = str(Path(__file__).resolve().parent.parent)
 CLI = str(Path(__file__).resolve().parent / "session_cli.py")
 PROJECT_DIR = os.environ.get(
-    "NEURAJL_TEST_PROJECT_DIR",
+    "PALETTE_TEST_PROJECT_DIR",
     "/tmp/claude-1000/-mnt-d-Code-Projects/c3c092a4-acab-472c-b26c-e9672fac8468/scratchpad/ijulia-harness-env",
 )
 
@@ -106,7 +106,7 @@ class TestSessionCli(unittest.TestCase):
     def setUp(self):
         _skip_if_no_bwrap()
         _skip_if_no_project()
-        self.task_workspace = tempfile.mkdtemp(prefix="neurajl-cli-task-")
+        self.task_workspace = tempfile.mkdtemp(prefix="palette-cli-task-")
         Path(self.task_workspace, "marker.txt").write_text("from-host")
         self.proc = subprocess.Popen(
             [*session_cmd(), "--project-dir", PROJECT_DIR, "--ceiling", "{}",
@@ -574,7 +574,7 @@ class TestSessionCli(unittest.TestCase):
         time.sleep(2)
         r = self._turn('1')
         self.assertIn("[background output since the last call]", r["output"])
-        r = self._turn('(filesize(joinpath(tempdir(), "neurajl-background-output.log")), '
+        r = self._turn('(filesize(joinpath(tempdir(), "palette-background-output.log")), '
                        'parse(Int, split(read(`du -sb /tmp`, String))[1]))')
         sink, tmp = r["data"]
         self.assertLess(sink, 100_000, r)
@@ -677,7 +677,7 @@ class TestSessionCli(unittest.TestCase):
         """A benchmark runner exposes the task image's tools (interpreter,
         bun, ...) to every contestant as one read-only directory; NP2's worker
         used to drop it, so a task's own runtime was unreachable."""
-        tools = tempfile.mkdtemp(prefix="neurajl-task-tools-")
+        tools = tempfile.mkdtemp(prefix="palette-task-tools-")
         Path(tools, "bin").mkdir()
         tool = Path(tools, "bin", "task-tool")
         tool.write_text("#!/bin/sh\necho task-tool-ran\n")
@@ -708,7 +708,7 @@ class TestSessionCli(unittest.TestCase):
         at the build machine's path without OCAMLLIB, tsc without CONDA_PREFIX),
         and initdb and whoami failed with no user for uid 1000. The other
         contestants get both from the host."""
-        env_file = Path(tempfile.mkdtemp(prefix="neurajl-task-env-"), "task-env")
+        env_file = Path(tempfile.mkdtemp(prefix="palette-task-env-"), "task-env")
         env_file.write_text("# activation\nOCAMLLIB=/opt/ocaml/lib\nGREETING=a b=c\nPATH=/evil\nHOME=/evil\n\n")
         proc = subprocess.Popen(
             [*session_cmd(), "--project-dir", PROJECT_DIR, "--ceiling", "{}",
@@ -725,7 +725,7 @@ class TestSessionCli(unittest.TestCase):
                 proc.stdin.flush()
                 r = json.loads(proc.stdout.readline())
                 self.assertTrue(r["success"], r)
-                self.assertEqual(r["data"], ["/opt/ocaml/lib", "a b=c", "/run/neurajl/home", False, "neura", "neura"],
+                self.assertEqual(r["data"], ["/opt/ocaml/lib", "a b=c", "/run/palette/home", False, "neura", "neura"],
                                  f"ephemeral={ephemeral}")
         finally:
             proc.stdin.close()
@@ -737,7 +737,7 @@ class TestSessionCli(unittest.TestCase):
         """The kernel's environment has OrderedCollections (DataFrames needs
         it). A model working on OrderedCollections appended the workspace to
         LOAD_PATH, and its whole test suite passed against the kernel's copy."""
-        ws = tempfile.mkdtemp(prefix="neurajl-cli-pkg-")
+        ws = tempfile.mkdtemp(prefix="palette-cli-pkg-")
         Path(ws, "src").mkdir()
         Path(ws, "Project.toml").write_text(
             'name = "OrderedCollections"\nuuid = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"\nversion = "2.0.1"\n')

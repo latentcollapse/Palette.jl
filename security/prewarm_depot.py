@@ -55,7 +55,7 @@ def main() -> int:
     ap.add_argument("--repo-dir", default=str(Path(__file__).resolve().parent.parent))
     args = ap.parse_args()
     julia_bin = resolve_real_julia_binary()
-    with tempfile.TemporaryDirectory(prefix="neurajl-prewarm-") as workspace:
+    with tempfile.TemporaryDirectory(prefix="palette-prewarm-") as workspace:
         # No depot clone: the real depot is bound writable at its own path.
         argv = build_bwrap_argv(
             workspace_dir=workspace,

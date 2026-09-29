@@ -1,4 +1,4 @@
-"""Supervisor for the 12h NeuraJL endurance run.
+"""Supervisor for the 12h Palette endurance run.
 
 Launches the isolated driver (direct OpenAI primary, OpenRouter backup, stall watchdog,
 deadline), injects timed kernel kills and teammate edits, samples resources, writes an
@@ -10,11 +10,11 @@ import argparse, json, os, pathlib, shutil, signal, subprocess, sys, tempfile, t
 
 S = pathlib.Path(__file__).resolve().parent
 E = S / "scenarios/s12-endurance-12h"
-NP2 = "/mnt/d/Code Projects/Project NIRA/The Battleground/NIRA-Prime-NeuraJL"
-LAB = "/mnt/d/Code Projects/Project NIRA/neurajl-operator-lab"
+NP2 = "/mnt/d/Code Projects/Project NIRA/The Battleground/NIRA-Prime-Palette"
+LAB = "/mnt/d/Code Projects/Project NIRA/palette-operator-lab"
 HOME = pathlib.Path.home()
 JULIA = str(HOME / ".julia/juliaup/julia-1.12.6+0.x64.linux.gnu/bin/julia")
-DEPOT = {"JULIA_DEPOT_PATH": f"{HOME}/.neurajl-trial/depot:{HOME}/.julia"}
+DEPOT = {"JULIA_DEPOT_PATH": f"{HOME}/.palette-trial/depot:{HOME}/.julia"}
 
 ap = argparse.ArgumentParser()
 ap.add_argument("label"); ap.add_argument("--hours", type=float, default=12.0)
@@ -28,9 +28,9 @@ a = ap.parse_args()
 
 run = S / "runs" / f"s12--{a.label}"; shutil.rmtree(run, ignore_errors=True)
 for d in ("agent", "rlm", "home"): (run / d).mkdir(parents=True)
-state_root = HOME / ".neurajl-endurance-state" / a.label; shutil.rmtree(state_root, ignore_errors=True); state_root.mkdir(parents=True)
+state_root = HOME / ".palette-endurance-state" / a.label; shutil.rmtree(state_root, ignore_errors=True); state_root.mkdir(parents=True)
 # On NVMe, not /tmp: tin1 lost its workspace to a power cut.
-WS_ROOT = HOME / ".neurajl-runs/tmp"; WS_ROOT.mkdir(parents=True, exist_ok=True)
+WS_ROOT = HOME / ".palette-runs/tmp"; WS_ROOT.mkdir(parents=True, exist_ok=True)
 ws = pathlib.Path(tempfile.mkdtemp(prefix="nje12-ws-", dir=WS_ROOT)); shutil.copytree(E / "fixture", ws, dirs_exist_ok=True)
 shutil.copy(E / (a.prompt or "prompt.txt"), run / "prompt.txt"); (run / "workspace_path").write_text(str(ws))
 queue = ["f2.txt", "f3.txt", "f4.txt", "f5.txt", "f6.txt", "f7.txt", "f8.txt", "f9.txt", "f10.txt", "f11.txt"] + (E / "queue.txt").read_text().split()
@@ -40,9 +40,9 @@ ork = run / "ork"; ork.write_text(json.load(open(HOME / ".prime/agent/auth.json"
 oak = run / "oak"; shutil.copy(HOME / ".config/openai-key", oak); oak.chmod(0o600)
 env = {**os.environ, "HOME": str(run / "home"), "ABC_PROMPT_FILE": str(run / "prompt.txt"), "ABC_TRACE_FILE": str(run / "trace.json"),
        "ABC_AGENT_DIR": str(run / "agent"), "ABC_RLM_SESSION_DIR": str(run / "rlm"),
-       "NEURAJL_SESSION_CLI": f"{LAB}/security/session_cli.py", "NEURAJL_PROJECT_DIR": str(HOME / ".neurajl-trial/project"),
-       "NEURAJL_REPO_DIR": LAB, "JULIA_DEPOT_PATH": str(HOME / ".neurajl-trial/depot"), "NEURAJL_JULIA_BIN": JULIA,
-       "NEURAJL_STATE_ROOT": str(state_root), "ABC_NEURAJL_MAX_OUTPUT_CHARS": "12000",
+       "PALETTE_SESSION_CLI": f"{LAB}/security/session_cli.py", "PALETTE_PROJECT_DIR": str(HOME / ".palette-trial/project"),
+       "PALETTE_REPO_DIR": LAB, "JULIA_DEPOT_PATH": str(HOME / ".palette-trial/depot"), "PALETTE_JULIA_BIN": JULIA,
+       "PALETTE_STATE_ROOT": str(state_root), "ABC_PALETTE_MAX_OUTPUT_CHARS": "12000",
        "ABC_MODEL": "gpt-6-luna", "ABC_OPENROUTER_PROVIDER": "openai", "ABC_BACKUP": "1" if a.backup else "0",
        "ABC_OPENAI_KEY_FILE": str(oak), "ABC_OPENROUTER_KEY_FILE": str(ork),
        # The org allows 200k tokens a minute. Retries wait the longer of the backoff and the wait the
@@ -83,9 +83,9 @@ def trace_stats():
     except Exception: return {}
     ents = t.get("rawSessionEntries", [])
     calls = sum(1 for e in ents if e.get("type") == "message" and (e.get("message") or {}).get("role") == "assistant"
-                for c in (e["message"].get("content") or []) if c.get("type") == "toolCall" and c.get("name") == "neurajl")
+                for c in (e["message"].get("content") or []) if c.get("type") == "toolCall" and c.get("name") == "palette")
     b = t.get("modelRequestBudget", {}); rl = t.get("recoveryLog", [])
-    return {"neurajl_calls": calls, "compactions": sum(1 for e in ents if e.get("type") == "compaction"),
+    return {"palette_calls": calls, "compactions": sum(1 for e in ents if e.get("type") == "compaction"),
             "requests": b.get("attempts"), "request_errors": b.get("requestErrors"), "cost_usd": round(b.get("reportedCostUsd") or 0, 4),
             "in": b.get("inputTokens"), "out": b.get("outputTokens"), "cacheR": b.get("cacheReadTokens"),
             "retries": sum(1 for r in rl if r["kind"] == "retry"), "backup_retries": sum(1 for r in rl if r.get("reason") == "backup"),
@@ -141,7 +141,7 @@ while proc.poll() is None:
                   "sandbox_tmp_bytes": du(f"/proc/{ks[0]}/root/tmp", one_fs=True) if ks else None, "state_root_bytes": du(state_root),
                   "kernel_pid": ks[0] if ks else None, **st}
         note(event="sample", **sample)
-        n = st.get("neurajl_calls", 0)
+        n = st.get("palette_calls", 0)
         if not changed and n >= a.change_at_calls:
             with open(ws / "ISSUES.md", "a") as f: f.write((E / "ISSUES_CHANGE.md").read_text())
             changed = True; note(event="intervention", what="teammate appended a requirements change to ISSUES.md", at_calls=n)
@@ -165,7 +165,7 @@ g = subprocess.run([JULIA, f"--project={ws}", str(E / "grader.jl")], cwd=ws, cap
 s = subprocess.run([JULIA, f"--project={ws}", "test/runtests.jl"], cwd=ws, capture_output=True, text=True, timeout=1800, env={**os.environ, **DEPOT})
 extra.append(subprocess.run(["python3", str(E / "grade_python.py"), str(ws), str(E)], capture_output=True, text=True).stdout.strip())
 for gj, cf in (("grade_json5.jl", "json5_cases.json"), ("grade_toml.jl", "toml_cases.json")):
-    extra.append((subprocess.run([JULIA, f"--project={HOME}/.neurajl-trial/project", str(E / gj), str(ws), str(E / cf)],
+    extra.append((subprocess.run([JULIA, f"--project={HOME}/.palette-trial/project", str(E / gj), str(ws), str(E / cf)],
                                  capture_output=True, text=True, timeout=900, env={**os.environ, **DEPOT}).stdout.strip().splitlines() or [""])[-1])
 if (ws / "reports" / "logs.md").exists():
     shutil.copytree(ws / "reports", run / "reports-copy", dirs_exist_ok=True); (run / "workspace-after" / "report.md").write_text((ws / "reports" / "logs.md").read_text())

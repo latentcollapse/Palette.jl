@@ -11,7 +11,7 @@ looks continuous but is wrong is worse than reporting state lost, so each
 adversarial case checks that the report does NOT claim what is not true.
 
 Run:
-    JULIA_DEPOT_PATH=~/.neurajl-trial/depot NEURAJL_TEST_PROJECT_DIR=~/.neurajl-trial/project \\
+    JULIA_DEPOT_PATH=~/.palette-trial/depot PALETTE_TEST_PROJECT_DIR=~/.palette-trial/project \\
         python3 security/test_revival.py
 """
 from __future__ import annotations
@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from host_adapter import session_cmd  # noqa: E402
 
 CLI = str(Path(__file__).resolve().parent / "session_cli.py")
-PROJECT_DIR = os.environ.get("NEURAJL_TEST_PROJECT_DIR", str(Path.home() / ".neurajl-trial/project"))
+PROJECT_DIR = os.environ.get("PALETTE_TEST_PROJECT_DIR", str(Path.home() / ".palette-trial/project"))
 
 
 class Kernel:
@@ -72,8 +72,8 @@ class RevivalTest(unittest.TestCase):
     def setUp(self):
         if shutil.which("bwrap") is None or not Path(PROJECT_DIR).exists():
             raise unittest.SkipTest("needs bwrap and the trial project")
-        self.ws = tempfile.mkdtemp(prefix="neurajl-revival-ws-")
-        self.state = tempfile.mkdtemp(prefix="neurajl-revival-state-")
+        self.ws = tempfile.mkdtemp(prefix="palette-revival-ws-")
+        self.state = tempfile.mkdtemp(prefix="palette-revival-state-")
 
     def tearDown(self):
         shutil.rmtree(self.ws, ignore_errors=True)
@@ -501,7 +501,7 @@ class RevivalTest(unittest.TestCase):
 
     def test_state_of_another_workspace_is_not_revived(self):
         self.session("secret = 1")
-        other = tempfile.mkdtemp(prefix="neurajl-revival-other-")
+        other = tempfile.mkdtemp(prefix="palette-revival-other-")
         try:
             k = Kernel(other, self.state)
             r = k.turn("@isdefined(secret)")
@@ -513,7 +513,7 @@ class RevivalTest(unittest.TestCase):
             shutil.rmtree(other, ignore_errors=True)
 
     def test_size_limits_skip_and_report(self):
-        env = {"NEURAJL_STATE_MAX_BINDING_BYTES": str(1_000_000), "NEURAJL_STATE_MAX_BYTES": str(1_500_000)}
+        env = {"PALETTE_STATE_MAX_BINDING_BYTES": str(1_000_000), "PALETTE_STATE_MAX_BYTES": str(1_500_000)}
         self.session("huge = zeros(200_000); a = zeros(100_000); b = zeros(100_000); small = 1", env=env)
         out, r = self.revive("(@isdefined(huge), @isdefined(small))", env=env)
         lost = section(out, "not revived")

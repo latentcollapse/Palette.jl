@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NeuraJL host capability broker -- the second trust domain.
+Palette host capability broker -- the second trust domain.
 
 Runs entirely OUTSIDE the sandboxed Julia worker's OS namespace. The worker
 can reach it only through one narrow channel: a Unix domain socket whose
@@ -349,7 +349,7 @@ class Broker:
         script = params.get("script")
         if not isinstance(script, str):
             raise CapabilityDenied("spawn_child_worker requires a string 'script'")
-        child_workspace = tempfile.mkdtemp(prefix="neurajl-child-ws-")
+        child_workspace = tempfile.mkdtemp(prefix="palette-child-ws-")
         child_project = self.project_dir
         child_repo = self.repo_dir
         from launch_worker import create_session_depot, run_worker
@@ -372,7 +372,7 @@ class Broker:
         # enforces the ceiling and performs the effect itself -- so the
         # child gets its own broker instance (enforcing its own, already
         # ceiling_is_subset-validated ceiling) instead of an OS capability.
-        child_sock_dir = tempfile.mkdtemp(prefix="neurajl-child-broker-")
+        child_sock_dir = tempfile.mkdtemp(prefix="palette-child-broker-")
         child_receipts = os.path.join(child_sock_dir, "receipts.jsonl")
         child_server, _ = serve(
             os.path.join(child_sock_dir, "broker.sock"),

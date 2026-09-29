@@ -59,7 +59,7 @@ end
 
 # tempdir() is looked up when a turn runs: this file is precompiled, and a
 # constant would hold the build machine's temp directory.
-capture_path() = joinpath(tempdir(), "neurajl-turn-output")
+capture_path() = joinpath(tempdir(), "palette-turn-output")
 
 # Runs `f` with fd 1 and fd 2 on a fresh append-only file. A process the
 # turn left running keeps its descriptor to that file, now unlinked, so its

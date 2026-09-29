@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NeuraJL persistent session -- "persistent mind, disposable machinery".
+Palette persistent session -- "persistent mind, disposable machinery".
 
 The rest of this codebase (launch_worker.py, broker.py) launches one
 `julia -e script` process per call: real state persistence only within
@@ -98,7 +98,7 @@ def _readline_with_timeout(pipe, timeout: float) -> str:
 
 
 class NeuraSession:
-    """One persistent, sandboxed NeuraJL worker plus its own broker,
+    """One persistent, sandboxed Palette worker plus its own broker,
     ceiling, and depot clone -- a real Julia process kept alive across
     many `turn()` calls, not a fresh one per call."""
 
@@ -121,7 +121,7 @@ class NeuraSession:
         owns (an agent's task checkout): bound writable as the worker's
         working directory and never deleted. Without it the worker works in
         a private scratch workspace under the scratch root."""
-        self.session_id = f"neurajl-{uuid.uuid4().hex[:16]}"
+        self.session_id = f"palette-{uuid.uuid4().hex[:16]}"
         self.project_dir = project_dir
         self.repo_dir = repo_dir
         self.turn_timeout = turn_timeout
@@ -139,7 +139,7 @@ class NeuraSession:
         # fix. _teardown() is hasattr-guarded specifically so it's safe to
         # call here no matter how early the failure happened.
         try:
-            self._tmp_root = Path(workspace_dir or Path.home() / ".neurajl-sessions" / self.session_id)
+            self._tmp_root = Path(workspace_dir or Path.home() / ".palette-sessions" / self.session_id)
             self._tmp_root.mkdir(parents=True, exist_ok=True)
             if task_workspace_dir is not None:
                 task_workspace = Path(task_workspace_dir).resolve(strict=True)
@@ -191,12 +191,12 @@ class NeuraSession:
             )
             # Ephemeral-turn provenance goes to the sandbox's private home; the
             # working directory may be the caller's task workspace.
-            argv += ["--setenv", "NEURAJL_PROVENANCE_DIR", "/run/neurajl/home/.neurajl"]
+            argv += ["--setenv", "PALETTE_PROVENANCE_DIR", "/run/palette/home/.palette"]
             # kernelinfo() reports the limit a call runs under.
-            argv += ["--setenv", "NEURAJL_TURN_TIMEOUT", f"{turn_timeout:g}"]
+            argv += ["--setenv", "PALETTE_TURN_TIMEOUT", f"{turn_timeout:g}"]
             # The sandbox starts with a clear environment; the limits on saved
             # state pass through when the host sets them (src/revival.jl).
-            for name in ("NEURAJL_STATE_MAX_BINDING_BYTES", "NEURAJL_STATE_MAX_BYTES"):
+            for name in ("PALETTE_STATE_MAX_BINDING_BYTES", "PALETTE_STATE_MAX_BYTES"):
                 if name in os.environ:
                     argv += ["--setenv", name, os.environ[name]]
             argv += ["--", julia_bin, "--startup-file=no", SESSION_LOOP_SCRIPT]

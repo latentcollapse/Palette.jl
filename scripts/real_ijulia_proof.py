@@ -21,7 +21,7 @@ Setup (one-time):
      Jupyter data dir (so this doesn't touch any real Jupyter install):
        JUPYTER_DATA_DIR=<jdata-dir> julia --project=<env-dir> -e '
          using IJulia
-         IJulia.installkernel("NeuraJLTest", "--project=<env-dir>")'
+         IJulia.installkernel("PaletteTest", "--project=<env-dir>")'
 
   3. A Python venv with jupyter_client (this script needs nothing else):
        python3 -m venv <venv-dir>
@@ -31,15 +31,15 @@ Run:
   JUPYTER_DATA_DIR=<jdata-dir> JUPYTER_PATH=<jdata-dir> \\
     <venv-dir>/bin/python scripts/real_ijulia_proof.py
 
-If the kernelspec's display name differs from "NeuraJLTest 1.12",
+If the kernelspec's display name differs from "PaletteTest 1.12",
 update KERNEL_NAME below to match the actual installed kernel directory
 name (check `<jdata-dir>/kernels/`) -- IJulia.installkernel appends the
-Julia minor version, e.g. "neurajltest-1.12".
+Julia minor version, e.g. "palettetest-1.12".
 """
 import sys
 from jupyter_client.manager import KernelManager
 
-KERNEL_NAME = "neurajltest-1.12"
+KERNEL_NAME = "palettetest-1.12"
 
 def run_cell(kc, code, timeout=60):
     msg_id = kc.execute(code)

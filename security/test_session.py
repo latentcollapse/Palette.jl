@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Executable tests for security/session.py -- NeuraJL's persistent worker.
+Executable tests for security/session.py -- Palette's persistent worker.
 
 Same evidence standard as security/test_authority.py: real sandboxes, real
 broker, real host filesystem checks, never the worker's own self-report
@@ -29,7 +29,7 @@ else:
 
 REPO_DIR = str(Path(__file__).resolve().parent.parent)
 PROJECT_DIR = os.environ.get(
-    "NEURAJL_TEST_PROJECT_DIR",
+    "PALETTE_TEST_PROJECT_DIR",
     "/tmp/claude-1000/-mnt-d-Code-Projects/c3c092a4-acab-472c-b26c-e9672fac8468/scratchpad/ijulia-harness-env",
 )
 
@@ -135,7 +135,7 @@ class TestSessionLifecycle(SessionTestCase):
     def test_session_starts_under_a_deep_session_root(self):
         """The broker's Unix socket lived under the session root; a long HOME
         pushed its path past 108 bytes and no kernel could start."""
-        deep = Path(tempfile.mkdtemp(prefix="neurajl-deep-")) / ("d" * 60) / ("e" * 60)
+        deep = Path(tempfile.mkdtemp(prefix="palette-deep-")) / ("d" * 60) / ("e" * 60)
         s = NeuraSession(project_dir=PROJECT_DIR, ceiling={}, workspace_dir=str(deep))
         try:
             if not HOST_BIN:
@@ -166,12 +166,12 @@ class TestSessionLifecycle(SessionTestCase):
         _teardown() itself was also unsafe to call this early (it
         unconditionally referenced self._proc, which didn't exist yet) --
         both fixed together."""
-        depot_root = os.path.join(os.path.dirname(os.environ.get("JULIA_DEPOT_PATH", os.path.expanduser("~/.julia")).split(":")[-1]), ".neurajl-depot-clones")
+        depot_root = os.path.join(os.path.dirname(os.environ.get("JULIA_DEPOT_PATH", os.path.expanduser("~/.julia")).split(":")[-1]), ".palette-depot-clones")
         before = set(os.listdir(depot_root)) if os.path.isdir(depot_root) else set()
         if HOST_BIN:
             # A real failure just after the depot clone: a file where the
             # broker's directory belongs.
-            root = Path(tempfile.mkdtemp(prefix="neurajl-fail-"))
+            root = Path(tempfile.mkdtemp(prefix="palette-fail-"))
             (root / "broker").write_text("not a directory")
             with self.assertRaises(SessionDeadError):
                 NeuraSession(project_dir=PROJECT_DIR, ceiling={}, workspace_dir=str(root))
@@ -201,7 +201,7 @@ class TestAuthorityUnderPersistence(SessionTestCase):
 
     def setUp(self):
         super().setUp()
-        self.tmp = tempfile.mkdtemp(prefix="neurajl-session-test-")
+        self.tmp = tempfile.mkdtemp(prefix="palette-session-test-")
         self.allowed_sub = os.path.join(self.tmp, "sub")
         os.makedirs(self.allowed_sub)
 

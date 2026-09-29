@@ -1,10 +1,10 @@
 # Drivers
 
-These run NeuraJL inside NP2 against a live model. They are copied from where they run (`~/.neurajl-runs/`) so the working versions are saved.
+These run Palette inside NP2 against a live model. They are copied from where they run (`~/.palette-runs/`) so the working versions are saved.
 
 | File | What it is |
 |---|---|
-| `endurance-agent.ts` | The NP2 driver. It lives at NP2 `scripts/.endurance-agent.ts`, run with `tsx`. It builds a NeuraJL-only session and runs the prompt and the follow-up queue, with a recovery loop, a stall watchdog and a deadline. |
+| `endurance-agent.ts` | The NP2 driver. It lives at NP2 `scripts/.endurance-agent.ts`, run with `tsx`. It builds a Palette-only session and runs the prompt and the follow-up queue, with a recovery loop, a stall watchdog and a deadline. |
 | `endurance12.py` | The long-run supervisor (tin1–tin4). It sets up the workspace and scenario, delivers follow-ups and teammate interventions, kills the kernel on schedule, enforces the cost cap, and grades at checkpoints. |
 | `pilot.py` | A single short run of one scenario, graded with the scenario's `grade.sh`. |
 

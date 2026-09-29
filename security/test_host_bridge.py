@@ -37,7 +37,7 @@ class Host:
     """session_cli with a given ceiling, driven the way the agent host drives it."""
 
     def __init__(self, ceiling: dict, turn_timeout: float = 20):
-        self.workspace = tempfile.mkdtemp(prefix="neurajl-bridge-")
+        self.workspace = tempfile.mkdtemp(prefix="palette-bridge-")
         self.proc = subprocess.Popen(
             [*session_cmd(), "--project-dir", PROJECT_DIR, "--ceiling", json.dumps(ceiling),
              "--workspace-dir", self.workspace, "--turn-timeout", str(turn_timeout)],

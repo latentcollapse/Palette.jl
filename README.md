@@ -1,4 +1,4 @@
-# NeuraJL Operator Surface
+# Palette Operator Surface
 
 **Status:** Experiment 001 is implemented and runtime-verified (Rev 2) -- see
 `docs/EXPERIMENT_001_RESULTS.md` for what's actually proven, including a real
@@ -10,10 +10,10 @@ assignment-brief sections below are kept for history, not as current status.
 
 | Name | What it is |
 |---|---|
-| **NeuraJL** | The product/runtime name. What you'd call the whole thing. |
+| **Palette** | The product/runtime name. What you'd call the whole thing. |
 | **`Neura`** (package `Neura`, repo root as its package root) | The Julia package implementing the operator surface -- types, ops, discovery, receipts. This repo. |
-| **IJulia** | NOT ours. A real, independent, decades-old package maintained by the Julia language team (`JuliaLang/IJulia.jl`). It is the current *transport* NeuraJL runs on -- a persistent Julia REPL process driven over the Jupyter wire protocol. NeuraJL is built **on** IJulia, the same way Prime Agent's Python tooling runs **on** IPython/`ipykernel` without having invented either. Do not name anything in this project "IJulia" -- besides being confusing, Julia's package registry will not allow a second package with that name. |
-| **NeuraBash** | The reference/legacy operator implementation -- the original Bash-hosted `\|!>` JUL trapdoor this project's security doctrine (unbounded power, extremely bounded authority) was first proven on. NeuraJL is the same thesis on a different, more capable substrate (a real persistent language runtime instead of Bash), not a replacement built from a blank page. |
+| **IJulia** | NOT ours. A real, independent, decades-old package maintained by the Julia language team (`JuliaLang/IJulia.jl`). It is the current *transport* Palette runs on -- a persistent Julia REPL process driven over the Jupyter wire protocol. Palette is built **on** IJulia, the same way Prime Agent's Python tooling runs **on** IPython/`ipykernel` without having invented either. Do not name anything in this project "IJulia" -- besides being confusing, Julia's package registry will not allow a second package with that name. |
+| **NeuraBash** | The reference/legacy operator implementation -- the original Bash-hosted `\|!>` JUL trapdoor this project's security doctrine (unbounded power, extremely bounded authority) was first proven on. Palette is the same thesis on a different, more capable substrate (a real persistent language runtime instead of Bash), not a replacement built from a blank page. |
 
 This repository was originally scaffolded as an isolated Experiment 001 lab,
 deliberately outside Project Neura, NeuraBash, Prime Agent, and EnigmaOS, for

@@ -18,19 +18,19 @@ pub const SANDBOX_USER: &str = "neura";
 /// The sandbox sets these itself; a task environment cannot move them.
 const SANDBOX_OWNED_ENV: &[&str] = &[
     "PATH", "HOME", "USER", "LOGNAME", "LANG", "JULIA_DEPOT_PATH", "JULIA_PROJECT", "JULIA_LOAD_PATH",
-    "JULIA_PKG_OFFLINE", "NEURAJL_REPO_DIR", "NEURAJL_STATE_DIR", "NEURAJL_BROKER_SOCKET",
+    "JULIA_PKG_OFFLINE", "PALETTE_REPO_DIR", "PALETTE_STATE_DIR", "PALETTE_BROKER_SOCKET",
 ];
 
-/// The real julia binary, past the juliaup shim. An explicit NEURAJL_JULIA_BIN
+/// The real julia binary, past the juliaup shim. An explicit PALETTE_JULIA_BIN
 /// wins: asked under a fresh HOME, the shim installs its current default
 /// release, and an endurance run got a Julia the depot was not built for.
 /// stdin is never inherited: `julia -e` with the caller's stdin breaks the
 /// caller's later reads from it, and the session reads its requests there.
 pub fn resolve_julia() -> Result<String, String> {
-    if let Ok(pinned) = std::env::var("NEURAJL_JULIA_BIN") {
+    if let Ok(pinned) = std::env::var("PALETTE_JULIA_BIN") {
         if !pinned.is_empty() {
             if !Path::new(&pinned).is_file() {
-                return Err(format!("NEURAJL_JULIA_BIN is not a file: {pinned}"));
+                return Err(format!("PALETTE_JULIA_BIN is not a file: {pinned}"));
             }
             return Ok(pinned);
         }
@@ -58,7 +58,7 @@ pub fn default_depot() -> String {
 /// package installs go into the same directory a running worker has bound.
 pub fn create_session_depot(real_depot: Option<&str>) -> Result<PathBuf, String> {
     let depot = real_depot.map(str::to_string).unwrap_or_else(default_depot);
-    let root = Path::new(&depot).parent().unwrap_or(Path::new("/")).join(".neurajl-depot-clones");
+    let root = Path::new(&depot).parent().unwrap_or(Path::new("/")).join(".palette-depot-clones");
     fs::create_dir_all(&root).map_err(|e| format!("creating {}: {e}", root.display()))?;
     let dest = util::mkdtemp_in(&root, "depot-").map_err(|e| e.to_string())?;
     let _ = fs::remove_dir(&dest); // cp wants a destination that does not exist yet
@@ -106,8 +106,8 @@ pub fn read_task_env(path: Option<&str>) -> Result<BTreeMap<String, String>, Str
 /// passwd and group files naming the sandbox's uid 1000, written once per host.
 fn identity_files() -> Result<PathBuf, String> {
     let uid = unsafe { libc::getuid() };
-    let etc = util::temp_dir().join(format!("neurajl-etc-{uid}"));
-    let passwd = format!("{SANDBOX_USER}:x:1000:1000:NeuraJL sandbox:/run/neurajl/home:/bin/bash\n");
+    let etc = util::temp_dir().join(format!("palette-etc-{uid}"));
+    let passwd = format!("{SANDBOX_USER}:x:1000:1000:Palette sandbox:/run/palette/home:/bin/bash\n");
     let group = format!("{SANDBOX_USER}:x:1000:\n");
     if fs::read_to_string(etc.join("passwd")).ok().as_deref() != Some(passwd.as_str()) {
         use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -156,8 +156,8 @@ pub fn build_bwrap_argv(s: &SandboxSpec) -> Result<Vec<String>, String> {
     if !s.network_enabled {
         push(&["--unshare-net"]);
     }
-    push(&["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--dir", "/run/neurajl", "--tmpfs", "/run/neurajl",
-           "--dir", "/run/neurajl/home", "--clearenv", "--die-with-parent", "--new-session", "--cap-drop", "ALL",
+    push(&["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--dir", "/run/palette", "--tmpfs", "/run/palette",
+           "--dir", "/run/palette/home", "--clearenv", "--die-with-parent", "--new-session", "--cap-drop", "ALL",
            "--ro-bind", "/usr", "/usr", "--symlink", "usr/lib", "/lib", "--symlink", "usr/lib", "/lib64",
            "--symlink", "usr/bin", "/bin", "--ro-bind", "/etc/ld.so.cache", "/etc/ld.so.cache",
            "--ro-bind", &toolchain, &toolchain,
@@ -178,18 +178,18 @@ pub fn build_bwrap_argv(s: &SandboxSpec) -> Result<Vec<String>, String> {
     push(&["--ro-bind", &pw.to_string_lossy(), "/etc/passwd", "--ro-bind", &gr.to_string_lossy(), "/etc/group"]);
     // The persistent kernel's saved state, outside the task workspace.
     if let Some(st) = s.state_dir {
-        push(&["--bind", st, st, "--setenv", "NEURAJL_STATE_DIR", st]);
+        push(&["--bind", st, st, "--setenv", "PALETTE_STATE_DIR", st]);
     }
     let path = match &task_tools {
         Some(t) => format!("{t}/bin:{toolchain}/bin:/usr/bin:/bin"),
         None => format!("{toolchain}/bin:/usr/bin:/bin"),
     };
     let load_path = format!("@:{}:@v#.#:@stdlib", s.project_dir);
-    push(&["--setenv", "HOME", "/run/neurajl/home", "--setenv", "JULIA_DEPOT_PATH", s.julia_depot,
+    push(&["--setenv", "HOME", "/run/palette/home", "--setenv", "JULIA_DEPOT_PATH", s.julia_depot,
            "--setenv", "JULIA_PROJECT", s.project_dir,
            // The session project stays loadable after turn code activates another.
            "--setenv", "JULIA_LOAD_PATH", &load_path,
-           "--setenv", "NEURAJL_REPO_DIR", s.repo_dir, "--setenv", "PATH", &path,
+           "--setenv", "PALETTE_REPO_DIR", s.repo_dir, "--setenv", "PATH", &path,
            "--setenv", "LANG", "en_US.UTF-8", "--setenv", "USER", SANDBOX_USER, "--setenv", "LOGNAME", SANDBOX_USER,
            "--chdir", s.workspace_dir]);
     for (k, v) in &task_env {
@@ -197,7 +197,7 @@ pub fn build_bwrap_argv(s: &SandboxSpec) -> Result<Vec<String>, String> {
     }
     if let Some(d) = s.broker_socket_dir {
         let sock = format!("{d}/broker.sock");
-        push(&["--setenv", "NEURAJL_BROKER_SOCKET", &sock]);
+        push(&["--setenv", "PALETTE_BROKER_SOCKET", &sock]);
     }
     if !s.network_enabled {
         // Without it Pkg.add spends ~18 s per package on DNS retries.

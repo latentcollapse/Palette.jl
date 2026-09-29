@@ -7,7 +7,7 @@ docs/build/
 
 # Ephemeral-tool cold provenance (mechanical, per-workspace runtime output,
 # not source -- see Neura.jl's record_tool_capsule)
-.neurajl/
+.palette/
 
 # Dependencies
 deps/

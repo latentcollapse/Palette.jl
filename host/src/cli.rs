@@ -1,4 +1,4 @@
-//! `neurajl-host session`: the persistent stdio bridge an agent host (Node)
+//! `palette-host session`: the persistent stdio bridge an agent host (Node)
 //! spawns once per agent session. Newline-delimited JSON:
 //!
 //!   HELLO     {"kind": "HELLO", "epoch", "session_id", "revival"}   (once, at startup)
@@ -130,9 +130,9 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     Ok(a)
 }
 
-/// The lab checkout: --repo-dir, NEURAJL_REPO_DIR, or the checkout this binary was built in.
+/// The lab checkout: --repo-dir, PALETTE_REPO_DIR, or the checkout this binary was built in.
 pub fn default_repo_dir() -> String {
-    if let Ok(r) = std::env::var("NEURAJL_REPO_DIR") {
+    if let Ok(r) = std::env::var("PALETTE_REPO_DIR") {
         if !r.is_empty() {
             return r;
         }
@@ -183,7 +183,7 @@ pub fn main(argv: &[String]) -> i32 {
     let args = match parse_args(argv) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("neurajl-host session: {e}");
+            eprintln!("palette-host session: {e}");
             return 2;
         }
     };

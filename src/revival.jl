@@ -27,8 +27,8 @@ const STATE_DIR = Ref("")
 const REVIVAL_FORMAT = 1
 # Per binding (or group of bindings sharing data) and per snapshot; the
 # environment can lower them, as the tests do.
-max_binding_bytes() = parse(Int, get(ENV, "NEURAJL_STATE_MAX_BINDING_BYTES", string(16 * 1024 * 1024)))
-max_snapshot_bytes() = parse(Int, get(ENV, "NEURAJL_STATE_MAX_BYTES", string(128 * 1024 * 1024)))
+max_binding_bytes() = parse(Int, get(ENV, "PALETTE_STATE_MAX_BINDING_BYTES", string(16 * 1024 * 1024)))
+max_snapshot_bytes() = parse(Int, get(ENV, "PALETTE_STATE_MAX_BYTES", string(128 * 1024 * 1024)))
 const MAX_RECIPE_CHARS = 240
 
 # Definition statements from every call, in order: what a new kernel

@@ -1,7 +1,7 @@
 """
-The host the tests run against. With NEURAJL_HOST_BIN set, every entry point
+The host the tests run against. With PALETTE_HOST_BIN set, every entry point
 the tests use -- the session bridge, one-shot workers, the broker, the
-ceiling-subset rule, a whole session -- is the Rust `neurajl-host` binary;
+ceiling-subset rule, a whole session -- is the Rust `palette-host` binary;
 otherwise the Python modules in this directory. The tests' assertions are the
 same either way, so one suite is the conformance suite for both.
 
@@ -21,7 +21,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-HOST_BIN = os.environ.get("NEURAJL_HOST_BIN") or None
+HOST_BIN = os.environ.get("PALETTE_HOST_BIN") or None
 
 import launch_worker as _launch  # noqa: E402
 
@@ -49,7 +49,7 @@ def run_worker(*, workspace_dir, project_dir, repo_dir, script, broker_socket_di
         argv += ["--network"]
     out = subprocess.run(argv, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=timeout + 120)
     if out.returncode != 0:
-        raise RuntimeError(f"neurajl-host run-worker failed: {out.stderr}")
+        raise RuntimeError(f"palette-host run-worker failed: {out.stderr}")
     r = json.loads(out.stdout)
     if r["timed_out"]:
         raise subprocess.TimeoutExpired(argv, timeout, r["stdout"], r["stderr"])
