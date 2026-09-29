@@ -32,10 +32,13 @@ import { createHarness, type Harness } from "./harness.js";
 const REPL_DOCTRINE_MARKER = "persistent Python REPL";
 
 const SESSION_CLI_PATH = process.env.NEURAJL_SESSION_CLI;
+// With the Rust host configured, it runs every session and SESSION_CLI_PATH is not used.
+const HOST_BIN = process.env.NEURAJL_HOST_BIN;
 const PROJECT_DIR = process.env.NEURAJL_PROJECT_DIR;
 
 function skipIfNeurajlUnavailable(): boolean {
-	if (!SESSION_CLI_PATH || !existsSync(SESSION_CLI_PATH)) return true;
+	const host = HOST_BIN ?? SESSION_CLI_PATH;
+	if (!host || !existsSync(host)) return true;
 	if (!PROJECT_DIR || !existsSync(PROJECT_DIR)) return true;
 	try {
 		execFileSync("bwrap", ["--version"], { stdio: "ignore" });

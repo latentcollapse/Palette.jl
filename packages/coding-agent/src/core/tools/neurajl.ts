@@ -72,7 +72,12 @@ export interface NeurajlToolDetails {
 }
 
 export interface NeurajlToolOptions {
-	/** Absolute path to security/session_cli.py. Unset fails closed at first use. */
+	/**
+	 * The Rust host (`neurajl-host`, built from the lab's host/ crate). When set (or NEURAJL_HOST_BIN is), it runs
+	 * the session -- sandbox, broker and bridge -- and no Python is involved.
+	 */
+	hostBin?: string;
+	/** Absolute path to security/session_cli.py, the Python host, used when no Rust host is configured. */
 	sessionCliPath?: string;
 	/** The neurajl-operator-lab checkout (session_cli.py's --repo-dir). Defaults to session_cli.py's grandparent. */
 	repoDir?: string;
@@ -176,7 +181,10 @@ async function startKernel(
 	stateDir: string | undefined,
 	hostHandlers: (() => HostRequestHandlers) | undefined,
 ): Promise<NeurajlKernel> {
-	const cliPath = requiredSetting(options?.sessionCliPath ?? process.env.NEURAJL_SESSION_CLI, "session_cli.py path");
+	const hostBin = options?.hostBin ?? process.env.NEURAJL_HOST_BIN;
+	const cliPath = hostBin
+		? undefined
+		: requiredSetting(options?.sessionCliPath ?? process.env.NEURAJL_SESSION_CLI, "session_cli.py path");
 	const projectDir = requiredSetting(
 		options?.projectDir ?? process.env.NEURAJL_PROJECT_DIR,
 		"Julia project directory",
@@ -185,8 +193,7 @@ async function startKernel(
 	const startupTimeoutMs = options?.startupTimeoutMs ?? 180_000;
 
 	const args = [
-		"-u",
-		cliPath,
+		...(hostBin ? ["session"] : ["-u", cliPath!]),
 		"--project-dir",
 		projectDir,
 		"--ceiling",
@@ -201,7 +208,7 @@ async function startKernel(
 	if (options?.turnTimeout) args.push("--turn-timeout", String(options.turnTimeout));
 	if (stateDir) args.push("--state-dir", stateDir);
 
-	const child = spawn(pythonBin, args, { cwd, env: getShellEnv(), stdio: ["pipe", "pipe", "pipe"] });
+	const child = spawn(hostBin ?? pythonBin, args, { cwd, env: getShellEnv(), stdio: ["pipe", "pipe", "pipe"] });
 	if (child.pid) trackDetachedChildPid(child.pid);
 
 	const pending = new Map<string, PendingTurn>();
