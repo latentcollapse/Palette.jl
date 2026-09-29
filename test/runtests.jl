@@ -1,6 +1,84 @@
 using Test
 using Neura
 using JSON
+using Sockets
+
+# A stand-in for the broker and the agent host behind it: each connection gets
+# one JSON request; `reply` maps (type, payload) to the broker's response.
+function with_fake_broker(f, reply)
+    dir = mktempdir(); path = joinpath(dir, "broker.sock")
+    server = Sockets.listen(path)
+    seen = Any[]
+    task = @async while isopen(server)
+        conn = try accept(server) catch; break end
+        req = JSON.parse(readline(conn))
+        push!(seen, req)
+        write(conn, JSON.json(reply(req["params"]["type"], req["params"]["payload"])) * "\n")
+        close(conn)
+    end
+    old = get(ENV, "NEURAJL_BROKER_SOCKET", nothing)
+    ENV["NEURAJL_BROKER_SOCKET"] = path
+    try
+        f(seen)
+    finally
+        old === nothing ? delete!(ENV, "NEURAJL_BROKER_SOCKET") : (ENV["NEURAJL_BROKER_SOCKET"] = old)
+        close(server)
+    end
+end
+ok(result) = Dict("approved" => true, "result" => Dict("status" => "ok", "result" => result))
+
+@testset "RLM from Julia" begin
+    R = Neura.Api.rlm
+    child = Dict("rlm_child_id" => "c1", "name" => "w", "session_dir" => "/s/c1", "model" => "openai/luna")
+    with_fake_broker((t, p) -> t == "rlm.run" ? ok(child) :
+                                t == "rlm.collect" ? ok(Dict("results" => [Dict("rlm_child_id" => "c1", "status" => "done",
+                                    "settled" => true, "answer_preview" => "42", "session_name" => "w")])) :
+                                t == "rlm.list_subagents" ? ok(Dict("subagents" => [Dict("rlm_child_id" => "c1",
+                                    "session_name" => "w", "session_dir" => "/s/c1", "status" => "running",
+                                    "activity" => Dict("kind" => "executing", "tool_name" => "neurajl"))])) :
+                                t == "rlm.find_models" ? ok(Dict("models" => [Dict("provider" => "openai", "id" => "luna",
+                                    "name" => "Luna", "selector" => "openai/luna")])) :
+                                t == "rlm.progress.note" ? ok(Dict("accepted" => false, "retry_after_ms" => 900)) :
+                                t == "rlm.delete_subagent" ? ok(Dict("subagent" => Dict("rlm_child_id" => "c1",
+                                    "session_name" => "w", "session_dir" => "/s/c1", "status" => "completed"))) :
+                                Dict("approved" => false, "reason" => "not allowed")) do seen
+        h = R.spawn("add 40 and 2"; name = "w", thinking = "low")
+        @test h isa R.SpawnHandle && h.rlm_child_id == "c1" && h.model == "openai/luna"
+        @test seen[end]["category"] == "host_request"
+        @test seen[end]["params"]["payload"] == Dict("prompt" => "add 40 and 2", "kwargs" => Dict("name" => "w", "thinking" => "low"))
+        r = only(R.collect(h))
+        @test r.status == "done" && r.settled && r.answer_preview == "42" && r.error === nothing
+        @test seen[end]["params"]["payload"]["targets"] == ["c1"]
+        @test R.collect()[1].rlm_child_id == "c1" && seen[end]["params"]["payload"]["targets"] == []
+        sa = only(R.list_subagents())
+        @test sa.status == "running" && sa.activity.kind == "executing"
+        @test R.collect([h, sa, " w "]; timeout_ms = 10)[1].settled
+        @test seen[end]["params"]["payload"]["targets"] == ["c1", "c1", "w"]
+        @test only(R.find_models("luna")).selector == "openai/luna"
+        n = R.progress_note("  halfway  ")
+        @test !n.accepted && n.retry_after_ms == 900 && seen[end]["params"]["payload"]["message"] == "halfway"
+        @test R.delete_subagent(h).status == "completed"
+        # The same checks and messages as the Python kernel.
+        @test_throws "timeout_ms must be a non-negative int" R.collect(h; timeout_ms = -1)
+        @test_throws "timeout_ms must be at most 50000" R.collect(h; timeout_ms = 60_000)
+        @test_throws "targets must be nothing, a target, or a vector" R.collect(42)
+        @test_throws "collect target must be" R.collect([h, 42])
+        @test_throws "message must not be empty" R.progress_note("   ")
+        @test_throws "at most 512 characters" R.progress_note("😀"^300)   # 600 UTF-16 units
+        @test_throws "target must not be empty" R.delete_subagent(" ")
+        # Denied by policy: the broker's reason reaches the caller.
+        @test_throws "was not allowed: not allowed" R.create_session("x")
+    end
+    # The host's own error, and malformed replies.
+    with_fake_broker((t, p) -> t == "rlm.run" ? Dict("approved" => true, "result" => Dict("status" => "error", "error" => "name 'w' is taken")) :
+                               ok(Dict("results" => "nope"))) do _
+        @test_throws "name 'w' is taken" R.spawn("x"; name = "w")
+        @test_throws "rlm.collect returned an invalid results list" R.collect()
+    end
+    with_fake_broker((t, p) -> ok(Dict("rlm_child_id" => "c1"))) do _
+        @test_throws "rlm.spawn returned an invalid spawn handle" R.spawn("x"; name = "w")
+    end
+end
 
 @testset "Stress runner" begin
     r = Neura.stress("[ \$((STRESS_RUN % 13)) -ne 0 ] || { echo boom at \$STRESS_RUN; exit 3; }"; n=100, jobs=8)

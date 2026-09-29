@@ -108,6 +108,12 @@ def ceiling_is_subset(requested: dict, parent: dict) -> tuple[bool, str]:
                 return False, "requested package_management must name allowed_packages explicitly (no unrestricted child grant)"
             if parent_pkgs is not None and not set(req_pkgs).issubset(set(parent_pkgs)):
                 return False, f"requested allowed_packages {req_pkgs} is not a subset of parent's {parent_pkgs}"
+        elif category == "host_request":
+            req_types = req_cap.get("allowed_types")
+            if not isinstance(req_types, list):
+                return False, "requested host_request must name allowed_types explicitly (no unrestricted child grant)"
+            if not set(req_types).issubset(set(parent_cap.get("allowed_types") or [])):
+                return False, f"requested host_request types {req_types} are not a subset of parent's {parent_cap.get('allowed_types')}"
         elif category == "spawn_child_worker":
             # No sub-fields of its own to narrow here -- a grandchild's
             # actual ceiling gets its own full ceiling_is_subset check
@@ -178,6 +184,11 @@ class Broker:
         # rather than left to whatever Pkg's own on-disk locking happens
         # to do under concurrent writers.
         self._depot_lock = threading.Lock()
+        # The host process that owns this session (session_cli) sets this to
+        # its own bridge: a callable (type, payload) -> reply dict that asks
+        # the agent host to act and waits for its answer. Set on the host
+        # side only; no request can supply or replace it.
+        self.host_bridge = None
         Path(receipt_log_path).parent.mkdir(parents=True, exist_ok=True)
 
     # ---- capability handlers -------------------------------------------------
@@ -398,7 +409,31 @@ class Broker:
             "stderr": result.stderr[-2000:],
         }
 
+    def _handle_host_request(self, params: dict) -> Any:
+        """Ask the agent host to act on the kernel's behalf (an RLM child, for
+        instance). The ceiling names the exact request types this session may
+        send; the host performs the effect, and its reply -- success or its
+        own error -- is the result."""
+        cap = self.ceiling.get("host_request")
+        if cap is None:
+            raise CapabilityDenied("host_request not in this session's ceiling")
+        rtype = params.get("type")
+        if not isinstance(rtype, str) or not rtype:
+            raise CapabilityDenied("host_request requires a non-empty string 'type'")
+        if rtype not in (cap.get("allowed_types") or []):
+            raise CapabilityDenied(f"host_request type {rtype!r} is not in this session's allowed_types")
+        payload = params.get("payload", {})
+        if not isinstance(payload, dict):
+            raise CapabilityDenied("host_request 'payload' must be an object")
+        if self.host_bridge is None:
+            raise CapabilityDenied("no agent host is attached to this session")
+        reply = self.host_bridge(rtype, payload)
+        if not isinstance(reply, dict) or reply.get("status") not in ("ok", "error"):
+            raise RuntimeError(f"host returned a malformed reply to {rtype!r}")
+        return reply
+
     HANDLERS = {
+        "host_request": _handle_host_request,
         "external_fs_write": _handle_external_fs_write,
         "network_access": _handle_network_access,
         "package_management": _handle_package_management,

@@ -23,6 +23,15 @@ Protocol (all newline-delimited JSON):
              `call` numbers a persistent turn; Neura.output(call) returns everything it printed.
   HELLO:     {"kind": "HELLO", "epoch": "...", "session_id": "..."}  -- printed once, at startup
 
+Mid-call host requests (kernel -> host, while a call runs):
+  Event:     {"event": "host_request", "id": "...", "data": {"type": "...", ...payload}}
+  Reply:     {"host_reply": "<id>", "reply": {"status": "ok", "result": ...} | {"status": "error", "error": "..."}}
+  The kernel reaches this only through its broker, and only for request types
+  its ceiling names (category `host_request`); see HostBridge below. A reply
+  may arrive while a call is still running, so stdin is read by its own
+  thread. A reply for an unknown or finished request is dropped; stdin closing
+  fails every waiting request.
+
 `ephemeral`/`ceiling` map directly onto `NeuraSession.turn()`'s own
 `ephemeral`/`ephemeral_ceiling` parameters -- see security/session.py for
 what they mean and why the default ceiling is `{}` (full language power,
@@ -39,8 +48,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import queue
 import signal
 import sys
+import threading
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -56,8 +68,90 @@ def _payload(value):
     return None
 
 
+_out_lock = threading.Lock()
+
+
 def _respond(resp: dict) -> None:
-    print(json.dumps(resp), flush=True)
+    # Responses (main thread) and host-request events (broker threads) share
+    # stdout; one lock keeps every line whole.
+    with _out_lock:
+        print(json.dumps(resp), flush=True)
+
+
+class HostBridge:
+    """The host half of mid-call requests: send a request event, wait for the
+    matching reply. Called from broker threads while the main thread is inside
+    a call."""
+
+    def __init__(self, timeout: float):
+        self.timeout = timeout
+        self._pending: dict[str, list] = {}
+        self._lock = threading.Lock()
+        self._closed = False
+
+    def __call__(self, rtype: str, payload: dict) -> dict:
+        rid = uuid.uuid4().hex
+        done = threading.Event()
+        slot = [done, None]
+        with self._lock:
+            if self._closed:
+                return {"status": "error", "error": "the agent host has closed its connection"}
+            self._pending[rid] = slot
+        try:
+            # The type goes last, so a payload key named "type" cannot reroute the request.
+            _respond({"event": "host_request", "id": rid, "data": {**payload, "type": rtype}})
+            if not done.wait(self.timeout):
+                return {"status": "error", "error": f"the agent host did not answer {rtype!r} within {self.timeout:g}s"}
+            return slot[1]
+        finally:
+            with self._lock:
+                self._pending.pop(rid, None)
+
+    def resolve(self, rid, reply) -> None:
+        with self._lock:
+            slot = self._pending.get(rid)
+        if slot is None:
+            return  # late, unknown or already timed out
+        if not isinstance(reply, dict) or reply.get("status") not in ("ok", "error"):
+            reply = {"status": "error", "error": "the agent host sent a malformed reply"}
+        slot[1] = reply
+        slot[0].set()
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            slots = list(self._pending.values())
+        for slot in slots:
+            slot[1] = {"status": "error", "error": "the agent host has closed its connection"}
+            slot[0].set()
+
+
+def _read_stdin(bridge: HostBridge, requests: queue.Queue) -> None:
+    """Route each stdin line: host replies to the bridge, everything else to
+    the main loop. None marks the end of input."""
+    try:
+        while True:
+            # NOT `for line in sys.stdin:` -- iterating stdin block-buffers on a
+            # pipe instead of yielding line by line, which hangs a live
+            # request/response protocol. readline() reads exactly one line.
+            line = sys.stdin.readline()
+            if not line:
+                break
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                msg = json.loads(stripped)
+            except json.JSONDecodeError as e:
+                requests.put(e)
+                continue
+            if isinstance(msg, dict) and "host_reply" in msg:
+                bridge.resolve(msg.get("host_reply"), msg.get("reply"))
+            else:
+                requests.put(msg)
+    finally:
+        bridge.close()
+        requests.put(None)
 
 
 def main() -> int:
@@ -112,30 +206,26 @@ def main() -> int:
         _respond({"kind": "ERROR", "error": f"failed to start NeuraSession: {e}"})
         return 1
 
+    # A host request must be answered (or given up on) before the call itself
+    # times out, so the kernel gets an error rather than being killed.
+    bridge = HostBridge(timeout=max(1.0, args.turn_timeout - 5.0))
+    session._broker.host_bridge = bridge
+    requests: queue.Queue = queue.Queue()
+    threading.Thread(target=_read_stdin, args=(bridge, requests), daemon=True).start()
+
     _respond({"kind": "HELLO", "epoch": session.epoch, "session_id": session.session_id,
               "revival": revival})
 
     try:
         while True:
-            # NOT `for line in sys.stdin:` -- confirmed by direct testing
-            # that iterating sys.stdin block-buffers on a pipe instead of
-            # yielding line by line, which is invisible for a "pipe
-            # everything then close" test but breaks a live interactive
-            # request/response protocol (a second write-then-read from the
-            # host process hung waiting for a line that had already
-            # arrived, sitting in the iterator's internal buffer instead
-            # of being handed back). readline() reads exactly one line and
-            # has no such buffering surprise.
-            line = sys.stdin.readline()
-            if not line:
+            req = requests.get()
+            if req is None:
                 break  # real EOF: the host process closed its end
-            line = line.strip()
-            if not line:
+            if isinstance(req, json.JSONDecodeError):
+                _respond({"request_id": None, "success": False, "data": None, "error": f"malformed request: {req}"})
                 continue
-            try:
-                req = json.loads(line)
-            except json.JSONDecodeError as e:
-                _respond({"request_id": None, "success": False, "data": None, "error": f"malformed request: {e}"})
+            if not isinstance(req, dict):
+                _respond({"request_id": None, "success": False, "data": None, "error": "request must be a JSON object"})
                 continue
 
             request_id = req.get("request_id")

@@ -580,6 +580,8 @@ function retain_output!(call::Int, text::String)
     return nothing
 end
 
+include("rlm.jl")
+
 """
     Api
 
@@ -590,6 +592,8 @@ found `reset_kernel_state()`, which silently discarded every binding, and
 """
 module Api
 import ..Neura
+host_request(rtype::AbstractString, payload::AbstractDict=Dict{String,Any}()) = Neura.host_request(rtype, payload)
+const rlm = Neura.rlm
 request_capability(category::String, params::Dict=Dict{String,Any}(); kwargs...) =
     Neura.request_capability(category, params; kwargs...)
 
