@@ -126,7 +126,7 @@ export interface AutoRefineReview {
 	instructions?: string;
 }
 
-const REFINEMENT_SYSTEM_PROMPT = `You are Prime Agent's /refine continual harness subsystem.
+const REFINEMENT_SYSTEM_PROMPT = `You are the agent harness's /refine continual harness subsystem.
 
 Your job is to improve the editable continual harness state from the current trajectory.
 This is similar in spirit to context compaction, but instead of summarizing the
@@ -178,7 +178,7 @@ JSON only with this exact shape:
   ]
 }`;
 
-const AUTO_REFINE_REVIEW_SYSTEM_PROMPT = `You are Prime Agent's automatic /refine review gate.
+const AUTO_REFINE_REVIEW_SYSTEM_PROMPT = `You are the agent harness's automatic /refine review gate.
 
 Decide whether this checkpoint should run /refine. Auto /refine writes local continual harness state by default, so approve when the trajectory contains evidence useful to this session's future turns.
 Reject one-off noise, unsupported hypotheses, and transient tool outputs. Ask for global refinement only for durable cross-session lessons or explicitly project-qualified lessons likely to be reused in future sessions.
