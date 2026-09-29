@@ -27,6 +27,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from host_adapter import session_cmd  # noqa: E402
+
 CLI = str(Path(__file__).resolve().parent / "session_cli.py")
 PROJECT_DIR = os.environ.get("NEURAJL_TEST_PROJECT_DIR", str(Path.home() / ".neurajl-trial/project"))
 
@@ -36,7 +39,7 @@ class Kernel:
 
     def __init__(self, workspace: str, state: str, timeout: float = 20, env: dict | None = None):
         self.proc = subprocess.Popen(
-            [sys.executable, CLI, "--project-dir", PROJECT_DIR, "--ceiling", "{}", "--workspace-dir", workspace,
+            [*session_cmd(), "--project-dir", PROJECT_DIR, "--ceiling", "{}", "--workspace-dir", workspace,
              "--turn-timeout", str(timeout), "--state-dir", state],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1,
             env={**os.environ, **(env or {})},

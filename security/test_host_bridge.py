@@ -20,7 +20,9 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import broker as _broker  # noqa: E402
+from host_adapter import session_cmd  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_session_cli import CLI, PROJECT_DIR, _skip_if_no_bwrap, _skip_if_no_project  # noqa: E402
 
 RLM_TYPES = ["rlm.run", "rlm.collect", "rlm.list_subagents"]
@@ -37,7 +39,7 @@ class Host:
     def __init__(self, ceiling: dict, turn_timeout: float = 20):
         self.workspace = tempfile.mkdtemp(prefix="neurajl-bridge-")
         self.proc = subprocess.Popen(
-            [sys.executable, CLI, "--project-dir", PROJECT_DIR, "--ceiling", json.dumps(ceiling),
+            [*session_cmd(), "--project-dir", PROJECT_DIR, "--ceiling", json.dumps(ceiling),
              "--workspace-dir", self.workspace, "--turn-timeout", str(turn_timeout)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
         )
@@ -197,45 +199,60 @@ class TestHostBridge(unittest.TestCase):
 
 
 class TestBrokerHostRequest(unittest.TestCase):
-    def broker(self, ceiling, bridge=None):
-        tmp = tempfile.mkdtemp(prefix="neurajl-broker-")
-        b = _broker.Broker(ceiling, os.path.join(tmp, "receipts.jsonl"), "s1")
-        b.host_bridge = bridge
-        return b
+    """The broker's host_request category on its own: a standalone broker has
+    no agent host attached, so these check the policy and the receipts."""
 
-    def receipts(self, b):
-        return [json.loads(l) for l in Path(b.receipt_log_path).read_text().splitlines()]
+    def request(self, sock, category, params):
+        import socket
+        s = socket.socket(socket.AF_UNIX)
+        s.connect(sock)
+        s.sendall((json.dumps({"id": "rq", "category": category, "params": params}) + "\n").encode())
+        resp = json.loads(s.makefile().readline())
+        s.close()
+        return resp
 
-    def test_every_request_is_receipted_approved_or_not(self):
-        b = self.broker({"host_request": {"allowed_types": ["rlm.run"]}}, lambda t, p: _ok(CHILD))
-        self.assertTrue(b.handle_request({"id": "a", "category": "host_request",
-                                          "params": {"type": "rlm.run", "payload": {}}})["approved"])
-        self.assertFalse(b.handle_request({"id": "b", "category": "host_request",
-                                           "params": {"type": "rlm.delete_subagent", "payload": {}}})["approved"])
-        rs = self.receipts(b)
-        self.assertEqual([(r["request_id"], r["approved"]) for r in rs], [("a", True), ("b", False)])
-        self.assertEqual(rs[0]["result"]["result"]["rlm_child_id"], "c1")
+    def test_policy_and_receipts_without_a_host(self):
+        from host_adapter import B
+        d = tempfile.mkdtemp(prefix="njl-hr-")
+        sock, receipts = os.path.join(d, "broker.sock"), os.path.join(d, "receipts.jsonl")
+        server, _ = B.serve(sock, {"host_request": {"allowed_types": ["rlm.run"]}}, receipts, "s1")
+        try:
+            r = self.request(sock, "host_request", {"type": "rlm.run", "payload": {}})
+            self.assertFalse(r["approved"])
+            self.assertIn("no agent host is attached", r["reason"])
+            r = self.request(sock, "host_request", {"type": "rlm.delete_subagent", "payload": {}})
+            self.assertIn("'rlm.delete_subagent' is not in this session's allowed_types", r["reason"])
+            r = self.request(sock, "host_request", {"type": "rlm.run", "payload": [1]})
+            self.assertIn("'payload' must be an object", r["reason"])
+            # A request cannot attach a host of its own.
+            r = self.request(sock, "host_request", {"type": "rlm.run", "payload": {}, "host_bridge": "x"})
+            self.assertFalse(r["approved"])
+        finally:
+            server.shutdown()
+            server.server_close()
+        rs = [json.loads(l) for l in Path(receipts).read_text().splitlines()]
+        self.assertEqual(len(rs), 4, "every request is receipted")
+        self.assertTrue(all(r["category"] == "host_request" and r["approved"] is False for r in rs))
 
-    def test_no_bridge_means_no_host(self):
-        b = self.broker({"host_request": {"allowed_types": ["rlm.run"]}})
-        r = b.handle_request({"category": "host_request", "params": {"type": "rlm.run", "payload": {}}})
-        self.assertFalse(r["approved"])
-        self.assertIn("no agent host is attached", r["reason"])
-
-    def test_a_request_cannot_supply_its_own_bridge(self):
-        called = []
-        b = self.broker({"host_request": {"allowed_types": ["rlm.run"]}})
-        r = b.handle_request({"category": "host_request",
-                              "params": {"type": "rlm.run", "payload": {}, "host_bridge": "x"}, "host_bridge": "x"})
-        self.assertFalse(r["approved"])
-        self.assertEqual(called, [])
+    def test_without_the_category_nothing_is_allowed(self):
+        from host_adapter import B
+        d = tempfile.mkdtemp(prefix="njl-hr-")
+        sock = os.path.join(d, "broker.sock")
+        server, _ = B.serve(sock, {}, os.path.join(d, "receipts.jsonl"), "s1")
+        try:
+            r = self.request(sock, "host_request", {"type": "rlm.run", "payload": {}})
+            self.assertIn("host_request not in this session's ceiling", r["reason"])
+        finally:
+            server.shutdown()
+            server.server_close()
 
     def test_child_types_must_be_an_explicit_subset(self):
+        from host_adapter import B
         parent = {"host_request": {"allowed_types": ["rlm.run", "rlm.collect"]}}
-        self.assertTrue(_broker.ceiling_is_subset({"host_request": {"allowed_types": ["rlm.collect"]}}, parent)[0])
-        self.assertFalse(_broker.ceiling_is_subset({"host_request": {"allowed_types": ["rlm.delete_subagent"]}}, parent)[0])
-        self.assertFalse(_broker.ceiling_is_subset({"host_request": {}}, parent)[0])
-        self.assertFalse(_broker.ceiling_is_subset({"host_request": {"allowed_types": ["rlm.run"]}}, {})[0])
+        self.assertTrue(B.ceiling_is_subset({"host_request": {"allowed_types": ["rlm.collect"]}}, parent)[0])
+        self.assertFalse(B.ceiling_is_subset({"host_request": {"allowed_types": ["rlm.delete_subagent"]}}, parent)[0])
+        self.assertFalse(B.ceiling_is_subset({"host_request": {}}, parent)[0])
+        self.assertFalse(B.ceiling_is_subset({"host_request": {"allowed_types": ["rlm.run"]}}, {})[0])
 
 
 if __name__ == "__main__":

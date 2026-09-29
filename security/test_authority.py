@@ -38,8 +38,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
-import broker as B
-from launch_worker import create_session_depot, run_worker
+# The broker and worker launcher under test: the Rust host when NEURAJL_HOST_BIN is set.
+from host_adapter import B, create_session_depot, run_worker  # noqa: E402
 
 REPO_DIR = str(Path(__file__).resolve().parent.parent)
 

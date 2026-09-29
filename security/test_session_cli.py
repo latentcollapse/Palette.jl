@@ -35,6 +35,9 @@ import unittest
 import uuid
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from host_adapter import session_cmd  # noqa: E402
+
 REPO_DIR = str(Path(__file__).resolve().parent.parent)
 CLI = str(Path(__file__).resolve().parent / "session_cli.py")
 PROJECT_DIR = os.environ.get(
@@ -106,7 +109,7 @@ class TestSessionCli(unittest.TestCase):
         self.task_workspace = tempfile.mkdtemp(prefix="neurajl-cli-task-")
         Path(self.task_workspace, "marker.txt").write_text("from-host")
         self.proc = subprocess.Popen(
-            [sys.executable, CLI, "--project-dir", PROJECT_DIR, "--ceiling", "{}",
+            [*session_cmd(), "--project-dir", PROJECT_DIR, "--ceiling", "{}",
              "--workspace-dir", self.task_workspace, "--turn-timeout", "20"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1,
@@ -680,7 +683,7 @@ class TestSessionCli(unittest.TestCase):
         tool.write_text("#!/bin/sh\necho task-tool-ran\n")
         tool.chmod(0o755)
         proc = subprocess.Popen(
-            [sys.executable, CLI, "--project-dir", PROJECT_DIR, "--ceiling", "{}",
+            [*session_cmd(), "--project-dir", PROJECT_DIR, "--ceiling", "{}",
              "--workspace-dir", self.task_workspace, "--turn-timeout", "20"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=True, bufsize=1, env={**os.environ, "NIRA_TASK_TOOLS": tools},
@@ -708,7 +711,7 @@ class TestSessionCli(unittest.TestCase):
         env_file = Path(tempfile.mkdtemp(prefix="neurajl-task-env-"), "task-env")
         env_file.write_text("# activation\nOCAMLLIB=/opt/ocaml/lib\nGREETING=a b=c\nPATH=/evil\nHOME=/evil\n\n")
         proc = subprocess.Popen(
-            [sys.executable, CLI, "--project-dir", PROJECT_DIR, "--ceiling", "{}",
+            [*session_cmd(), "--project-dir", PROJECT_DIR, "--ceiling", "{}",
              "--workspace-dir", self.task_workspace, "--turn-timeout", "20"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=True, bufsize=1, env={**os.environ, "NIRA_TASK_ENV": str(env_file)},
@@ -740,7 +743,7 @@ class TestSessionCli(unittest.TestCase):
             'name = "OrderedCollections"\nuuid = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"\nversion = "2.0.1"\n')
         Path(ws, "src", "OrderedCollections.jl").write_text("module OrderedCollections\nconst WORKSPACE_COPY = true\nend\n")
         proc = subprocess.Popen(
-            [sys.executable, CLI, "--project-dir", PROJECT_DIR, "--ceiling", "{}",
+            [*session_cmd(), "--project-dir", PROJECT_DIR, "--ceiling", "{}",
              "--workspace-dir", ws, "--turn-timeout", "60"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1,
         )

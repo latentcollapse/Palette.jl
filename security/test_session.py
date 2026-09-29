@@ -15,11 +15,17 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
-from session import NeuraSession, SessionDeadError
+from host_adapter import HOST_BIN  # noqa: E402
+
+if HOST_BIN:
+    from host_adapter import RustSession as NeuraSession, SessionDeadError  # noqa: E402
+else:
+    from session import NeuraSession, SessionDeadError  # noqa: E402
 
 REPO_DIR = str(Path(__file__).resolve().parent.parent)
 PROJECT_DIR = os.environ.get(
@@ -114,8 +120,13 @@ class TestSessionLifecycle(SessionTestCase):
     def test_killed_worker_is_detected_not_hung_or_silently_respawned(self):
         s = NeuraSession(project_dir=PROJECT_DIR, ceiling={})
         try:
-            s._proc.kill()
-            s._proc.wait()
+            if HOST_BIN:
+                for pid in s.worker_pids():
+                    os.kill(pid, 9)
+                time.sleep(1.0)
+            else:
+                s._proc.kill()
+                s._proc.wait()
             with self.assertRaises(SessionDeadError):
                 s.turn("1 + 1")
         finally:
@@ -127,13 +138,17 @@ class TestSessionLifecycle(SessionTestCase):
         deep = Path(tempfile.mkdtemp(prefix="neurajl-deep-")) / ("d" * 60) / ("e" * 60)
         s = NeuraSession(project_dir=PROJECT_DIR, ceiling={}, workspace_dir=str(deep))
         try:
-            sock_dir = s._broker_sock_dir
-            self.assertLessEqual(len(str(Path(sock_dir) / "broker.sock").encode()), 100)
+            if not HOST_BIN:
+                sock_dir = s._broker_sock_dir
+                self.assertLessEqual(len(str(Path(sock_dir) / "broker.sock").encode()), 100)
             self.assertEqual(s.turn("1 + 1")["data"], 2)
         finally:
             s.close()
+            if HOST_BIN:
+                self.assertFalse(deep.exists(), "the session's scratch root outlived it")
             shutil.rmtree(deep.parent.parent, ignore_errors=True)
-        self.assertFalse(Path(sock_dir).exists())
+        if not HOST_BIN:
+            self.assertFalse(Path(sock_dir).exists())
 
     def test_turn_after_close_raises(self):
         s = NeuraSession(project_dir=PROJECT_DIR, ceiling={})
@@ -151,10 +166,21 @@ class TestSessionLifecycle(SessionTestCase):
         _teardown() itself was also unsafe to call this early (it
         unconditionally referenced self._proc, which didn't exist yet) --
         both fixed together."""
-        import session as session_module
-
-        depot_root = os.path.expanduser("~/.neurajl-depot-clones")
+        depot_root = os.path.join(os.path.dirname(os.environ.get("JULIA_DEPOT_PATH", os.path.expanduser("~/.julia")).split(":")[-1]), ".neurajl-depot-clones")
         before = set(os.listdir(depot_root)) if os.path.isdir(depot_root) else set()
+        if HOST_BIN:
+            # A real failure just after the depot clone: a file where the
+            # broker's directory belongs.
+            root = Path(tempfile.mkdtemp(prefix="neurajl-fail-"))
+            (root / "broker").write_text("not a directory")
+            with self.assertRaises(SessionDeadError):
+                NeuraSession(project_dir=PROJECT_DIR, ceiling={}, workspace_dir=str(root))
+            after = set(os.listdir(depot_root)) if os.path.isdir(depot_root) else set()
+            self.assertEqual(after - before, set(), "depot clone leaked after a construction failure")
+            self.assertFalse(root.exists(), "scratch root leaked after a construction failure")
+            return
+
+        import session as session_module
 
         orig_serve = session_module._broker.serve
         session_module._broker.serve = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("simulated failure"))
