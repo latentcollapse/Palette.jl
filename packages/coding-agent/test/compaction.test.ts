@@ -10,6 +10,7 @@ import {
 	DEFAULT_COMPACTION_SETTINGS,
 	estimateContextTokens,
 	estimateSummaryRequestTokens,
+	estimateTokens,
 	findCutPoint,
 	prepareCompaction,
 	shouldCompact,
@@ -260,6 +261,17 @@ describe("findCutPoint", () => {
 		];
 		const result = findCutPoint(entries, 0, entries.length, 1500);
 		expect(result.firstKeptEntryIndex).toBeGreaterThanOrEqual(3);
+	});
+});
+
+describe("estimateTokens", () => {
+	it("counts encrypted reasoning, which the provider bills", () => {
+		const thinking = (signature?: string) =>
+			createAssistantMessage([
+				{ type: "thinking", thinking: "t".repeat(400), ...(signature ? { thinkingSignature: signature } : {}) },
+			] as AssistantMessage["content"]);
+		expect(estimateTokens(thinking())).toBe(100);
+		expect(estimateTokens(thinking("s".repeat(8000)))).toBe(1100);
 	});
 });
 

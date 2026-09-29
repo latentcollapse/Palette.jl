@@ -246,16 +246,20 @@ export function estimateTokens(message: AgentMessage): number {
 		}
 		case "assistant": {
 			const assistant = message as AssistantMessage;
+			let signatureChars = 0;
 			for (const block of assistant.content) {
 				if (block.type === "text") {
 					chars += block.text.length;
 				} else if (block.type === "thinking") {
 					chars += block.thinking.length;
+					// Encrypted reasoning goes back to the provider and is billed. Fit on
+					// tin4's billed input: about one token per 7.7 signature characters.
+					if (block.thinkingSignature) signatureChars += block.thinkingSignature.length;
 				} else if (block.type === "toolCall") {
 					chars += block.name.length + JSON.stringify(block.arguments).length;
 				}
 			}
-			return Math.ceil(chars / 4);
+			return Math.ceil(chars / 4) + Math.ceil(signatureChars / 8);
 		}
 		case "custom":
 		case "toolResult": {
