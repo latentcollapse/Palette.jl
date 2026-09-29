@@ -1,0 +1,2 @@
+This repository is the OrderedCollections.jl Julia package; its tests are in test/ (run with test/runtests.jl). Several tests fail.
+Find and fix the bugs in src/ without changing the tests. Then add a function OrderedCollections.move_to_end!(d::OrderedDict, key) that moves an existing key and its value to the end of the iteration order and returns d (a KeyError if the key is missing). Give it a docstring, export it, and add tests for it to test/test_ordered_dict.jl. The whole test suite must pass at the end.

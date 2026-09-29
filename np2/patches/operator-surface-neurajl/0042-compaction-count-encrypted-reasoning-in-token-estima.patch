@@ -1,0 +1,81 @@
+From 326061256303fd83845737b5833e0b6946368f70 Mon Sep 17 00:00:00 2001
+From: Matt C <latentcollapse@gmail.com>
+Date: Mon, 28 Sep 2026 20:09:36 -0400
+Subject: [PATCH 42/45] compaction: count encrypted reasoning in token
+ estimates
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+OpenAI bills the thinkingSignature it is sent back. On tin4's first 53
+consecutive requests, billed input growth fits text plus signatures
+(R² 0.958; about one token per 7.7 signature characters) and text alone
+poorly (R² 0.546). The estimate ignored signatures, which there outweighed
+the text 258k to 192k characters, so kept-tail budgets ran about a third
+over. Red control: the new test fails without the change.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../coding-agent/src/core/compaction/compaction.ts   |  6 +++++-
+ packages/coding-agent/test/compaction.test.ts        | 12 ++++++++++++
+ 2 files changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/packages/coding-agent/src/core/compaction/compaction.ts b/packages/coding-agent/src/core/compaction/compaction.ts
+index fd31b6829..e4fb44e86 100644
+--- a/packages/coding-agent/src/core/compaction/compaction.ts
++++ b/packages/coding-agent/src/core/compaction/compaction.ts
+@@ -246,16 +246,20 @@ export function estimateTokens(message: AgentMessage): number {
+ 		}
+ 		case "assistant": {
+ 			const assistant = message as AssistantMessage;
++			let signatureChars = 0;
+ 			for (const block of assistant.content) {
+ 				if (block.type === "text") {
+ 					chars += block.text.length;
+ 				} else if (block.type === "thinking") {
+ 					chars += block.thinking.length;
++					// Encrypted reasoning goes back to the provider and is billed. Fit on
++					// tin4's billed input: about one token per 7.7 signature characters.
++					if (block.thinkingSignature) signatureChars += block.thinkingSignature.length;
+ 				} else if (block.type === "toolCall") {
+ 					chars += block.name.length + JSON.stringify(block.arguments).length;
+ 				}
+ 			}
+-			return Math.ceil(chars / 4);
++			return Math.ceil(chars / 4) + Math.ceil(signatureChars / 8);
+ 		}
+ 		case "custom":
+ 		case "toolResult": {
+diff --git a/packages/coding-agent/test/compaction.test.ts b/packages/coding-agent/test/compaction.test.ts
+index 1c8eddb33..c19bb63cf 100644
+--- a/packages/coding-agent/test/compaction.test.ts
++++ b/packages/coding-agent/test/compaction.test.ts
+@@ -10,6 +10,7 @@ import {
+ 	DEFAULT_COMPACTION_SETTINGS,
+ 	estimateContextTokens,
+ 	estimateSummaryRequestTokens,
++	estimateTokens,
+ 	findCutPoint,
+ 	prepareCompaction,
+ 	shouldCompact,
+@@ -263,6 +264,17 @@ describe("findCutPoint", () => {
+ 	});
+ });
+ 
++describe("estimateTokens", () => {
++	it("counts encrypted reasoning, which the provider bills", () => {
++		const thinking = (signature?: string) =>
++			createAssistantMessage([
++				{ type: "thinking", thinking: "t".repeat(400), ...(signature ? { thinkingSignature: signature } : {}) },
++			] as AssistantMessage["content"]);
++		expect(estimateTokens(thinking())).toBe(100);
++		expect(estimateTokens(thinking("s".repeat(8000)))).toBe(1100);
++	});
++});
++
+ describe("prepareCompaction with small sessions", () => {
+ 	it("returns undefined when everything fits in the keep-recent window", () => {
+ 		// Session well under keepRecentTokens (20k default): nothing to summarize,
+-- 
+2.55.0
+

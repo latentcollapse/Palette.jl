@@ -1,0 +1,13 @@
+New task, in the same repository. Port: module PyGraphlib in ports/graphlib.jl. Python's graphlib.TopologicalSorter, with its exact output order. graph is a vector of [node, [predecessors...]] pairs, applied as successive ts.add(node, *predecessors) calls in order (a node may appear more than once). static_order is the order static_order() yields; ready_batches is what successive get_ready() calls return when each whole batch is marked done before the next call. A cycle throws.
+
+Functions:
+  - static_order(graph) -> Vector{String}
+  - ready_batches(graph) -> vector of Vector{String}
+
+A few examples (arguments shown as JSON):
+  static_order([["d", ["b", "c"]], ["b", ["a"]], ["c", ["a"]]]) -> ["a", "b", "c", "d"]
+  ready_batches([["d", ["b", "c"]], ["b", ["a"]], ["c", ["a"]]]) -> [["a"], ["b", "c"], ["d"]]
+  static_order([["a", []]]) -> ["a"]
+  static_order([["x", ["y"]], ["y", ["x"]]]) -> throws
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

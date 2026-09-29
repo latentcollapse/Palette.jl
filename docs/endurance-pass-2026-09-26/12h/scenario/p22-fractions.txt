@@ -1,0 +1,18 @@
+New task, in the same repository. Port: module PyFractions in ports/fractions.jl. Python's fractions.Fraction, with fractions written as Python's str() writes them ("n/d" in lowest terms with the sign on the numerator, or just "n" when the denominator is 1). Parsing accepts everything Fraction(str) accepts ("3/4", " -1.25 ", "1e-3", "1_000/3") and throws on the rest. Numerators can exceed Int64. round uses round-half-even; ndigits === nothing returns an integer.
+
+Functions:
+  - fraction(s) -> String
+  - add(a, b)
+  - mul(a, b)
+  - div(a, b) (division by zero throws)
+  - limit_denominator(s, max_den::Integer)
+  - from_float(x::Float64) (exact binary value)
+  - fraction_round(s, ndigits)
+
+A few examples (arguments shown as JSON):
+  fraction("3/4") -> "3/4"
+  fraction("-6/8") -> "-3/4"
+  fraction(" 7 ") -> "7"
+  fraction("3/0") -> throws
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

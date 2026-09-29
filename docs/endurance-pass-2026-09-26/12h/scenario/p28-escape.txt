@@ -1,0 +1,15 @@
+New task, in the same repository. Port: module PyEscape in ports/escape.jl. Python's html.escape and html.unescape (all HTML5 named character references, including the ones matched without a trailing semicolon, numeric references with invalid and Windows-1252-remapped code points, exactly as Python 3.14 does it), and xml.sax.saxutils escape/unescape/quoteattr with no extra entities.
+
+Functions:
+  - html_escape(s, quote::Bool)
+  - html_unescape(s)
+  - sax_escape(s)
+  - sax_unescape(s)
+  - quoteattr(s)
+
+A few examples (arguments shown as JSON):
+  html_unescape("<a href=\"x\">'&'</a>") -> "<a href=\"x\">'&'</a>"
+  sax_escape("<a href=\"x\">'&'</a>") -> "&lt;a href=\"x\"&gt;'&amp;'&lt;/a&gt;"
+  sax_unescape("<a href=\"x\">'&'</a>") -> "<a href=\"x\">'&'</a>"
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

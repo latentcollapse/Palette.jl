@@ -1,0 +1,14 @@
+New task, in the same repository. Port: module PyEmailUtils in ports/emailutils.jl. Python 3.14's email.utils address and date helpers: parseaddr (strict mode, the default, which returns ["", ""] for anything it rejects), formataddr of [realname, address] (quoting as Python does; only ASCII names are tested), parsedate_tz (returns nothing on failure, otherwise a 10-element vector as Python's tuple, with the offset in seconds or nothing), and getaddresses over a vector of header values (strict mode).
+
+Functions:
+  - parseaddr(s) -> [realname, address]
+  - formataddr(pair) -> String
+  - parsedate(s) -> Vector or nothing
+  - getaddresses(fields) -> vector of [realname, address]
+
+A few examples (arguments shown as JSON):
+  parseaddr("John Doe <jdoe@example.com>") -> ["John Doe", "jdoe@example.com"]
+  parseaddr("jdoe@example.com") -> ["", "jdoe@example.com"]
+  parseaddr("\"Doe, John\" <jdoe@example.com>") -> ["Doe, John", "jdoe@example.com"]
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

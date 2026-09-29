@@ -1,0 +1,9 @@
+name = "JSON5Lite"
+uuid = "5e2c1d3a-7b4f-4c8e-9a1d-2f6b8e0c4a71"
+version = "0.1.0"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]

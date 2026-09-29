@@ -272,3 +272,37 @@ git pull --rebase && git push
 ### User override
 
 If the user instructions conflict with rules set out here, ask for confirmation that they want to override the rules. Only then execute their instructions.
+
+---
+
+## Palette operator surface
+
+The Palette operator surface lives in this repository, not beside it. Layout:
+
+| Path | What it is |
+| --- | --- |
+| `src/` | The `Neura` Julia package — kernel session, turns, revival, RLM, workspace map |
+| `host/` | The `palette-host` Rust crate — sandbox launcher, persistent session, capability broker |
+| `security/` | Python broker, session CLI, bwrap launcher, depot prewarm |
+| `np2/patches/` | The patch chain that implants the operator surface into the chassis |
+| `drivers/` | Scored experiment drivers (endurance, duel pilots) |
+| `research/workloads/` | Benchmarks and the controls they are graded against |
+
+### Still binding
+
+- **No fake verification.** Never report a passing run that did not happen. A
+  failing test is a finding; record it rather than working around it.
+- **Tests drive real entry points.** A test that stubs the thing it claims to
+  test is not a test.
+- **Unbounded power, extremely bounded authority.** Competence is not
+  authorization. `exec(...)` (structured) stays distinct from `bash(...)`.
+- **Small reversible commits.**
+- **Prefer Julia-native APIs** over wrapping `Base` merely to add lines.
+
+### Superseded
+
+The operator surface was originally developed as an isolated lab under explicit
+prohibitions that no longer apply — chiefly "do not integrate with Prime Agent."
+This repository is that integration. The historical charter is kept at
+`docs/AGENT_CHARTER_OPERATOR_SURFACE_HISTORICAL.md` for the record; read it for
+provenance, not for instructions.

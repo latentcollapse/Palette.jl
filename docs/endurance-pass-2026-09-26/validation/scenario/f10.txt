@@ -1,0 +1,1 @@
+Maintenance, in the same repository: add tests for the edge cases of every function added in ISSUES.md that are not yet covered (empty dicts, single entries, keys of different types, very large dicts), so each added function has at least three edge-case tests. Keep the full test suite passing and say when the task is complete.

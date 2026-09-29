@@ -1,0 +1,1 @@
+Maintenance, in the same repository: profile move_to_end!, popat!, insert_at! and rotate! on an OrderedDict with 100,000 entries and make any of them that is slower than O(n) per call at most O(n). Add a benchmark script bench/bench_all.jl that times each on 100,000 entries. Keep the full OrderedCollections test suite passing and say when the task is complete.

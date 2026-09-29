@@ -1,0 +1,138 @@
+name: Julia CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Julia
+      uses: julia-actions/setup-julia@v2
+      with:
+        version: '1.12'
+
+    - name: Instantiate project
+      run: julia --project=@. -e 'using Pkg; Pkg.instantiate()'
+
+    - name: Test the static analysis preflight tool itself
+      run: python3 test_julia_analyzer.py
+
+    - name: Run static analysis preflight
+      run: python3 julia_analyzer.py src/Neura.jl --verbose
+
+    - name: Build package
+      run: julia --project=@. -e 'using Pkg; Pkg.build()'
+
+    - name: Run tests
+      run: julia --project=@. -e 'using Pkg; Pkg.test()'
+
+    - name: Run Aqua.jl quality checks
+      run: |
+        julia -e '
+          using Pkg
+          Pkg.activate(temp=true)
+          Pkg.develop(path=".")
+          Pkg.add("Aqua")
+          using Aqua
+          using Neura
+          Aqua.test_all(Neura)
+        '
+
+    - name: Run JET.jl type checking (optional)
+      continue-on-error: true
+      run: |
+        julia --project=@. -e '
+          using Pkg
+          Pkg.add("JET")
+          using JET
+          using Neura
+          JET.test_package(Neura)
+        '
+
+  ijulia-integration:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Julia
+      uses: julia-actions/setup-julia@v2
+      with:
+        version: '1.12'
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Build a Julia environment with Neura + IJulia
+      run: |
+        julia -e '
+          using Pkg
+          Pkg.activate("ijulia-env")
+          Pkg.develop(path=".")
+          Pkg.add("IJulia")
+        '
+
+    - name: Install the kernelspec (isolated Jupyter data dir)
+      run: |
+        mkdir -p "$GITHUB_WORKSPACE/jupyter-data"
+        JUPYTER_DATA_DIR="$GITHUB_WORKSPACE/jupyter-data" julia --project=ijulia-env -e '
+          using IJulia
+          IJulia.installkernel("PaletteTest", "--project=$(abspath("ijulia-env"))")
+        '
+
+    - name: Install jupyter_client
+      run: pip install jupyter_client
+
+    - name: Run the real Jupyter-wire-protocol proof (a live IJulia kernel, real ZMQ)
+      run: |
+        JUPYTER_DATA_DIR="$GITHUB_WORKSPACE/jupyter-data" JUPYTER_PATH="$GITHUB_WORKSPACE/jupyter-data" \
+          python3 scripts/real_ijulia_proof.py
+
+  security-suite:
+    # Was missing entirely -- neither security/test_authority.py nor
+    # security/test_session.py ran anywhere in CI, despite being this
+    # project's actual authority-fence and persistent-session evidence.
+    # Found by external review, confirmed real: a regression in either
+    # file could land on main unnoticed by anything automated.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Julia
+      uses: julia-actions/setup-julia@v2
+      with:
+        version: '1.12'
+
+    - name: Install bubblewrap
+      run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
+    - name: Build a Julia dev environment with Neura + IJulia
+      run: |
+        julia -e '
+          using Pkg
+          Pkg.activate("security-test-env")
+          Pkg.develop(path=".")
+          Pkg.add("IJulia")
+          Pkg.instantiate()
+        '
+
+    - name: Run the authority-fence suite
+      env:
+        PALETTE_TEST_PROJECT_DIR: ${{ github.workspace }}/security-test-env
+      run: python3 security/test_authority.py -v
+
+    - name: Run the persistent-session suite
+      env:
+        PALETTE_TEST_PROJECT_DIR: ${{ github.workspace }}/security-test-env
+      run: python3 security/test_session.py -v

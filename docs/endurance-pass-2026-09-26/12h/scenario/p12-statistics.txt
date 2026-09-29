@@ -1,0 +1,26 @@
+New task, in the same repository. Port: module PyStatistics in ports/statistics.jl. Python's statistics module. Results are compared numerically (relative tolerance 1e-9), so exact-fraction arithmetic is not required, but every edge case is: empty or too-short data throws, mode/multimode on strings, median_grouped with an interval, quantiles with method "exclusive" or "inclusive", harmonic_mean with zeros, geometric_mean of non-positive data throws.
+
+Functions:
+  - mean(data)
+  - fmean(data)
+  - median(data)
+  - median_low(data)
+  - median_high(data)
+  - mode(data)
+  - multimode(data)
+  - pvariance(data)
+  - variance(data)
+  - pstdev(data)
+  - stdev(data)
+  - harmonic_mean(data)
+  - geometric_mean(data)
+  - median_grouped(data, interval)
+  - quantiles(data, n::Integer, method::AbstractString) -> Vector
+
+A few examples (arguments shown as JSON):
+  mean([1, 2, 3, 4, 4]) -> 2.8
+  fmean([1, 2, 3, 4, 4]) -> 2.8
+  median([1, 2, 3, 4, 4]) -> 3
+  variance([7]) -> throws
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

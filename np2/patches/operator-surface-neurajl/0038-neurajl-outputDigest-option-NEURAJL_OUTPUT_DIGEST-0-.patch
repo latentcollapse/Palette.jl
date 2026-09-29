@@ -1,0 +1,75 @@
+From a28e38746f6e98b153916b498ce3ee90fd12e717 Mon Sep 17 00:00:00 2001
+From: Matt C <latentcollapse@gmail.com>
+Date: Mon, 28 Sep 2026 03:36:43 -0400
+Subject: [PATCH 38/45] neurajl: outputDigest option (NEURAJL_OUTPUT_DIGEST=0)
+ turns the kernel's digest off for an A/B
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ packages/coding-agent/src/core/tools/neurajl.ts | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/packages/coding-agent/src/core/tools/neurajl.ts b/packages/coding-agent/src/core/tools/neurajl.ts
+index c38648396..aa304110b 100644
+--- a/packages/coding-agent/src/core/tools/neurajl.ts
++++ b/packages/coding-agent/src/core/tools/neurajl.ts
+@@ -102,6 +102,8 @@ export interface NeurajlToolOptions {
+ 	 * NEURAJL_WORKSPACE_MAP=0.
+ 	 */
+ 	workspaceMap?: boolean;
++	/** Open long failing build/test output with a digest of its errors. Default: true, unless NEURAJL_OUTPUT_DIGEST=0. */
++	outputDigest?: boolean;
+ 	/**
+ 	 * Stop a kernel that has had no call for this long; the next call revives its saved state. Only applies
+ 	 * when state is saved (stateRoot is not false). A finished RLM child is kept for the parent's lifetime,
+@@ -122,7 +124,7 @@ interface NeurajlKernel {
+ 	isDead: () => boolean;
+ 	turn: (
+ 		code: string,
+-		options: { ephemeral?: boolean; payload?: string | Record<string, string>; map?: boolean },
++		options: { ephemeral?: boolean; payload?: string | Record<string, string>; map?: boolean; digest?: boolean },
+ 		signal: AbortSignal | undefined,
+ 	) => Promise<Record<string, unknown>>;
+ 	dispose: () => Promise<void>;
+@@ -297,7 +299,7 @@ async function startKernel(
+ 		epoch: String(hello.epoch),
+ 		revival: hello.revival === true,
+ 		isDead: () => deadReason !== undefined,
+-		turn: (code, { ephemeral, payload, map }, signal) => {
++		turn: (code, { ephemeral, payload, map, digest }, signal) => {
+ 			if (deadReason !== undefined) return Promise.reject(new Error(deadReason));
+ 			if (signal?.aborted) return Promise.reject(new Error("neurajl: aborted"));
+ 			const requestId = String(++nextRequestId);
+@@ -305,6 +307,7 @@ async function startKernel(
+ 			if (ephemeral) request.ephemeral = true;
+ 			if (payload !== undefined) request.payload = payload;
+ 			if (map) request.map = true;
++			if (digest === false) request.digest = false;
+ 			return new Promise<Record<string, unknown>>((resolve, reject) => {
+ 				// The protocol is one request, one response, in order. A turn
+ 				// abandoned mid-flight leaves the kernel busy with no way to
+@@ -389,6 +392,7 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
+ 		// The workspace map opens the session's first result and the first
+ 		// after each compaction (NEURAJL_WORKSPACE_MAP=0 turns it off for an A/B).
+ 		const mapEnabled = options?.workspaceMap ?? process.env.NEURAJL_WORKSPACE_MAP !== "0";
++		const digestEnabled = options?.outputDigest ?? process.env.NEURAJL_OUTPUT_DIGEST !== "0";
+ 		let mapNext = mapEnabled;
+ 		const lostBindings = () => (lastBindings.length === 0 ? "" : ` Lost bindings: ${lastBindings.join(", ")}.`);
+ 		const stoppedNotice = () => (stateDir ? KERNEL_STOPPED_REVIVING : `${KERNEL_STOPPED}${lostBindings()}`);
+@@ -458,7 +462,12 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
+ 					try {
+ 						response = await kernel.turn(
+ 							params.code,
+-							{ ephemeral: params.ephemeral, payload: params.payload, map: mapNext && !params.ephemeral },
++							{
++								ephemeral: params.ephemeral,
++								payload: params.payload,
++								map: mapNext && !params.ephemeral,
++								digest: digestEnabled,
++							},
+ 							signal,
+ 						);
+ 						if (!params.ephemeral) mapNext = false;
+-- 
+2.55.0
+

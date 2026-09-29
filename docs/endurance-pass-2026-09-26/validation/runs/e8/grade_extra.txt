@@ -1,0 +1,3 @@
+textkit: golden 48/61, wrap_paragraphs WRONG, suite FAIL
+json5: valid 0/50, invalid rejected with ParseError 0/20
+toml: valid 0/45, invalid rejected with ParseError 0/15

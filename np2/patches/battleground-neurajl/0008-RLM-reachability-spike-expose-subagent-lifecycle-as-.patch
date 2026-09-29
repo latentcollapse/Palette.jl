@@ -1,0 +1,395 @@
+From d4215d3c5e016d00f87c40a6e3690a8998d8dcbf Mon Sep 17 00:00:00 2001
+From: Matt C <latentcollapse@gmail.com>
+Date: Tue, 22 Sep 2026 05:17:15 -0400
+Subject: [PATCH 08/10] RLM reachability spike: expose subagent lifecycle as a
+ host tool
+
+rlm.spawn/rlm.run (and list/collect/delete/find_models/progress_note/
+create_session) were only reachable through _createKernelHostHandlers,
+dispatched over the ipython kernel's comm channel -- unreachable from
+a NEURA-only (baseToolsOverride) session with no kernel constructed.
+The underlying methods (runRlmChild etc.) were already substrate-
+neutral; only the RPC transport was kernel-bound, same shape as
+agent_observe/agent_message before their Phase 1 extraction.
+
+Adds a new "rlm" tool (tools/rlm.ts) covering the same 7 operations
+the kernel bridge exposes, no new protocol invented. Wired via a new
+RlmLifecycleHost interface (rlm-runtime.ts) that AgentSession already
+satisfies structurally -- zero changes to _startRlmChildRun or any
+other part of the deep spawn implementation. Registration in
+_buildRuntime is the only agent-session.ts change: 7 net lines.
+
+Verified two generations deep: a NEURA child can spawn its own NEURA
+grandchild through the tool with no silent ipython reappearance and
+no silent zero-tool child. 9 new tests; 96/96 in the edited file,
+126/126 across neurabash-substrate-modes/daemon-mode/rlm-collect/
+rlm-progress-notes/rlm-ledger (no regressions).
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+---
+ .../coding-agent/src/core/agent-session.ts    |   7 +
+ packages/coding-agent/src/core/rlm-runtime.ts |  20 +++
+ packages/coding-agent/src/core/tools/rlm.ts   | 152 ++++++++++++++++++
+ .../test/agent-session-recursion.test.ts      | 134 +++++++++++++++
+ 4 files changed, 313 insertions(+)
+ create mode 100644 packages/coding-agent/src/core/tools/rlm.ts
+
+diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
+index 7c69eb1d8..3ce035b78 100644
+--- a/packages/coding-agent/src/core/agent-session.ts
++++ b/packages/coding-agent/src/core/agent-session.ts
+@@ -344,6 +344,7 @@ import { createAgentObserveToolDefinition } from "./tools/agent-observe.js";
+ import { type BashOperations, createLocalBashOperations } from "./tools/bash.js";
+ import { createAllToolDefinitions } from "./tools/index.js";
+ import { IpythonKernelProvisioner } from "./tools/ipython.js";
++import { createRlmToolDefinition } from "./tools/rlm.js";
+ import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.js";
+ import {
+ 	addAssistantUsage,
+@@ -10407,6 +10408,12 @@ export class AgentSession {
+ 				createAgentMessageToolDefinition(this._agentMessageController) as ToolDefinition,
+ 			);
+ 		}
++		// RLM subagent lifecycle (spawn/list/collect/delete/find_models/
++		// progress_note/create_session) as a host service — see tools/rlm.ts.
++		// Unconditional, matching _createKernelHostHandlers's own rlm.* handlers,
++		// which are likewise never gated on a controller: `this` (AgentSession)
++		// structurally satisfies RlmLifecycleHost already, no new state needed.
++		this._baseToolDefinitions.set("rlm", createRlmToolDefinition(this) as ToolDefinition);
+ 
+ 		const extensionsResult = this._resourceLoader.getExtensions();
+ 		if (options.flagValues) {
+diff --git a/packages/coding-agent/src/core/rlm-runtime.ts b/packages/coding-agent/src/core/rlm-runtime.ts
+index aa9d940f8..dea01bdf6 100644
+--- a/packages/coding-agent/src/core/rlm-runtime.ts
++++ b/packages/coding-agent/src/core/rlm-runtime.ts
+@@ -505,3 +505,23 @@ export interface SubagentRuntimeHost {
+ 	deleteRlmSubagentRuntime(childId: string, session?: AgentSession): Promise<void>;
+ 	disposeRlmSubagentRuntimes?(): Promise<void>;
+ }
++
++/**
++ * The RLM subagent lifecycle surface a session exposes to itself — the exact
++ * operation set `_createKernelHostHandlers` already wires to the kernel comm
++ * channel (`rlm.run`, `rlm.create_session`, `rlm.list_subagents`,
++ * `rlm.collect`, `rlm.delete_subagent`, `rlm.find_models`,
++ * `rlm.progress.note`), named here only so a substrate-neutral tool can
++ * depend on the interface instead of the concrete `AgentSession` class.
++ * `AgentSession` satisfies this structurally already; no change to its
++ * implementation is required.
++ */
++export interface RlmLifecycleHost {
++	runRlmChild(prompt: string, kwargs?: Record<string, unknown>, cellSourceCode?: string): Promise<RlmSpawnHandle>;
++	createRlmSession(prompt: string, kwargs?: Record<string, unknown>): Promise<RlmCreateSessionResult>;
++	listRlmSubagents(): Promise<RlmListSubagentsResult>;
++	collectRlmChildren(targets: string[], timeoutMs: number): Promise<RlmCollectResult>;
++	deleteRlmSubagent(target: string): Promise<RlmDeleteSubagentResult>;
++	findRlmModels(query: string, limit: number): Promise<RlmFindModelsResult>;
++	noteRlmProgress(message: string): RlmProgressNoteResult;
++}
+diff --git a/packages/coding-agent/src/core/tools/rlm.ts b/packages/coding-agent/src/core/tools/rlm.ts
+new file mode 100644
+index 000000000..0b053bce8
+--- /dev/null
++++ b/packages/coding-agent/src/core/tools/rlm.ts
+@@ -0,0 +1,152 @@
++/**
++ * Host service: RLM subagent lifecycle, reachable without an ipython kernel.
++ *
++ * NIRA-Prime RLM reachability spike. `_startRlmChildRun` and its siblings
++ * (createRlmSession/listRlmSubagents/collectRlmChildren/deleteRlmSubagent/
++ * findRlmModels/noteRlmProgress) were already substrate-neutral business
++ * logic on AgentSession — the only thing tying subagent lifecycle to Python
++ * was that the model could only reach it through _createKernelHostHandlers,
++ * dispatched over the kernel's comm channel. This tool is the same seven
++ * operations (the exact rlm.* set the kernel bridge already exposes: run,
++ * create_session, list_subagents, collect, delete_subagent, find_models,
++ * progress.note) reachable as an ordinary tool call instead, so a NEURA-mode
++ * session (no kernel constructed at all) can spawn and manage children.
++ *
++ * Business logic is untouched: this calls the exact same public
++ * AgentSession methods the kernel bridge calls (runRlmChild, not
++ * _startRlmChildRun directly). Nothing about spawn/collect/cancel semantics
++ * changed, only how the model reaches them. In particular, child construction
++ * (_createInlineRlmSubagentRuntime / daemon-mode's admitRlmSubagentRuntime)
++ * is not touched by this file at all.
++ */
++import type { AgentTool } from "@earendil-works/pi-agent-core";
++import { type Static, Type } from "typebox";
++import type { ToolDefinition } from "../extensions/types.js";
++import { DEFAULT_RLM_MODEL_SEARCH_LIMIT, MAX_RLM_MODEL_SEARCH_LIMIT, type RlmLifecycleHost } from "../rlm-runtime.js";
++import { wrapToolDefinition } from "./tool-definition-wrapper.js";
++
++const RLM_COLLECT_MAX_TIMEOUT_MS = 2_147_483_647;
++
++const rlmSchema = Type.Object({
++	action: Type.Union([
++		Type.Literal("spawn"),
++		Type.Literal("create_session"),
++		Type.Literal("list"),
++		Type.Literal("collect"),
++		Type.Literal("delete"),
++		Type.Literal("find_models"),
++		Type.Literal("progress_note"),
++	]),
++	prompt: Type.Optional(Type.String({ description: "Task prompt. Required for 'spawn' and 'create_session'." })),
++	name: Type.Optional(
++		Type.String({ description: "Requested session name. Optional for 'spawn' and 'create_session'." }),
++	),
++	model: Type.Optional(
++		Type.String({
++			description:
++				"Model selector, e.g. 'anthropic/claude-sonnet-4-5'. Optional for 'spawn' and 'create_session'; defaults to this session's subagent default.",
++		}),
++	),
++	thinking: Type.Optional(
++		Type.String({ description: "Thinking level for the new session. Optional for 'spawn' and 'create_session'." }),
++	),
++	cwd: Type.Optional(
++		Type.String({ description: "Working directory for the new top-level session. Only used by 'create_session'." }),
++	),
++	target: Type.Optional(Type.String({ description: "Child id or name. Required for 'delete'." })),
++	targets: Type.Optional(
++		Type.Array(Type.String(), {
++			description: "Child ids or names. For 'collect': omitted or empty means all direct children.",
++		}),
++	),
++	timeout_ms: Type.Optional(
++		Type.Number({
++			description:
++				"For 'collect': milliseconds to wait for the targeted children to settle before returning current snapshots. Default 0 (immediate snapshot, never blocks).",
++		}),
++	),
++	query: Type.Optional(Type.String({ description: "Search text. Required for 'find_models'." })),
++	limit: Type.Optional(Type.Number({ description: "Max results. For 'find_models'." })),
++	message: Type.Optional(Type.String({ description: "Progress text. Required for 'progress_note'." })),
++});
++
++export type RlmToolInput = Static<typeof rlmSchema>;
++
++export interface RlmToolDetails {
++	action: RlmToolInput["action"];
++}
++
++export function createRlmToolDefinition(host: RlmLifecycleHost): ToolDefinition<typeof rlmSchema, RlmToolDetails> {
++	return {
++		name: "rlm",
++		label: "rlm",
++		description:
++			"Manage subagents (child sessions) under this session's control: spawn one to work a task in the background, list the current roster, collect results (optionally waiting for settlement), cancel one, search available models, or create a new top-level sibling session. A spawned child is a new principal with its own model and tool access, not a shared execution context. Available regardless of which execution substrate (if any) is active in this session or in the child — this is host lifecycle state, not something any compute tool owns.",
++		promptSnippet: "rlm - spawn/list/collect/cancel subagents, independent of code-execution substrate",
++		parameters: rlmSchema,
++		execute: async (_toolCallId, params) => {
++			// Errors are thrown, not returned as an isError flag: AgentToolResult
++			// has no such field. Matches agent-observe.ts/bash.ts's convention.
++			let result: unknown;
++			switch (params.action) {
++				case "spawn": {
++					if (!params.prompt) throw new Error("rlm 'spawn' requires 'prompt'");
++					const kwargs: Record<string, unknown> = {};
++					if (params.name !== undefined) kwargs.name = params.name;
++					if (params.model !== undefined) kwargs.model = params.model;
++					if (params.thinking !== undefined) kwargs.thinking = params.thinking;
++					result = await host.runRlmChild(params.prompt, kwargs);
++					break;
++				}
++				case "create_session": {
++					if (!params.prompt) throw new Error("rlm 'create_session' requires 'prompt'");
++					const kwargs: Record<string, unknown> = {};
++					if (params.name !== undefined) kwargs.name = params.name;
++					if (params.model !== undefined) kwargs.model = params.model;
++					if (params.thinking !== undefined) kwargs.thinking = params.thinking;
++					if (params.cwd !== undefined) kwargs.cwd = params.cwd;
++					result = await host.createRlmSession(params.prompt, kwargs);
++					break;
++				}
++				case "list":
++					result = await host.listRlmSubagents();
++					break;
++				case "collect": {
++					const timeoutMs = params.timeout_ms ?? 0;
++					if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > RLM_COLLECT_MAX_TIMEOUT_MS) {
++						throw new Error(
++							`rlm 'collect' timeout_ms must be a non-negative integer up to ${RLM_COLLECT_MAX_TIMEOUT_MS}`,
++						);
++					}
++					result = await host.collectRlmChildren(params.targets ?? [], timeoutMs);
++					break;
++				}
++				case "delete":
++					if (!params.target) throw new Error("rlm 'delete' requires 'target'");
++					result = await host.deleteRlmSubagent(params.target);
++					break;
++				case "find_models": {
++					if (!params.query) throw new Error("rlm 'find_models' requires 'query'");
++					const limit = params.limit ?? DEFAULT_RLM_MODEL_SEARCH_LIMIT;
++					if (!Number.isInteger(limit) || limit < 1 || limit > MAX_RLM_MODEL_SEARCH_LIMIT) {
++						throw new Error(`rlm 'find_models' limit must be an integer from 1 to ${MAX_RLM_MODEL_SEARCH_LIMIT}`);
++					}
++					result = await host.findRlmModels(params.query, limit);
++					break;
++				}
++				case "progress_note":
++					if (!params.message) throw new Error("rlm 'progress_note' requires 'message'");
++					result = host.noteRlmProgress(params.message);
++					break;
++			}
++			return {
++				content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
++				details: { action: params.action },
++			};
++		},
++	};
++}
++
++export function createRlmTool(host: RlmLifecycleHost): AgentTool<typeof rlmSchema> {
++	return wrapToolDefinition(createRlmToolDefinition(host));
++}
+diff --git a/packages/coding-agent/test/agent-session-recursion.test.ts b/packages/coding-agent/test/agent-session-recursion.test.ts
+index 424d415c8..8b4cfe7f2 100644
+--- a/packages/coding-agent/test/agent-session-recursion.test.ts
++++ b/packages/coding-agent/test/agent-session-recursion.test.ts
+@@ -544,6 +544,140 @@ describe("AgentSession rlm recursion", () => {
+ 		expect(child.getActiveToolNames()).toEqual(["custom-substrate-stub"]);
+ 	});
+ 
++	// RLM reachability spike: reuses createSession above. Every test here calls
++	// it exactly once for the root; a spawned child is reached via
++	// root.getRlmChildSession(...), not a second createSession call, so the
++	// outer beforeEach/afterEach's single `session` tracking is sufficient —
++	// no separate disposal bookkeeping needed here.
++	function neuraStub(name = "neura-stub"): AgentTool {
++		return {
++			name,
++			label: name,
++			description: "stub compute tool for structural testing, not a real built-in",
++			parameters: Type.Object({ code: Type.String() }),
++			execute: async () => ({ content: [{ type: "text", text: "" }], details: undefined }),
++		};
++	}
++
++	function rlmTool(session: AgentSession) {
++		const tool = session.getToolDefinition("rlm");
++		if (!tool) throw new Error("Missing 'rlm' host tool");
++		return tool;
++	}
++
++	async function execRlm(session: AgentSession, params: Record<string, unknown>): Promise<any> {
++		const tool = rlmTool(session);
++		const result = await tool.execute(
++			`t-${Math.random().toString(36).slice(2)}`,
++			params as any,
++			undefined,
++			undefined,
++			undefined as any,
++		);
++		return JSON.parse((result.content[0] as { text: string }).text);
++	}
++
++	it("A/F: NEURA parent sees the rlm tool registered with no ipython kernel", () => {
++		const root = createSession({ baseToolsOverride: { "neura-stub": neuraStub() } });
++		expect(root.getToolDefinition("rlm")).toBeDefined();
++		expect(root.getToolDefinition("ipython")).toBeUndefined();
++	});
++
++	it("K/L: LEGACY and a real-kernel-bearing session also register the rlm tool (additive, not NEURA-only)", () => {
++		const root = createSession();
++		expect(root.getToolDefinition("rlm")).toBeDefined();
++		expect(root.getToolDefinition("ipython")).toBeDefined();
++	});
++
++	it("B/C/D/E/G: 'spawn' through the host tool constructs a child with no ipython kernel anywhere in the path", async () => {
++		const root = createSession({ baseToolsOverride: { "neura-stub": neuraStub() } });
++		const handle = await execRlm(root, { action: "spawn", prompt: "work a task" });
++		expect(handle.rlm_child_id).toMatch(/^sub-/);
++
++		const child = root.getRlmChildSession(handle.rlm_child_id);
++		if (!child) throw new Error("Missing spawned child session");
++		expect(child.getActiveToolNames()).toEqual(["neura-stub"]);
++		expect(child.getToolDefinition("ipython")).toBeUndefined();
++		expect(root.getToolDefinition("ipython")).toBeUndefined();
++	});
++
++	it("H: 'collect' through the host tool returns the child's settled result", async () => {
++		const root = createSession({ baseToolsOverride: { "neura-stub": neuraStub() } });
++		const handle = await execRlm(root, { action: "spawn", prompt: "summarize X" });
++		await waitFor(() => root.getRlmChildSession(handle.rlm_child_id)?.getLastAssistantText() !== undefined);
++
++		const collected = await execRlm(root, { action: "collect", targets: [handle.rlm_child_id], timeout_ms: 2000 });
++		expect(collected.results).toHaveLength(1);
++		expect(collected.results[0].rlm_child_id).toBe(handle.rlm_child_id);
++		expect(collected.results[0].settled).toBe(true);
++		expect(collected.results[0].answer_preview).toContain("summarize X");
++	});
++
++	it("I: 'delete' through the host tool removes the child from the roster", async () => {
++		const root = createSession({ baseToolsOverride: { "neura-stub": neuraStub() } });
++		const handle = await execRlm(root, { action: "spawn", prompt: "throwaway task" });
++		await waitFor(() => root.getRlmChildSession(handle.rlm_child_id)?.getLastAssistantText() !== undefined);
++
++		const deleted = await execRlm(root, { action: "delete", target: handle.rlm_child_id });
++		expect(deleted.subagent.rlm_child_id).toBe(handle.rlm_child_id);
++
++		const listed = await execRlm(root, { action: "list" });
++		expect(listed.subagents.find((s: any) => s.rlm_child_id === handle.rlm_child_id)).toBeUndefined();
++	});
++
++	it("M: invalid input fails explicitly instead of silently no-op'ing", async () => {
++		const root = createSession({ baseToolsOverride: { "neura-stub": neuraStub() } });
++		await expect(
++			rlmTool(root).execute("t1", { action: "spawn" } as any, undefined, undefined, undefined as any),
++		).rejects.toThrow(/'spawn' requires 'prompt'/);
++		await expect(
++			rlmTool(root).execute("t1", { action: "delete" } as any, undefined, undefined, undefined as any),
++		).rejects.toThrow(/'delete' requires 'target'/);
++		await expect(
++			rlmTool(root).execute("t1", { action: "find_models" } as any, undefined, undefined, undefined as any),
++		).rejects.toThrow(/'find_models' requires 'query'/);
++		await expect(
++			rlmTool(root).execute(
++				"t1",
++				{ action: "collect", timeout_ms: -1 } as any,
++				undefined,
++				undefined,
++				undefined as any,
++			),
++		).rejects.toThrow(/timeout_ms must be a non-negative integer/);
++	});
++
++	it("N/Q: spawning and collecting a child does not silently restore ipython on the NEURA parent", async () => {
++		const root = createSession({ baseToolsOverride: { "neura-stub": neuraStub() } });
++		const handle = await execRlm(root, { action: "spawn", prompt: "task" });
++		await waitFor(() => root.getRlmChildSession(handle.rlm_child_id)?.getLastAssistantText() !== undefined);
++		await execRlm(root, { action: "collect", targets: [handle.rlm_child_id], timeout_ms: 2000 });
++
++		expect(root.getActiveToolNames()).toEqual(["neura-stub"]);
++		expect(root.getToolDefinition("ipython")).toBeUndefined();
++	});
++
++	it("O/P: nested spawn (NEURA child spawns its own child) preserves the substrate rule one generation deeper", async () => {
++		const root = createSession({
++			baseToolsOverride: { "neura-stub": neuraStub() },
++			maxDepth: 4,
++		});
++		const handleA = await execRlm(root, { action: "spawn", prompt: "spawn a grandchild" });
++		const childA = root.getRlmChildSession(handleA.rlm_child_id);
++		if (!childA) throw new Error("Missing child A");
++		expect(childA.getToolDefinition("ipython")).toBeUndefined();
++		expect(childA.getActiveToolNames()).toEqual(["neura-stub"]);
++
++		const handleB = await execRlm(childA, { action: "spawn", prompt: "grandchild task" });
++		const childB = childA.getRlmChildSession(handleB.rlm_child_id);
++		if (!childB) throw new Error("Missing child B (grandchild)");
++
++		// Not a zero-tool child (the pre-fix failure mode) and not a silent
++		// ipython reappearance two generations deep.
++		expect(childB.getActiveToolNames()).toEqual(["neura-stub"]);
++		expect(childB.getToolDefinition("ipython")).toBeUndefined();
++	});
++
+ 	it("lets the orchestrator choose a unique subagent session name", async () => {
+ 		const root = createSession();
+ 		const result = await root.runRlmChild("inspect the API", { name: "  api-reviewer  " });
+-- 
+2.55.0
+

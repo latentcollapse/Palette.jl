@@ -1,0 +1,229 @@
+From 0214407387fafcfaf6d9e9609491ca1f68d34cd5 Mon Sep 17 00:00:00 2001
+From: Matt C <latentcollapse@gmail.com>
+Date: Mon, 28 Sep 2026 19:22:17 -0400
+Subject: [PATCH 39/45] compaction: only the newest NeuraJL state note reaches
+ the model; custom messages count toward the kept tail
+
+tin3 compacted 255 times, after nearly every call for its last hour. A
+neurajl_state note is written after every compaction and none was ever
+dropped; a kept tail spanning several compactions carried a stack of them
+(79k characters in one), and findCutPoint counted only entry.type ===
+"message", so the tail outgrew keepRecentTokens and the next request was
+already over the trigger. Older notes are now skipped at context assembly,
+as older harness digests are, and custom messages count toward the kept
+budget. Red controls: both new build-context tests and the findCutPoint
+test fail without their fix.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../src/core/compaction/compaction.ts         | 13 +++++--
+ packages/coding-agent/src/core/messages.ts    |  2 ++
+ .../coding-agent/src/core/session-manager.ts  | 16 +++++++++
+ .../coding-agent/src/core/tools/neurajl.ts    |  3 +-
+ packages/coding-agent/test/compaction.test.ts | 32 +++++++++++++++++
+ .../session-manager/build-context.test.ts     | 35 ++++++++++++++++++-
+ 6 files changed, 96 insertions(+), 5 deletions(-)
+
+diff --git a/packages/coding-agent/src/core/compaction/compaction.ts b/packages/coding-agent/src/core/compaction/compaction.ts
+index c7dee0df1..fd31b6829 100644
+--- a/packages/coding-agent/src/core/compaction/compaction.ts
++++ b/packages/coding-agent/src/core/compaction/compaction.ts
+@@ -395,9 +395,16 @@ export function findCutPoint(
+ 
+ 	for (let i = endIndex - 1; i >= startIndex; i--) {
+ 		const entry = entries[i];
+-		if (entry.type !== "message") continue;
+-		const messageTokens = estimateTokens(entry.message);
+-		accumulatedTokens += messageTokens;
++		// Custom messages reach the model too; leaving them out let the kept tail outgrow its budget.
++		if (entry.type === "custom_message") {
++			const content = typeof entry.content === "string" ? entry.content : JSON.stringify(entry.content);
++			accumulatedTokens += Math.ceil(content.length / 4);
++			if (accumulatedTokens < keepRecentTokens) continue;
++		} else if (entry.type !== "message") {
++			continue;
++		} else {
++			accumulatedTokens += estimateTokens(entry.message);
++		}
+ 		if (accumulatedTokens >= keepRecentTokens) {
+ 			// No cut point at/after i (trailing tool results): keep only the final turn, not everything.
+ 			cutIndex = cutPoints[cutPoints.length - 1];
+diff --git a/packages/coding-agent/src/core/messages.ts b/packages/coding-agent/src/core/messages.ts
+index dc7227df4..d2b3851be 100644
+--- a/packages/coding-agent/src/core/messages.ts
++++ b/packages/coding-agent/src/core/messages.ts
+@@ -47,6 +47,8 @@ export const MCP_CONNECTION_OUTCOME_CUSTOM_TYPE = "mcp_connection_outcome";
+ export const REFINEMENT_OUTCOME_CUSTOM_TYPE = "refinement_outcome";
+ export const REFINEMENT_NOTICE_CUSTOM_TYPE = "refinement_notice";
+ export const HARNESS_DIGEST_CUSTOM_TYPE = "harness_digest";
++/** NeuraJL's note after a compaction; only the newest describes the kernel as it is. */
++export const NEURAJL_STATE_CUSTOM_TYPE = "neurajl_state";
+ export const RLM_CHILD_FAILURE_CUSTOM_TYPE = "rlm_child_failure";
+ export const RLM_CHILD_TERMINAL_NOTICE_CUSTOM_TYPE = "rlm_child_terminal_notice";
+ export const ASYNC_BASH_COMPLETION_CUSTOM_TYPE = "async_bash_completion";
+diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
+index 156fa2923..3e5bcb653 100644
+--- a/packages/coding-agent/src/core/session-manager.ts
++++ b/packages/coding-agent/src/core/session-manager.ts
+@@ -29,6 +29,7 @@ import {
+ 	createCompactionSummaryMessage,
+ 	createCustomMessage,
+ 	HARNESS_DIGEST_CUSTOM_TYPE,
++	NEURAJL_STATE_CUSTOM_TYPE,
+ } from "./messages.js";
+ import {
+ 	addAssistantUsage,
+@@ -512,6 +513,18 @@ export function buildSessionContext(
+ 		}
+ 	}
+ 
++	// A NeuraJL state note is written after every compaction, and a kept tail
++	// can span several; the older ones describe a kernel that has since moved
++	// on, and at one per compaction they grew the tail past its budget.
++	let newestNeurajlStateEntryId: string | undefined;
++	for (let i = path.length - 1; i >= 0; i--) {
++		const entry = path[i];
++		if (entry.type === "custom_message" && entry.customType === NEURAJL_STATE_CUSTOM_TYPE) {
++			newestNeurajlStateEntryId = entry.id;
++			break;
++		}
++	}
++
+ 	const compactionIdx = compaction ? path.findIndex((e) => e.type === "compaction" && e.id === compaction.id) : -1;
+ 	// True when the compaction snapshot is the newest digest in context, so every
+ 	// digest custom message is older and skipped entirely.
+@@ -532,6 +545,9 @@ export function buildSessionContext(
+ 			if (entry.customType === HARNESS_DIGEST_CUSTOM_TYPE && entry.id !== keepDigestEntryId) {
+ 				return;
+ 			}
++			if (entry.customType === NEURAJL_STATE_CUSTOM_TYPE && entry.id !== newestNeurajlStateEntryId) {
++				return;
++			}
+ 			target.push(
+ 				createCustomMessage(entry.customType, entry.content, entry.display, entry.details, entry.timestamp),
+ 			);
+diff --git a/packages/coding-agent/src/core/tools/neurajl.ts b/packages/coding-agent/src/core/tools/neurajl.ts
+index aa304110b..ec85db75d 100644
+--- a/packages/coding-agent/src/core/tools/neurajl.ts
++++ b/packages/coding-agent/src/core/tools/neurajl.ts
+@@ -6,6 +6,7 @@ import { type Static, Type } from "typebox";
+ import { getShellEnv, killProcessTree, trackDetachedChildPid, untrackDetachedChildPid } from "../../utils/shell.js";
+ import type { SessionBaseToolsFactory } from "../agent-session.js";
+ import type { ToolDefinition } from "../extensions/types.js";
++import { NEURAJL_STATE_CUSTOM_TYPE } from "../messages.js";
+ import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+ 
+ /**
+@@ -521,7 +522,7 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
+ 						? ` These bindings are defined (with the call that last set each): ${lastBindings.join(", ")}.`
+ 						: " You have not defined any bindings yet.";
+ 				return {
+-					customType: "neurajl_state",
++					customType: NEURAJL_STATE_CUSTOM_TYPE,
+ 					content: `[neurajl-state]\n\nYour NeuraJL kernel persisted through compaction; its bindings, functions, types and loaded packages are still available.${detail}${mapEnabled ? " Your next neurajl result opens with a map of the workspace." : ""}`,
+ 				};
+ 			},
+diff --git a/packages/coding-agent/test/compaction.test.ts b/packages/coding-agent/test/compaction.test.ts
+index 7eee61800..1c8eddb33 100644
+--- a/packages/coding-agent/test/compaction.test.ts
++++ b/packages/coding-agent/test/compaction.test.ts
+@@ -229,6 +229,38 @@ describe("findCutPoint", () => {
+ 		const result = findCutPoint(entries, 0, entries.length, keepRecentTokens);
+ 		expect(result).toMatchObject(expected);
+ 	});
++
++	it("counts custom messages toward the kept budget", () => {
++		// Each note is ~1,000 tokens; the messages alone are tiny, so a cut that
++		// ignored the notes would keep everything.
++		const note = (): SessionEntry => {
++			const id = `test-id-${entryCounter++}`;
++			const entry: SessionEntry = {
++				type: "custom_message",
++				id,
++				parentId: lastId,
++				timestamp: new Date().toISOString(),
++				customType: "neurajl_state",
++				content: "n".repeat(4000),
++				display: false,
++			};
++			lastId = id;
++			return entry;
++		};
++		const entries: SessionEntry[] = [
++			createMessageEntry(createUserMessage("Turn 1")),
++			note(),
++			createMessageEntry(createAssistantMessage("A1")),
++			createMessageEntry(createUserMessage("Turn 2")),
++			note(),
++			createMessageEntry(createAssistantMessage("A2")),
++			createMessageEntry(createUserMessage("Turn 3")),
++			note(),
++			createMessageEntry(createAssistantMessage("A3")),
++		];
++		const result = findCutPoint(entries, 0, entries.length, 1500);
++		expect(result.firstKeptEntryIndex).toBeGreaterThanOrEqual(3);
++	});
+ });
+ 
+ describe("prepareCompaction with small sessions", () => {
+diff --git a/packages/coding-agent/test/session-manager/build-context.test.ts b/packages/coding-agent/test/session-manager/build-context.test.ts
+index 96dfd24e3..914a68e0d 100644
+--- a/packages/coding-agent/test/session-manager/build-context.test.ts
++++ b/packages/coding-agent/test/session-manager/build-context.test.ts
+@@ -1,5 +1,5 @@
+ import { describe, expect, it } from "vitest";
+-import { HARNESS_DIGEST_CUSTOM_TYPE } from "../../src/core/messages.js";
++import { HARNESS_DIGEST_CUSTOM_TYPE, NEURAJL_STATE_CUSTOM_TYPE } from "../../src/core/messages.js";
+ import {
+ 	type BranchSummaryEntry,
+ 	buildSessionContext,
+@@ -82,6 +82,16 @@ function chain(...specs: string[]): SessionEntry[] {
+ 				content: text,
+ 				display: true,
+ 			});
++		} else if (kind === "j") {
++			entries.push({
++				type: "custom_message",
++				id,
++				parentId,
++				timestamp: T,
++				customType: NEURAJL_STATE_CUSTOM_TYPE,
++				content: text,
++				display: false,
++			});
+ 		} else if (kind === "t") {
+ 			entries.push({ type: "thinking_level_change", id, parentId, timestamp: T, thinkingLevel: text });
+ 		} else if (kind === "s") {
+@@ -196,6 +206,29 @@ describe("buildSessionContext", () => {
+ 		expect(buildSessionContext(entries, "2").messages).toHaveLength(1);
+ 	});
+ 
++	describe("NeuraJL state notes", () => {
++		it("keeps only the newest note", () => {
++			const ctx = buildSessionContext(
++				chain("u hello", "j state-a", "a reply", "j state-b", "u again", "j state-c", "a done"),
++			);
++			const notes = ctx.messages.filter(
++				(m) => (m as { customType?: string }).customType === NEURAJL_STATE_CUSTOM_TYPE,
++			);
++			expect(notes.map((m) => (m as { content: string }).content)).toEqual(["state-c"]);
++			expect(ctx.messages.map((m) => m.role)).toEqual(["user", "assistant", "user", "custom", "assistant"]);
++		});
++
++		it("keeps only the newest note across a compaction's kept tail", () => {
++			const ctx = buildSessionContext(
++				chain("u q", "j state-old", "a kept", "c Summary|2", "j state-new", "u after"),
++			);
++			const notes = ctx.messages.filter(
++				(m) => (m as { customType?: string }).customType === NEURAJL_STATE_CUSTOM_TYPE,
++			);
++			expect(notes.map((m) => (m as { content: string }).content)).toEqual(["state-new"]);
++		});
++	});
++
+ 	describe("harness digest dedupe", () => {
+ 		it("keeps only the newest digest custom message", () => {
+ 			const ctx = buildSessionContext(chain("u hello", "d digest-a", "a first reply", "d digest-b"));
+-- 
+2.55.0
+

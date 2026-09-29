@@ -1,0 +1,17 @@
+New task, in the same repository. Port: module PyStrftime in ports/strftime.jl. Python datetime behaviour in the C locale: strftime for %a %A %b %B %d %H %I %j %m %M %p %S %U %w %W %y %Y %G %V %u %% on naive datetimes (t = [year, month, day, hour, minute, second]); isocalendar; date arithmetic; toordinal/fromordinal; datetime.fromisoformat (Python 3.11+ rules: accepts basic and extended ISO 8601 forms, fractional seconds, the T or space separator, and UTC offsets) re-rendered with isoformat(). Invalid dates throw.
+
+Functions:
+  - strftime(t::AbstractVector, fmt) -> String
+  - isocalendar(y, m, d) -> [year, week, weekday]
+  - add_days(iso_date, n) -> iso date
+  - toordinal(y, m, d)
+  - fromordinal(n) -> iso date
+  - fromisoformat(s) -> isoformat() string
+
+A few examples (arguments shown as JSON):
+  strftime([2026, 9, 27, 13, 5, 9], "%Y-%m-%d %H:%M:%S") -> "2026-09-27 13:05:09"
+  strftime([2026, 9, 27, 13, 5, 9], "%a %A %b %B") -> "Sun Sunday Sep September"
+  strftime([2026, 9, 27, 13, 5, 9], "%j %U %W %w") -> "270 39 38 0"
+  strftime([2026, 2, 30, 0, 0, 0], "%Y") -> throws
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

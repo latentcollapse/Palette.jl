@@ -1,0 +1,373 @@
+From f020af235a94c45b789a75d22b13931235052198 Mon Sep 17 00:00:00 2001
+From: Matt C <latentcollapse@gmail.com>
+Date: Sat, 26 Sep 2026 19:54:12 -0400
+Subject: [PATCH 32/45] np2: resume a reply cut off at the output limit instead
+ of ending the run
+
+A NeuraJL trial run stopped mid-task after a threshold compaction. The
+trace shows the cause was the reply before it: cut off at the output token
+limit (stopReason length) with no tool call, which the agent loop took as
+the model finishing. Compaction then ran on an assistant-last turn and,
+with no goal, the run ended. Compactions in the middle of a tool loop
+already resumed correctly (now covered by tests).
+
+A truncated reply now queues one resume prompt, at most three in a row, on
+both the natural-stop path and the threshold-compaction path, which skips
+the continuation hook. An active goal keeps priority.
+
+Tests: one and repeated compactions, compaction with a stateful tool's
+post-compaction note, tool calls after compaction, the user's request run
+exactly once, truncation with and without compaction, the three-in-a-row
+bound, and no continuation after a normal stop.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../coding-agent/src/core/agent-session.ts    |  45 +++++
+ ...onomous-continuation-subagent-gate.test.ts |   3 +
+ ...gent-session-compaction-continuity.test.ts | 184 ++++++++++++++++++
+ packages/coding-agent/test/suite/harness.ts   |  12 +-
+ 4 files changed, 242 insertions(+), 2 deletions(-)
+ create mode 100644 packages/coding-agent/test/suite/agent-session-compaction-continuity.test.ts
+
+diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
+index 0cb3c499f..ac409af14 100644
+--- a/packages/coding-agent/src/core/agent-session.ts
++++ b/packages/coding-agent/src/core/agent-session.ts
+@@ -505,6 +505,10 @@ export class CompactionSkippedError extends Error {}
+ /** Thrown when a session_before_refine extension skips the refinement round. */
+ export class RefineSkippedError extends Error {}
+ 
++const MAX_OUTPUT_LIMIT_CONTINUATIONS = 3;
++const OUTPUT_LIMIT_CONTINUATION_TEXT =
++	"[output limit] Your previous reply was cut off at the output token limit before you finished. Continue the task from where you stopped.";
++
+ export type SessionBaseToolsFactory = (sessionId: string) => {
+ 	tools: Record<string, AgentTool>;
+ 	/** Release resources owned by this specific agent session. */
+@@ -1793,6 +1797,8 @@ export class AgentSession {
+ 	private _queuedAutonomousContinuationSnapshots = new WeakMap<AgentMessage, AutonomousRuntimeSnapshot>();
+ 	private _pendingThresholdCompactionAutonomousMessages: AgentMessage[] = [];
+ 	private _queuedGoalThresholdContinuation: AgentMessage | undefined;
++	// Consecutive continuations sent because the model's reply hit the output limit.
++	private _outputLimitContinuations = 0;
+ 	private _pendingAutoRefineReview: { reason: AutoRefineReason; review: AutoRefineReview } | undefined;
+ 	private _autoRefineBranchVersion = 0;
+ 	private _autoRefineReviewAbort?: AbortController;
+@@ -3304,6 +3310,19 @@ export class AgentSession {
+ 		if (this._pendingRequestedCompaction === undefined && !(await this._thresholdCompactionNeeded(context))) {
+ 			return false;
+ 		}
++		// A reply cut off at the output limit is not the end of the task, but stopping
++		// for compaction here bypasses the continuation hook that would resume it.
++		if (!this._continueAfterThresholdCompaction && this._goalState.status !== "active") {
++			const continuation = this._outputLimitContinuation(context.message);
++			if (continuation) {
++				this._admitSessionInput(
++					this._createPreparedTurnAction("followUp", OUTPUT_LIMIT_CONTINUATION_TEXT, undefined, {
++						message: continuation,
++					}),
++				);
++				this._continueAfterThresholdCompaction = true;
++			}
++		}
+ 
+ 		const lastMessage = this.agent.state.messages[this.agent.state.messages.length - 1];
+ 		// A queued continuation disproves the assistant-last "task finished" heuristic, so preserve a true set above.
+@@ -4400,6 +4419,10 @@ export class AgentSession {
+ 			}
+ 			return goalMessages;
+ 		}
++		const outputLimitContinuation = this._outputLimitContinuation(context.message);
++		if (outputLimitContinuation) {
++			return [outputLimitContinuation];
++		}
+ 		if (
+ 			this._autonomousContinuationSuppressionDepth > 0 ||
+ 			context.newMessages.some((message) => this._autonomousContinuationSuppressedMessages.has(message))
+@@ -4426,6 +4449,28 @@ export class AgentSession {
+ 
+ 	private _lastAssistantMessage: AssistantMessage | undefined = undefined;
+ 
++	/**
++	 * A reply cut off at the output token limit, with no tool call, ended the whole
++	 * run as if the model had finished; one resume prompt is owed instead, at most
++	 * MAX_OUTPUT_LIMIT_CONTINUATIONS times in a row.
++	 */
++	private _outputLimitContinuation(message: AssistantMessage): CustomMessage | undefined {
++		const truncated = message.stopReason === "length" && !message.content.some((block) => block.type === "toolCall");
++		if (!truncated) {
++			this._outputLimitContinuations = 0;
++			return undefined;
++		}
++		if (this._outputLimitContinuations >= MAX_OUTPUT_LIMIT_CONTINUATIONS) return undefined;
++		this._outputLimitContinuations += 1;
++		return {
++			role: "custom",
++			customType: "output_limit_continuation",
++			content: OUTPUT_LIMIT_CONTINUATION_TEXT,
++			display: true,
++			timestamp: Date.now(),
++		};
++	}
++
+ 	private _agentMessageOutcome(agentMessageId: string): AgentMessageOutcome {
+ 		let outcome = this._agentMessageOutcomes.get(agentMessageId);
+ 		if (!outcome) {
+diff --git a/packages/coding-agent/test/autonomous-continuation-subagent-gate.test.ts b/packages/coding-agent/test/autonomous-continuation-subagent-gate.test.ts
+index 95a5e16bf..ac795998c 100644
+--- a/packages/coding-agent/test/autonomous-continuation-subagent-gate.test.ts
++++ b/packages/coding-agent/test/autonomous-continuation-subagent-gate.test.ts
+@@ -12,6 +12,7 @@ type FakeAssistantMessage = { role: "assistant"; stopReason: string };
+ type FakeSession = {
+ 	_autonomousState: AutonomousRuntimeState;
+ 	_autonomousContinuationAwaitsRlmWork: boolean;
++	_outputLimitContinuations: number;
+ 	_autonomousSubagentKeepAliveTimer: ReturnType<typeof setTimeout> | undefined;
+ 	_autonomousContinuationResumeTask: Promise<void> | undefined;
+ 	_lastAssistantMessage: { role: "assistant"; stopReason: string } | undefined;
+@@ -96,6 +97,7 @@ function fakeSession(overrides: Partial<FakeSession> = {}): FakeSession {
+ 		),
+ 		_snapshotAutonomousRuntimeState: () => undefined,
+ 		_restoreAutonomousRuntimeSnapshot: () => undefined,
++		_outputLimitContinuations: 0,
+ 		...overrides,
+ 	};
+ 	// The gate, resume, and keep-alive methods run for real: assign the
+@@ -113,6 +115,7 @@ function fakeSession(overrides: Partial<FakeSession> = {}): FakeSession {
+ 		"_disarmAutonomousSubagentKeepAlive",
+ 		"_clearAutonomousContinuationAwait",
+ 		"_fireAutonomousSubagentKeepAlive",
++		"_outputLimitContinuation",
+ 	] as const;
+ 	for (const method of realMethods) {
+ 		(session as unknown as Record<string, unknown>)[method] = Reflect.get(AgentSession.prototype, method);
+diff --git a/packages/coding-agent/test/suite/agent-session-compaction-continuity.test.ts b/packages/coding-agent/test/suite/agent-session-compaction-continuity.test.ts
+new file mode 100644
+index 000000000..a54597a84
+--- /dev/null
++++ b/packages/coding-agent/test/suite/agent-session-compaction-continuity.test.ts
+@@ -0,0 +1,184 @@
++/**
++ * A compaction during an active task resumes that same task: once, repeatedly,
++ * with a tool that keeps its own state across compactions (as NeuraJL's kernel
++ * does), with tool calls after it, and without running the user's request twice
++ * or skipping any scripted step. Also: a reply cut off at the output limit is
++ * resumed rather than taken as the end of the run, a bounded number of times.
++ */
++import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
++import { Type } from "typebox";
++import { afterEach, describe, expect, it } from "vitest";
++import type { ExtensionFactory } from "../../src/core/extensions/types.js";
++import { createHarness, type Harness } from "./harness.js";
++
++const PROMPT = "run the tools then summarize";
++
++// Built when the model is called, so each reply is newer than any compaction
++// before it, as a real reply would be.
++const toolCallReply = () => () => fauxAssistantMessage(fauxToolCall("big", {}), { stopReason: "toolUse" });
++
++function extensionCompaction(): ExtensionFactory {
++	return (pi) => {
++		pi.on("session_before_compact", async (event) => ({
++			compaction: {
++				summary: "auto compacted",
++				firstKeptEntryId: event.preparation.firstKeptEntryId,
++				tokensBefore: event.preparation.tokensBefore,
++				details: { source: "extension" },
++			},
++		}));
++	};
++}
++
++function bigTool(counter: { calls: number }) {
++	return {
++		name: "big",
++		label: "big",
++		description: "returns big text",
++		parameters: Type.Object({}),
++		execute: async () => {
++			counter.calls += 1;
++			return { content: [{ type: "text" as const, text: "x".repeat(40_000) }], details: {} };
++		},
++	};
++}
++
++const compacting = {
++	settings: { compaction: { enabled: true, reserveTokens: 500, keepRecentTokens: 1 } },
++	models: [{ id: "faux-1", contextWindow: 6_000 }],
++	persistSession: true,
++	extensionFactories: [extensionCompaction()],
++};
++
++describe("AgentSession: compaction continues the active task", () => {
++	const harnesses: Harness[] = [];
++	afterEach(() => {
++		while (harnesses.length > 0) harnesses.pop()?.cleanup();
++	});
++
++	function entries(harness: Harness) {
++		return harness.sessionManager.getEntries();
++	}
++	function userPromptCount(harness: Harness) {
++		return entries(harness).filter((e) => {
++			if (e.type !== "message" || e.message.role !== "user") return false;
++			const c = e.message.content;
++			const text = typeof c === "string" ? c : c.map((b) => (b.type === "text" ? b.text : "")).join("");
++			return text.includes(PROMPT);
++		}).length;
++	}
++	function customCount(harness: Harness, customType: string) {
++		return entries(harness).filter((e) => e.type === "custom_message" && e.customType === customType).length;
++	}
++	function completedCompactions(harness: Harness) {
++		return harness.eventsOfType("compaction_end").filter((e) => e.result).length;
++	}
++
++	it("resumes after one compaction and finishes the task", async () => {
++		const counter = { calls: 0 };
++		const harness = await createHarness({ ...compacting, tools: [bigTool(counter)] });
++		harnesses.push(harness);
++		harness.setResponses([
++			toolCallReply(),
++			() => fauxAssistantMessage("final answer"),
++		]);
++		await harness.session.prompt(PROMPT);
++		await harness.session.waitForHeadlessIdle();
++		expect(completedCompactions(harness)).toBeGreaterThanOrEqual(1);
++		expect(harness.getPendingResponseCount()).toBe(0);
++		expect(counter.calls).toBe(1);
++		expect(userPromptCount(harness)).toBe(1);
++	});
++
++	it("resumes after repeated compactions, running every tool call once", async () => {
++		const counter = { calls: 0 };
++		const harness = await createHarness({ ...compacting, tools: [bigTool(counter)] });
++		harnesses.push(harness);
++		harness.setResponses([
++			toolCallReply(),
++			toolCallReply(),
++			toolCallReply(),
++			toolCallReply(),
++			() => fauxAssistantMessage("final answer"),
++		]);
++		await harness.session.prompt(PROMPT);
++		await harness.session.waitForHeadlessIdle();
++		expect(completedCompactions(harness)).toBeGreaterThanOrEqual(3);
++		expect(harness.getPendingResponseCount()).toBe(0);
++		expect(counter.calls).toBe(4);
++		expect(userPromptCount(harness)).toBe(1);
++	});
++
++	it("reports a stateful tool's state after each compaction and keeps going", async () => {
++		const counter = { calls: 0 };
++		const harness = await createHarness({
++			...compacting,
++			baseToolsFactory: () => ({
++				tools: { big: bigTool(counter) },
++				stateAfterCompaction: async () => ({
++					customType: "neurajl_state",
++					content: `[neurajl-state]\n\nBindings: calls (Int64, call ${counter.calls}).`,
++				}),
++			}),
++		});
++		harnesses.push(harness);
++		harness.setResponses([
++			toolCallReply(),
++			toolCallReply(),
++			toolCallReply(),
++			() => fauxAssistantMessage("final answer"),
++		]);
++		await harness.session.prompt(PROMPT);
++		await harness.session.waitForHeadlessIdle();
++		const compactions = completedCompactions(harness);
++		expect(compactions).toBeGreaterThanOrEqual(2);
++		expect(customCount(harness, "neurajl_state")).toBe(compactions);
++		expect(harness.getPendingResponseCount()).toBe(0);
++		expect(counter.calls).toBe(3);
++		expect(userPromptCount(harness)).toBe(1);
++	});
++
++	it("resumes a reply cut off at the output limit when a compaction stops the turn", async () => {
++		const counter = { calls: 0 };
++		const harness = await createHarness({ ...compacting, tools: [bigTool(counter)] });
++		harnesses.push(harness);
++		harness.setResponses([
++			toolCallReply(),
++			() => fauxAssistantMessage("I found six anomalies and will now write the rep", { stopReason: "length" }),
++			toolCallReply(),
++			() => fauxAssistantMessage("final answer"),
++		]);
++		await harness.session.prompt(PROMPT);
++		await harness.session.waitForHeadlessIdle();
++		expect(harness.getPendingResponseCount()).toBe(0);
++		expect(counter.calls).toBe(2);
++		expect(customCount(harness, "output_limit_continuation")).toBe(1);
++		expect(userPromptCount(harness)).toBe(1);
++	});
++
++	it("resumes a reply cut off at the output limit without compaction, at most three times in a row", async () => {
++		const harness = await createHarness({ models: [{ id: "faux-1", contextWindow: 200_000 }], persistSession: true });
++		harnesses.push(harness);
++		harness.setResponses([
++			fauxAssistantMessage("part one", { stopReason: "length" }),
++			fauxAssistantMessage("part two", { stopReason: "length" }),
++			fauxAssistantMessage("part three", { stopReason: "length" }),
++			fauxAssistantMessage("part four", { stopReason: "length" }),
++			fauxAssistantMessage("never requested"),
++		]);
++		await harness.session.prompt(PROMPT);
++		await harness.session.waitForHeadlessIdle();
++		expect(customCount(harness, "output_limit_continuation")).toBe(3);
++		expect(harness.getPendingResponseCount()).toBe(1);
++	});
++
++	it("does not continue a reply that ended normally", async () => {
++		const harness = await createHarness({ models: [{ id: "faux-1", contextWindow: 200_000 }], persistSession: true });
++		harnesses.push(harness);
++		harness.setResponses([fauxAssistantMessage("done"), fauxAssistantMessage("never requested")]);
++		await harness.session.prompt(PROMPT);
++		await harness.session.waitForHeadlessIdle();
++		expect(customCount(harness, "output_limit_continuation")).toBe(0);
++		expect(harness.getPendingResponseCount()).toBe(1);
++	});
++});
+diff --git a/packages/coding-agent/test/suite/harness.ts b/packages/coding-agent/test/suite/harness.ts
+index e37f9d342..b126704e1 100644
+--- a/packages/coding-agent/test/suite/harness.ts
++++ b/packages/coding-agent/test/suite/harness.ts
+@@ -11,7 +11,12 @@ import type { FauxModelDefinition, FauxProviderRegistration, FauxResponseStep, M
+ import { getApiProvider, registerFauxProvider, unregisterApiProviders } from "@earendil-works/pi-ai";
+ import type { AgentSessionMessageController } from "../../src/core/agent-messages.js";
+ import type { AgentObserveController } from "../../src/core/agent-observe.js";
+-import { AgentSession, type AgentSessionEvent, type AutoRefineReviewer } from "../../src/core/agent-session.js";
++import {
++	AgentSession,
++	type AgentSessionEvent,
++	type AutoRefineReviewer,
++	type SessionBaseToolsFactory,
++} from "../../src/core/agent-session.js";
+ import { AuthStorage } from "../../src/core/auth-storage.js";
+ import type { AgentAutonomousConfig } from "../../src/core/autonomous.js";
+ import type { ExtensionRunner } from "../../src/core/extensions/index.js";
+@@ -88,6 +93,8 @@ export interface HarnessOptions {
+ 	autoRefineReviewer?: AutoRefineReviewer;
+ 	serializedRefine?: boolean;
+ 	initialGoal?: { objective: string; tokenBudget?: number };
++	/** Used instead of `tools` when set: per-session tools with their own state, like NeuraJL's kernel. */
++	baseToolsFactory?: SessionBaseToolsFactory;
+ }
+ 
+ export interface Harness {
+@@ -212,7 +219,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
+ 		agentObserveController: options.agentObserveController,
+ 		agentMessageController: options.agentMessageController,
+ 		subagentRuntimeHost: options.subagentRuntimeHost,
+-		baseToolsOverride: toolMap,
++		baseToolsOverride: options.baseToolsFactory ? undefined : toolMap,
++		baseToolsFactory: options.baseToolsFactory,
+ 		extensionRunnerRef,
+ 		rlmDepth: options.rlmDepth,
+ 		rlmMaxDepth: options.rlmMaxDepth,
+-- 
+2.55.0
+

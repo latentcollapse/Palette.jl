@@ -1,0 +1,30 @@
+name = "Neura"
+uuid = "9bc630f3-7552-4c63-bf52-3e59549be914"
+version = "0.0.1"
+authors = ["Experiment 001 lab"]
+
+[deps]
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
+Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
+Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
+
+[compat]
+Dates = "1"
+JSON = "0.21, 1"
+SHA = "0.7, 1"
+Serialization = "1"
+Sockets = "1"
+Statistics = "1"
+Test = "1"
+UUIDs = "1"
+julia = "1.10"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]

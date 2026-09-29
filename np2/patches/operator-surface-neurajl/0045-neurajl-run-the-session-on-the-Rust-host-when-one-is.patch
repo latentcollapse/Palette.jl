@@ -1,0 +1,93 @@
+From 5b49f13a8abe1945d564c34c5312cd620b97e568 Mon Sep 17 00:00:00 2001
+From: Matt C <latentcollapse@gmail.com>
+Date: Mon, 28 Sep 2026 21:58:43 -0400
+Subject: [PATCH 45/45] neurajl: run the session on the Rust host when one is
+ configured
+
+hostBin (or NEURAJL_HOST_BIN) starts `neurajl-host session`, the lab's Rust
+host: sandbox launcher, persistent session and capability broker in one
+binary, the same protocol and arguments. With it, no Python runs between the
+model and the chassis. The real-kernel tests run on either host.
+
+On the Rust host: 430 tests across 19 files pass, the NeuraJL real-kernel
+suite included (13/13: RLM spawn/collect from Julia, a failing child, no
+permission, a child outliving its kernel), with a process census of the run
+recording 324 samples of the Rust session and none of a Python host or kernel.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ packages/coding-agent/src/core/tools/neurajl.ts | 17 ++++++++++++-----
+ .../test/suite/neurajl-substrate-modes.test.ts  |  5 ++++-
+ 2 files changed, 16 insertions(+), 6 deletions(-)
+
+diff --git a/packages/coding-agent/src/core/tools/neurajl.ts b/packages/coding-agent/src/core/tools/neurajl.ts
+index e4bb4142f..b0bdfd3d1 100644
+--- a/packages/coding-agent/src/core/tools/neurajl.ts
++++ b/packages/coding-agent/src/core/tools/neurajl.ts
+@@ -72,7 +72,12 @@ export interface NeurajlToolDetails {
+ }
+ 
+ export interface NeurajlToolOptions {
+-	/** Absolute path to security/session_cli.py. Unset fails closed at first use. */
++	/**
++	 * The Rust host (`neurajl-host`, built from the lab's host/ crate). When set (or NEURAJL_HOST_BIN is), it runs
++	 * the session -- sandbox, broker and bridge -- and no Python is involved.
++	 */
++	hostBin?: string;
++	/** Absolute path to security/session_cli.py, the Python host, used when no Rust host is configured. */
+ 	sessionCliPath?: string;
+ 	/** The neurajl-operator-lab checkout (session_cli.py's --repo-dir). Defaults to session_cli.py's grandparent. */
+ 	repoDir?: string;
+@@ -176,7 +181,10 @@ async function startKernel(
+ 	stateDir: string | undefined,
+ 	hostHandlers: (() => HostRequestHandlers) | undefined,
+ ): Promise<NeurajlKernel> {
+-	const cliPath = requiredSetting(options?.sessionCliPath ?? process.env.NEURAJL_SESSION_CLI, "session_cli.py path");
++	const hostBin = options?.hostBin ?? process.env.NEURAJL_HOST_BIN;
++	const cliPath = hostBin
++		? undefined
++		: requiredSetting(options?.sessionCliPath ?? process.env.NEURAJL_SESSION_CLI, "session_cli.py path");
+ 	const projectDir = requiredSetting(
+ 		options?.projectDir ?? process.env.NEURAJL_PROJECT_DIR,
+ 		"Julia project directory",
+@@ -185,8 +193,7 @@ async function startKernel(
+ 	const startupTimeoutMs = options?.startupTimeoutMs ?? 180_000;
+ 
+ 	const args = [
+-		"-u",
+-		cliPath,
++		...(hostBin ? ["session"] : ["-u", cliPath!]),
+ 		"--project-dir",
+ 		projectDir,
+ 		"--ceiling",
+@@ -201,7 +208,7 @@ async function startKernel(
+ 	if (options?.turnTimeout) args.push("--turn-timeout", String(options.turnTimeout));
+ 	if (stateDir) args.push("--state-dir", stateDir);
+ 
+-	const child = spawn(pythonBin, args, { cwd, env: getShellEnv(), stdio: ["pipe", "pipe", "pipe"] });
++	const child = spawn(hostBin ?? pythonBin, args, { cwd, env: getShellEnv(), stdio: ["pipe", "pipe", "pipe"] });
+ 	if (child.pid) trackDetachedChildPid(child.pid);
+ 
+ 	const pending = new Map<string, PendingTurn>();
+diff --git a/packages/coding-agent/test/suite/neurajl-substrate-modes.test.ts b/packages/coding-agent/test/suite/neurajl-substrate-modes.test.ts
+index 25c381782..0baaa7181 100644
+--- a/packages/coding-agent/test/suite/neurajl-substrate-modes.test.ts
++++ b/packages/coding-agent/test/suite/neurajl-substrate-modes.test.ts
+@@ -32,10 +32,13 @@ import { createHarness, type Harness } from "./harness.js";
+ const REPL_DOCTRINE_MARKER = "persistent Python REPL";
+ 
+ const SESSION_CLI_PATH = process.env.NEURAJL_SESSION_CLI;
++// With the Rust host configured, it runs every session and SESSION_CLI_PATH is not used.
++const HOST_BIN = process.env.NEURAJL_HOST_BIN;
+ const PROJECT_DIR = process.env.NEURAJL_PROJECT_DIR;
+ 
+ function skipIfNeurajlUnavailable(): boolean {
+-	if (!SESSION_CLI_PATH || !existsSync(SESSION_CLI_PATH)) return true;
++	const host = HOST_BIN ?? SESSION_CLI_PATH;
++	if (!host || !existsSync(host)) return true;
+ 	if (!PROJECT_DIR || !existsSync(PROJECT_DIR)) return true;
+ 	try {
+ 		execFileSync("bwrap", ["--version"], { stdio: "ignore" });
+-- 
+2.55.0
+

@@ -1,0 +1,12 @@
+New task, in the same repository. Port: module PyFnmatch in ports/fnmatch.jl. Unix shell-style wildcard matching, as Python's fnmatch module does it on POSIX: `*`, `?`, `[seq]`, `[!seq]`, ranges, and every edge case of bracket parsing (an unclosed `[` is a literal, `]` first in a set is a member, and so on). Matching is case-sensitive.
+
+Functions:
+  - fnmatchcase(name::AbstractString, pat::AbstractString) -> Bool
+  - filter(names::AbstractVector, pat::AbstractString) -> Vector of the names that match, in order (case-sensitive)
+
+A few examples (arguments shown as JSON):
+  fnmatchcase("[", "*") -> true
+  fnmatchcase("-", "*") -> true
+  fnmatchcase("a.py", "*") -> true
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

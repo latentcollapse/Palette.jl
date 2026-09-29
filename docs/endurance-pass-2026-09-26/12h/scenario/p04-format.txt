@@ -1,0 +1,12 @@
+New task, in the same repository. Port: module PyFormat in ports/format.jl. Python's format(value, spec) for int, float, str and bool values: the whole format-spec mini-language (fill, align < > ^ =, sign + - space, z, #, 0, width, grouping , and _, precision, and types b c d o x X n e E f F g G % s, plus the empty type). Locale-dependent n behaves as in the C locale. Invalid specs for the value's type throw. value arrives as Int64, Float64, String or Bool.
+
+Functions:
+  - format_value(value, spec::AbstractString) -> String
+
+A few examples (arguments shown as JSON):
+  format_value(0, "") -> "0"
+  format_value(0, "d") -> "0"
+  format_value(0, "5d") -> "    0"
+  format_value(0, "s") -> throws
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

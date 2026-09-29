@@ -1,0 +1,16 @@
+New task, in the same repository. Port: module PyColorsys in ports/colorsys.jl. Python's colorsys conversions, each returning a 3-element vector. Compared with relative tolerance 1e-9.
+
+Functions:
+  - rgb_to_hsv(a, b, c) -> Vector{Float64}
+  - hsv_to_rgb(a, b, c) -> Vector{Float64}
+  - rgb_to_hls(a, b, c) -> Vector{Float64}
+  - hls_to_rgb(a, b, c) -> Vector{Float64}
+  - rgb_to_yiq(a, b, c) -> Vector{Float64}
+  - yiq_to_rgb(a, b, c) -> Vector{Float64}
+
+A few examples (arguments shown as JSON):
+  rgb_to_hsv(0, 0, 0) -> [0.0, 0.0, 0]
+  hsv_to_rgb(0, 0, 0) -> [0, 0, 0]
+  rgb_to_hls(0, 0, 0) -> [0.0, 0.0, 0.0]
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

@@ -1,0 +1,37 @@
+02 move_to_end!               PASS
+03 popat!                     PASS
+04 keyindex                   PASS
+05 sort_by_value! (+by)       PASS
+06 rename_key!                PASS
+07 move_to_end! LittleDict    PASS
+08 move_to_end! OrderedSet    PASS
+09 compact!                   PASS
+10 to_namedtuple              PASS
+11 take_last!                 PASS
+12 insert_at!                 PASS
+13 changelog                  PASS
+14 swap!                      PASS
+passed 13/13
+15 popat! OrderedSet          PASS
+16 reverse!                   PASS
+17 rotate!                    PASS
+18 find_key                   PASS
+19 dedupe_values!             PASS
+20 bench                      PASS
+22 setindex_at!               PASS
+23 insert_at! OrderedSet      PASS
+24 merge_ordered              PASS
+25 window                     PASS
+26 README                     PASS
+batch 2-3 passed 11/11
+Precompiling packages...
+   2441.0 ms  ✓ OrderedCollections
+  1 dependency successfully precompiled in 3 seconds
+
+--- suite ---
+/tmp/nje-ws-xklhwufa/test/test_little_dict.jl ...
+/tmp/nje-ws-xklhwufa/test/test_little_set.jl ...
+/tmp/nje-ws-xklhwufa/test/test_ordered_dict.jl ...
+/tmp/nje-ws-xklhwufa/test/test_ordered_set.jl ...
+Test Summary:      |  Pass  Total   Time
+OrderedCollections | 26128  26128  43.6s

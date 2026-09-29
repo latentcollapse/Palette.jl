@@ -1,0 +1,668 @@
+From 2fe2c2016575212a823a43ed8e1b5ab72e3a7301 Mon Sep 17 00:00:00 2001
+From: Matt C <latentcollapse@gmail.com>
+Date: Wed, 23 Sep 2026 03:45:43 -0400
+Subject: [PATCH 14/45] Implant NeuraJL: real baseToolsFactory adapter, session
+ persistence proven end to end
+
+Closes NIRA_OPERATOR_SURFACE_STAGING.md's "prepares the chassis only" gap
+with a real, working adapter -- not a stub, not a plan.
+
+createNeurajlBaseToolsFactory (packages/coding-agent/src/core/tools/neurajl.ts)
+uses baseToolsFactory, not the baseToolsOverride the staging doc originally
+named -- deliberately: baseToolsFactory constructs tools once per agent
+session (including once per RLM child) with a real dispose hook, exactly
+the shape a persistent operator runtime needs. baseToolsOverride shares one
+static tool map across every session that asks for it, which would mean
+every session (and every RLM child) silently sharing ONE Julia kernel's
+mutable bindings -- precisely the failure mode NeuraJL's own
+C_child subset-of C_caller authority model exists to prevent one level
+down. Reusing baseToolsOverride here would have reintroduced the same
+problem at the chassis layer.
+
+The tool spawns one persistent `security/session_cli.py` process (new in
+ijulia-operator-lab) per agent session and drives it for that session's
+whole lifetime via newline-JSON turns -- unlike neurabash.ts's own current
+first pass, which is explicitly one-shot ("session persistence... is real
+future work, not done here"). This is the actual point of NeuraJL's
+architecture this whole pass: real state, real compiled methods, surviving
+across separate tool calls.
+
+Exported from the real public entry point (tools/index.ts -> sdk.ts),
+alongside createNeurabashTool.
+
+Proven through createAgentSession itself, not stubs
+(test/suite/neurajl-substrate-modes.test.ts): state persisting across
+SEPARATE tool calls, an ephemeral turn not leaking into the persistent
+kernel AND not breaking the turn after it (the exact bug found and fixed
+below), and dispose actually terminating the underlying process rather
+than being a no-op.
+
+A real, serious bug was found and fixed building the bridge -- in
+ijulia-operator-lab (commit fc0f727), not in this fork: every
+`subprocess.run(["julia", ...])` call there that didn't explicitly set
+stdin= inherited the caller's own stdin, and `julia -e ...` (confirmed,
+unlike e.g. /bin/true) silently breaks the caller's own subsequent reads
+from it. Invisible in every prior one-shot caller; fatal for
+session_cli.py, whose own broker runs in a background thread inside the
+SAME process and calls exactly this code path for every ephemeral turn.
+A model's first ephemeral: true call in a real chassis session would have
+silently broken every turn after it.
+
+Known, pre-existing, unrelated gap: this checkout's chassis-wide
+`npm run build`/tsgo --noEmit fails because @earendil-works/pi-agent-core
+and pi-ai have no built dist/ at all, breaking module resolution for
+every file that imports them -- including the already-shipped
+neurabash.ts. vitest (esbuild transpilation, not a full program
+type-check) is unaffected and is what actually verified this work: full
+`npm run test` sweep shows 95 pre-existing failures across unrelated
+areas (daemon-supervisor, extensions-discovery, mcp-catalog,
+model-registry, release-signatures), none touching
+neurajl/neurabash/sdk.ts/tools/index.ts. Recorded in the staging doc so
+it doesn't need rediscovering.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+---
+ docs/NIRA_OPERATOR_SURFACE_STAGING.md         |  15 +-
+ packages/coding-agent/src/core/sdk.ts         |  10 +-
+ packages/coding-agent/src/core/tools/index.ts |   6 +
+ .../coding-agent/src/core/tools/neurajl.ts    | 336 ++++++++++++++++++
+ .../suite/neurajl-substrate-modes.test.ts     | 167 +++++++++
+ 5 files changed, 531 insertions(+), 3 deletions(-)
+ create mode 100644 packages/coding-agent/src/core/tools/neurajl.ts
+ create mode 100644 packages/coding-agent/test/suite/neurajl-substrate-modes.test.ts
+
+diff --git a/docs/NIRA_OPERATOR_SURFACE_STAGING.md b/docs/NIRA_OPERATOR_SURFACE_STAGING.md
+index 9785045a3..c2690f67f 100644
+--- a/docs/NIRA_OPERATOR_SURFACE_STAGING.md
++++ b/docs/NIRA_OPERATOR_SURFACE_STAGING.md
+@@ -1,6 +1,17 @@
+ # NIRA-Prime NeuraJL Surface Staging
+ 
+-This branch is reserved for the NeuraJL operator surface. It prepares the chassis only; it does not implement or install NeuraJL.
++## Implanted (2026-09-23)
++
++The NeuraJL adapter is real and end-to-end proven, not staged-only anymore:
++
++- `packages/coding-agent/src/core/tools/neurajl.ts` -- `createNeurajlBaseToolsFactory(cwd, options)`, a `SessionBaseToolsFactory` (constructs once per agent session, including once per RLM child, with a real `dispose`), not `baseToolsOverride` -- see the module's own docstring for why: `baseToolsOverride` shares one static tool map across every session that asks for it, which would mean every agent session (and every RLM child) silently sharing ONE Julia kernel's mutable bindings. `baseToolsFactory` was added to `agent-session.ts` specifically for persistent operator runtimes and is the correct fit.
++- Exported from the real public entry point: `tools/index.ts` -> `sdk.ts` (`createNeurajlBaseToolsFactory`), alongside `createNeurabashTool`.
++- Bridges to `ijulia-operator-lab/security/session_cli.py` (new in that repo), a thin persistent stdio wrapper around the already-adversarially-tested `NeuraSession` -- one `python3 session_cli.py` process per agent session, spawned once, driven for that session's whole lifetime via newline-JSON turns, not shelled out fresh per call.
++- `packages/coding-agent/test/suite/neurajl-substrate-modes.test.ts` -- through the real `createAgentSession` entry point, not stubs, for the two tests that matter most: state persisting across SEPARATE tool calls (the one thing NeuraBash's own first-pass adapter explicitly does not do yet -- "each call is an independent, ephemeral invocation"), and `dispose` actually terminating the underlying process, not just being a no-op.
++
++**A real, serious bug was found and fixed building this bridge, in `ijulia-operator-lab` itself, not in this fork:** every `subprocess.run(["julia", ...])` call in that codebase that didn't explicitly set `stdin=` inherited the caller's own stdin -- and `julia -e ...` (confirmed, unlike e.g. `/bin/true`) silently breaks the caller's own subsequent reads from that same stdin. Invisible in every prior one-shot caller; fatal for `session_cli.py`, whose own broker (running in a background thread inside the SAME process) calls exactly this code path for every single ephemeral turn. A model's first `ephemeral: true` call in a real chassis session would have silently broken every turn after it. Fixed at the source (`ijulia-operator-lab` commit `fc0f727`), not worked around here.
++
++**Known gap, not fixed this pass:** the chassis-wide `npm run build`/`tsgo --noEmit` typecheck fails for reasons unrelated to this change -- `@earendil-works/pi-agent-core` and `@earendil-works/pi-ai` have no built `dist/` in this checkout at all, which breaks module resolution for every file that imports them, including the already-shipped `neurabash.ts`. `npm run test` (vitest) is unaffected (esbuild transpilation, not a full program type-check) and is what actually verified this work -- 95 pre-existing test failures exist in this checkout across unrelated areas (daemon-supervisor, extensions-discovery, mcp-catalog, model-registry, release-signatures -- all consistent with the same unbuilt-dependency root cause), none touching neurajl/neurabash/sdk.ts/tools/index.ts.
+ 
+ ## Frozen chassis
+ 
+@@ -11,7 +22,7 @@ This branch is reserved for the NeuraJL operator surface. It prepares the chassi
+ 
+ ## Host boundary
+ 
+-The existing public `createAgentSession` path accepts `baseToolsOverride` and `initialActiveToolNames`. The intended NeuraJL adapter should be an `AgentTool` supplied through that boundary, so a NeuraJL session can omit the IPython kernel rather than merely leave it inactive. RLM child sessions already receive the parent's base-tool override.
++`baseToolsFactory` (see above), not `baseToolsOverride` -- both exist on the shared base as of `e91b10f50`. NeuraJL's session omits the IPython kernel entirely, per the original intent below, but does so via the factory boundary built for persistent runtimes rather than the static-override one.
+ 
+ For the eventual comparison, expose only the NeuraJL tool in this fork's substrate-mode session. Do not activate the NeuraBash adapter or IPython as alternate execution paths during the NeuraJL condition. Keep host-side RLM and agent observe/message services substrate-neutral.
+ 
+diff --git a/packages/coding-agent/src/core/sdk.ts b/packages/coding-agent/src/core/sdk.ts
+index 5e6a58c33..37aab546b 100644
+--- a/packages/coding-agent/src/core/sdk.ts
++++ b/packages/coding-agent/src/core/sdk.ts
+@@ -29,6 +29,7 @@ import {
+ 	createEditTool,
+ 	createIpythonTool,
+ 	createNeurabashTool,
++	createNeurajlBaseToolsFactory,
+ 	withFileMutationQueue,
+ } from "./tools/index.js";
+ 
+@@ -113,7 +114,14 @@ export type { CreateRlmSubagentRuntimeOptions, RlmSubagentRuntime, SubagentRunti
+ export type { Skill } from "./skills.js";
+ export type { Tool } from "./tools/index.js";
+ 
+-export { createBashTool, createEditTool, createIpythonTool, createNeurabashTool, withFileMutationQueue };
++export {
++	createBashTool,
++	createEditTool,
++	createIpythonTool,
++	createNeurabashTool,
++	createNeurajlBaseToolsFactory,
++	withFileMutationQueue,
++};
+ 
+ // Helper Functions
+ 
+diff --git a/packages/coding-agent/src/core/tools/index.ts b/packages/coding-agent/src/core/tools/index.ts
+index 3b2d68eae..91d5d27a3 100644
+--- a/packages/coding-agent/src/core/tools/index.ts
++++ b/packages/coding-agent/src/core/tools/index.ts
+@@ -47,6 +47,12 @@ export {
+ 	type NeurabashToolInput,
+ 	type NeurabashToolOptions,
+ } from "./neurabash.js";
++export {
++	createNeurajlBaseToolsFactory,
++	type NeurajlToolDetails,
++	type NeurajlToolInput,
++	type NeurajlToolOptions,
++} from "./neurajl.js";
+ export {
+ 	DEFAULT_MAX_BYTES,
+ 	DEFAULT_MAX_LINES,
+diff --git a/packages/coding-agent/src/core/tools/neurajl.ts b/packages/coding-agent/src/core/tools/neurajl.ts
+new file mode 100644
+index 000000000..f56a023a6
+--- /dev/null
++++ b/packages/coding-agent/src/core/tools/neurajl.ts
+@@ -0,0 +1,336 @@
++import { spawn } from "child_process";
++import type { AgentTool } from "@earendil-works/pi-agent-core";
++import { type Static, Type } from "typebox";
++import type { SessionBaseToolsFactory } from "../agent-session.js";
++import type { ToolDefinition } from "../extensions/types.js";
++import { getShellEnv, killProcessTree, trackDetachedChildPid, untrackDetachedChildPid } from "../../utils/shell.js";
++import { wrapToolDefinition } from "./tool-definition-wrapper.js";
++
++/**
++ * NIRA-Prime integration point: exposes NeuraJL (ijulia-operator-lab) as this
++ * fork's operator surface, via `baseToolsFactory` rather than
++ * `baseToolsOverride` -- deliberately, not the boundary
++ * docs/NIRA_OPERATOR_SURFACE_STAGING.md names, because `baseToolsFactory` is
++ * built for exactly this shape (construct once per agent session, including
++ * per RLM child, with an explicit `dispose`) and NeuraJL's whole thesis this
++ * pass is real session persistence -- `baseToolsOverride` shares one static
++ * tool map across however many sessions ask for it, which would mean every
++ * agent session (and every RLM child) silently sharing ONE Julia kernel's
++ * mutable bindings. That is exactly the failure mode NeuraJL's own
++ * C_child ⊆ C_caller authority model exists to prevent one level down
++ * (see ijulia-operator-lab/docs/THREAT_MODEL.md); reusing `baseToolsOverride`
++ * here would reintroduce the same problem at the chassis layer instead.
++ *
++ * Unlike `neurabash.ts`'s current first pass (explicitly one-shot,
++ * "session persistence... is real future work, not done here"), this tool
++ * spawns ONE persistent `security/session_cli.py` process per agent session
++ * (via `baseToolsFactory`'s per-session construction) and keeps it alive for
++ * that session's whole lifetime -- real bindings, real compiled methods,
++ * surviving across tool calls the way `ipython`'s kernel does, backed by
++ * NeuraJL's own adversarially-tested persistent session
++ * (ijulia-operator-lab/security/session.py's `NeuraSession`).
++ *
++ * Scope deliberately kept narrow, matching `neurabash.ts`'s own stated first
++ * pass: no RLM sub-agent spawning surfaced through THIS tool (RLM already
++ * gets its own base-tool override per child per `baseToolsFactory`'s own
++ * contract -- a child session gets its OWN NeuraJL process, not this
++ * parent's), no Python-skills bridge, no diff/attachment display protocol.
++ * `ipython.ts`'s kernel owns all of that today; this tool intentionally
++ * replaces it for the NeuraJL condition (see the staging doc: "omit the
++ * IPython kernel rather than merely leave it inactive").
++ */
++
++const neurajlSchema = Type.Object({
++	code: Type.String({
++		description:
++			"Julia source to evaluate in this agent session's persistent NeuraJL kernel. Real bindings, functions, and compiled methods survive across calls within this session (and are isolated from every other session/RLM child, each of which gets its own kernel). Full, unrestricted Julia language power -- eval, ccall, metaprogramming, Base, Pkg -- runs OS-sandboxed; broker-mediated host effects (filesystem writes outside the workspace, network, package installs) are gated by this session's fixed capability ceiling, not by anything in this tool call.",
++	}),
++	ephemeral: Type.Optional(
++		Type.Boolean({
++			description:
++				"Run this code in a real, disposable, OS-sandboxed CHILD process instead of the persistent kernel -- for throwaway/generated helper code you do not want to leave bindings or compiled methods behind in the session's own mind. Defaults to false (persistent). Ephemeral code gets NO broker-mediated authority by default (network/filesystem/package access), regardless of what the persistent session itself is allowed -- an unusual need for one is a signal the code belongs in the persistent kernel instead, not a reason to widen this flag's default.",
++		}),
++	),
++});
++
++export type NeurajlToolInput = Static<typeof neurajlSchema>;
++
++export interface NeurajlToolDetails {
++	success: boolean;
++	epoch?: string;
++	durationMs?: number;
++}
++
++export interface NeurajlToolOptions {
++	/** Absolute path to security/session_cli.py in the ijulia-operator-lab checkout. No default: unset fails closed at first use, not silently. */
++	sessionCliPath?: string;
++	/** Absolute path to the ijulia-operator-lab checkout itself (session_cli.py's --repo-dir). Defaults to session_cli.py's own parent's parent. */
++	repoDir?: string;
++	/** A Julia dev project with Neura (dev-installed) + IJulia available -- see ijulia-operator-lab/docs/EXPERIMENT_002_AUTHORITY.md's Naming section for how one is built. No default: unset fails closed. */
++	projectDir?: string;
++	/** Python interpreter to run session_cli.py with. Default: "python3". */
++	pythonBin?: string;
++	/**
++	 * This session's own capability ceiling -- see
++	 * ijulia-operator-lab/docs/CAPABILITY_MODEL.md. Default: `{}` (full
++	 * language power inside the sandbox, zero broker-mediated authority).
++	 * An empty ceiling is a deliberate, safe default for a first
++	 * integration pass, not an oversight -- widen it only for a condition
++	 * that specifically needs a broker-mediated capability.
++	 */
++	ceiling?: Record<string, unknown>;
++	/** Grant the top-level worker raw network access (bypassing broker mediation for network specifically). Default: false. Distinct from the `network_access` broker capability, which stays broker-mediated regardless of this flag. */
++	network?: boolean;
++	/** Per-turn timeout in seconds, forwarded to NeuraSession's own turn_timeout. Default: 60. */
++	turnTimeout?: number;
++	/** How long to wait for the child process's HELLO line before giving up. Default: 30s (real cold-start: a fresh depot clone plus a fresh sandboxed Julia launch, not free). */
++	startupTimeoutMs?: number;
++}
++
++interface PendingTurn {
++	resolve: (msg: Record<string, unknown>) => void;
++	reject: (err: Error) => void;
++}
++
++function resolveSessionCliPath(options?: NeurajlToolOptions): string {
++	const path = options?.sessionCliPath ?? process.env.NEURAJL_SESSION_CLI;
++	if (!path) {
++		throw new Error(
++			"neurajl: session_cli.py path not configured (options.sessionCliPath / NEURAJL_SESSION_CLI). " +
++				"Point it at <ijulia-operator-lab checkout>/security/session_cli.py before this tool can start a session.",
++		);
++	}
++	return path;
++}
++
++function resolveProjectDir(options?: NeurajlToolOptions): string {
++	const dir = options?.projectDir ?? process.env.NEURAJL_PROJECT_DIR;
++	if (!dir) {
++		throw new Error(
++			"neurajl: no Julia dev project configured (options.projectDir / NEURAJL_PROJECT_DIR) -- " +
++				"see ijulia-operator-lab/docs/EXPERIMENT_002_AUTHORITY.md's Naming section for how to build one " +
++				"(Neura dev-installed + IJulia).",
++		);
++	}
++	return dir;
++}
++
++/**
++ * Starts one persistent `session_cli.py` process, wires its newline-JSON
++ * stdio protocol to a request-id-keyed promise map, and returns the ready
++ * `{tools, dispose}` pair `SessionBaseToolsFactory` expects.
++ *
++ * Session identity is explicit here too, not assumed: this function does not
++ * resolve until the child's own HELLO line (carrying its own real epoch,
++ * generated by NeuraSession itself, not by this process) has been read --
++ * mirroring the same discipline `security/session.py`'s `NeuraSession`
++ * already holds toward `scripts/session_loop.jl`, one layer further out.
++ */
++async function startNeurajlSession(
++	cwd: string,
++	options: NeurajlToolOptions | undefined,
++): Promise<{ tool: AgentTool<typeof neurajlSchema, NeurajlToolDetails>; dispose: () => Promise<void> }> {
++	const cliPath = resolveSessionCliPath(options);
++	const projectDir = resolveProjectDir(options);
++	const pythonBin = options?.pythonBin ?? process.env.NEURAJL_PYTHON ?? "python3";
++	const startupTimeoutMs = options?.startupTimeoutMs ?? 30_000;
++
++	const args = [cliPath, "--project-dir", projectDir, "--ceiling", JSON.stringify(options?.ceiling ?? {})];
++	if (options?.repoDir) args.push("--repo-dir", options.repoDir);
++	if (options?.network) args.push("--network");
++	if (options?.turnTimeout) args.push("--turn-timeout", String(options.turnTimeout));
++
++	const child = spawn(pythonBin, args, { cwd, env: getShellEnv(), stdio: ["pipe", "pipe", "pipe"] });
++	if (child.pid) trackDetachedChildPid(child.pid);
++
++	const pending = new Map<string, PendingTurn>();
++	let nextRequestId = 0;
++	let dead = false;
++	let deadReason = "";
++	let stdoutBuffer = "";
++	let stderrTail = "";
++
++	const failAllPending = (reason: string) => {
++		dead = true;
++		deadReason = reason;
++		for (const waiter of pending.values()) waiter.reject(new Error(reason));
++		pending.clear();
++	};
++
++	child.stderr?.on("data", (chunk: Buffer) => {
++		stderrTail = (stderrTail + chunk.toString("utf8")).slice(-4000);
++	});
++
++	const helloPromise = new Promise<Record<string, unknown>>((resolveHello, rejectHello) => {
++		let resolved = false;
++		const timeoutHandle = setTimeout(() => {
++			if (resolved) return;
++			resolved = true;
++			rejectHello(
++				new Error(`neurajl: session process did not send HELLO within ${startupTimeoutMs}ms. stderr: ${stderrTail}`),
++			);
++		}, startupTimeoutMs);
++
++		child.stdout?.on("data", (chunk: Buffer) => {
++			stdoutBuffer += chunk.toString("utf8");
++			let newlineIndex: number;
++			// biome-ignore lint: while-assignment is the clearest shape for draining a growing buffer line by line
++			while ((newlineIndex = stdoutBuffer.indexOf("\n")) !== -1) {
++				const line = stdoutBuffer.slice(0, newlineIndex);
++				stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
++				if (!line.trim()) continue;
++
++				let message: Record<string, unknown>;
++				try {
++					message = JSON.parse(line);
++				} catch {
++					continue; // a malformed line from the bridge is not this tool's problem to surface as a turn result
++				}
++
++				if (!resolved) {
++					resolved = true;
++					clearTimeout(timeoutHandle);
++					if (message.kind === "HELLO") resolveHello(message);
++					else rejectHello(new Error(`neurajl: unexpected first line from session_cli.py: ${line}`));
++					continue;
++				}
++
++				const requestId = message.request_id !== undefined && message.request_id !== null ? String(message.request_id) : undefined;
++				const waiter = requestId !== undefined ? pending.get(requestId) : undefined;
++				if (waiter) {
++					pending.delete(requestId as string);
++					waiter.resolve(message);
++				}
++			}
++		});
++	});
++
++	child.on("exit", (code) => {
++		if (child.pid) untrackDetachedChildPid(child.pid);
++		failAllPending(`neurajl: session process exited (code ${code}). stderr: ${stderrTail}`);
++	});
++	child.on("error", (err) => {
++		failAllPending(`neurajl: session process failed to start: ${err.message}`);
++	});
++
++	await helloPromise;
++
++	async function turn(code: string, ephemeral: boolean | undefined): Promise<Record<string, unknown>> {
++		if (dead) throw new Error(deadReason);
++		const requestId = String(++nextRequestId);
++		const request: Record<string, unknown> = { request_id: requestId, code };
++		if (ephemeral) request.ephemeral = true;
++		const responsePromise = new Promise<Record<string, unknown>>((resolve, reject) => {
++			pending.set(requestId, { resolve, reject });
++		});
++		child.stdin?.write(`${JSON.stringify(request)}\n`);
++		return responsePromise;
++	}
++
++	const definition: ToolDefinition<typeof neurajlSchema, NeurajlToolDetails> = {
++		name: "neurajl",
++		label: "neurajl",
++		description:
++			"Execute Julia code in this session's own persistent NeuraJL kernel: real state, real compiled methods, surviving across calls (unlike a one-shot interpreter invocation). Prefer this over guessing at numerical, symbolic, or structured computation in-context. Set `ephemeral: true` for disposable generated code you deliberately do not want to leave behind in the persistent kernel's own namespace. Does not support spawning sub-agents, file diffs, or image attachments.",
++		promptSnippet: "neurajl - persistent, stateful Julia kernel with a broker-mediated authority fence",
++		executionMode: "sequential",
++		parameters: neurajlSchema,
++		execute: async (_toolCallId, params) => {
++			const started = Date.now();
++			let response: Record<string, unknown>;
++			try {
++				response = await turn(params.code, params.ephemeral);
++			} catch (err) {
++				const message = err instanceof Error ? err.message : String(err);
++				return { content: [{ type: "text", text: `NeuraJL session error: ${message}` }], details: { success: false }, isError: true };
++			}
++
++			const success = response.success === true;
++			const errorText = typeof response.error === "string" ? response.error : undefined;
++			const data = response.data;
++			const text = success
++				? data === null || data === undefined
++					? "(no output)"
++					: typeof data === "string"
++						? data
++						: JSON.stringify(data)
++				: `Error: ${errorText ?? "unknown error"}`;
++
++			const details: NeurajlToolDetails = {
++				success,
++				epoch: typeof response.epoch === "string" ? response.epoch : undefined,
++				durationMs: Date.now() - started,
++			};
++			return { content: [{ type: "text", text }], details, isError: !success };
++		},
++	};
++
++	return {
++		tool: wrapToolDefinition(definition),
++		dispose: async () => {
++			try {
++				child.stdin?.end();
++			} catch {
++				// already closed; nothing to do
++			}
++			await new Promise<void>((resolve) => {
++				const forceKillTimeout = setTimeout(() => {
++					if (child.pid) killProcessTree(child.pid);
++					resolve();
++				}, 5000);
++				child.once("exit", () => {
++					clearTimeout(forceKillTimeout);
++					resolve();
++				});
++			});
++		},
++	};
++}
++
++/**
++ * `SessionBaseToolsFactory` for NeuraJL -- see the module docstring above for
++ * why this is the right boundary (not `baseToolsOverride`). Called once per
++ * agent session, including once per RLM child (each getting its own,
++ * independent NeuraJL process/kernel -- never sharing the parent's mutable
++ * bindings), per `baseToolsFactory`'s own documented contract in
++ * agent-session.ts.
++ */
++export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlToolOptions): SessionBaseToolsFactory {
++	return (_sessionId: string) => {
++		let sessionPromise: ReturnType<typeof startNeurajlSession> | undefined;
++
++		function ensureStarted() {
++			if (!sessionPromise) sessionPromise = startNeurajlSession(cwd, options);
++			return sessionPromise;
++		}
++
++		// The tool registered here is a thin proxy: AgentSession needs a real
++		// tool object synchronously (`baseToolsFactory` is not async), but
++		// starting the actual NeuraJL process is. The first real call lazily
++		// starts it and every call (including the first) awaits readiness
++		// before sending a turn -- callers see a normal async tool call, not
++		// a two-phase "start, then use" API.
++		const proxyDefinition: ToolDefinition<typeof neurajlSchema, NeurajlToolDetails> = {
++			name: "neurajl",
++			label: "neurajl",
++			description:
++				"Execute Julia code in this session's own persistent NeuraJL kernel: real state, real compiled methods, surviving across calls (unlike a one-shot interpreter invocation). Prefer this over guessing at numerical, symbolic, or structured computation in-context. Set `ephemeral: true` for disposable generated code you deliberately do not want to leave behind in the persistent kernel's own namespace. Does not support spawning sub-agents, file diffs, or image attachments.",
++			promptSnippet: "neurajl - persistent, stateful Julia kernel with a broker-mediated authority fence",
++			executionMode: "sequential",
++			parameters: neurajlSchema,
++			execute: async (toolCallId, params, signal, onUpdate, ctx) => {
++				const { tool } = await ensureStarted();
++				return tool.execute(toolCallId, params, signal, onUpdate, ctx as never);
++			},
++		};
++
++		return {
++			tools: { neurajl: wrapToolDefinition(proxyDefinition) },
++			dispose: async () => {
++				if (!sessionPromise) return; // never actually started -- nothing to clean up
++				const { dispose } = await sessionPromise;
++				await dispose();
++			},
++		};
++	};
++}
+diff --git a/packages/coding-agent/test/suite/neurajl-substrate-modes.test.ts b/packages/coding-agent/test/suite/neurajl-substrate-modes.test.ts
+new file mode 100644
+index 000000000..9b98186b5
+--- /dev/null
++++ b/packages/coding-agent/test/suite/neurajl-substrate-modes.test.ts
+@@ -0,0 +1,167 @@
++/**
++ * NIRA-Prime NeuraJL operator surface: does the chassis actually build a
++ * session around it, and does the real integration (not a stub) prove the
++ * one thing NeuraBash's own first-pass adapter explicitly does not yet --
++ * session persistence surviving across separate tool calls?
++ *
++ * Structured the same way as neurabash-substrate-modes.test.ts: constructed
++ * through createAgentSession (sdk.js), the real public entry point, not
++ * direct AgentSession construction.
++ *
++ * The `baseToolsFactory` tests below use a REAL createNeurajlBaseToolsFactory
++ * pointed at the actual ijulia-operator-lab checkout and a real Julia dev
++ * project (skipped cleanly if either isn't configured/available -- see
++ * `skipIfNeurajlUnavailable`). This is deliberate: NeuraBash's own
++ * substrate-mode tests use stubs because real persistence wasn't the point
++ * being proven there. Here it is the point.
++ */
++import { existsSync } from "node:fs";
++import { execFileSync } from "node:child_process";
++import type { AgentTool } from "@earendil-works/pi-agent-core";
++import { Type } from "typebox";
++import { afterEach, describe, expect, it } from "vitest";
++import { createAgentSession, createNeurajlBaseToolsFactory } from "../../src/core/sdk.js";
++import { SessionManager } from "../../src/core/session-manager.js";
++import { createTestResourceLoader } from "../utilities.js";
++import { createHarness, type Harness } from "./harness.js";
++
++const REPL_DOCTRINE_MARKER = "persistent Python REPL";
++
++const SESSION_CLI_PATH = process.env.NEURAJL_SESSION_CLI;
++const PROJECT_DIR = process.env.NEURAJL_PROJECT_DIR;
++
++function skipIfNeurajlUnavailable(): boolean {
++	if (!SESSION_CLI_PATH || !existsSync(SESSION_CLI_PATH)) return true;
++	if (!PROJECT_DIR || !existsSync(PROJECT_DIR)) return true;
++	try {
++		execFileSync("bwrap", ["--version"], { stdio: "ignore" });
++	} catch {
++		return true;
++	}
++	return false;
++}
++
++function stubTool(name: string): AgentTool {
++	return {
++		name,
++		label: name,
++		description: `stub ${name} tool for structural testing`,
++		parameters: Type.Object({ code: Type.String() }),
++		execute: async () => ({ content: [{ type: "text", text: "" }], details: undefined }),
++	};
++}
++
++describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
++	let harness: Harness | undefined;
++
++	afterEach(() => {
++		harness?.cleanup();
++		harness = undefined;
++	});
++
++	async function buildSession(overrides: Parameters<typeof createAgentSession>[0]) {
++		harness = await createHarness({ tools: [] });
++		const result = await createAgentSession({
++			cwd: harness.tempDir,
++			authStorage: harness.authStorage,
++			model: harness.getModel(),
++			resourceLoader: createTestResourceLoader(),
++			sessionManager: SessionManager.inMemory(),
++			settingsManager: harness.settingsManager,
++			...overrides,
++		});
++		return result.session;
++	}
++
++	it("NEURA mode (stub): baseToolsOverride still reaches AgentSession with a neurajl-named tool", async () => {
++		const session = await buildSession({
++			baseToolsOverride: { neurajl: stubTool("neurajl") },
++			initialActiveToolNames: ["neurajl"],
++			includeGoals: false,
++		});
++
++		const activeNames = session.getActiveToolNames();
++		expect(activeNames).toContain("neurajl");
++		expect(activeNames).not.toContain("ipython");
++		expect(session.getToolDefinition("ipython")).toBeUndefined();
++		expect(session.systemPrompt).not.toContain(REPL_DOCTRINE_MARKER);
++	});
++
++	it.skipIf(skipIfNeurajlUnavailable())(
++		"REAL integration: baseToolsFactory starts a real NeuraJL kernel and state persists across separate tool calls",
++		async () => {
++			const factory = createNeurajlBaseToolsFactory(process.cwd(), {
++				sessionCliPath: SESSION_CLI_PATH,
++				projectDir: PROJECT_DIR,
++			});
++
++			const session = await buildSession({
++				baseToolsFactory: factory,
++				initialActiveToolNames: ["neurajl"],
++				includeGoals: false,
++			});
++
++			expect(session.getToolDefinition("ipython")).toBeUndefined();
++			const tool = session.getToolDefinition("neurajl");
++			expect(tool).toBeDefined();
++
++			// Turn 1: bind a variable in the persistent kernel.
++			const r1 = await tool!.execute("t1", { code: "x = 42" }, undefined, undefined, undefined as never);
++			expect(r1.isError).toBeFalsy();
++
++			// Turn 2, a SEPARATE tool call: the binding must still be there --
++			// this is the actual thing NeuraBash's own first-pass adapter does
++			// not yet prove (its own doc: "each call is an independent,
++			// ephemeral invocation").
++			const r2 = await tool!.execute("t2", { code: "x + 1" }, undefined, undefined, undefined as never);
++			expect(r2.isError).toBeFalsy();
++			expect((r2.content[0] as { text: string }).text).toBe("43");
++
++			// An ephemeral turn must not leak into the persistent kernel, and
++			// -- the specific regression this integration found and fixed --
++			// must not break the session's ability to answer the NEXT turn.
++			const r3 = await tool!.execute(
++				"t3",
++				{ code: "helper(y) = y * 10; helper(3)", ephemeral: true },
++				undefined,
++				undefined,
++				undefined as never,
++			);
++			expect(r3.isError).toBeFalsy();
++			expect((r3.content[0] as { text: string }).text).toBe("30");
++
++			const r4 = await tool!.execute("t4", { code: "x" }, undefined, undefined, undefined as never);
++			expect(r4.isError).toBeFalsy();
++			expect((r4.content[0] as { text: string }).text).toBe("42");
++
++			const r5 = await tool!.execute("t5", { code: "@isdefined(helper)" }, undefined, undefined, undefined as never);
++			expect(r5.isError).toBeFalsy();
++			expect((r5.content[0] as { text: string }).text).toBe("false");
++		},
++		120_000,
++	);
++
++	it.skipIf(skipIfNeurajlUnavailable())(
++		"REAL integration: dispose actually terminates the underlying process",
++		async () => {
++			const factory = createNeurajlBaseToolsFactory(process.cwd(), {
++				sessionCliPath: SESSION_CLI_PATH,
++				projectDir: PROJECT_DIR,
++			});
++			const scope = factory("dispose-test-session");
++			const tool = scope.tools.neurajl!;
++
++			const r1 = await tool.execute("t1", { code: "1 + 1" }, undefined, undefined, undefined as never);
++			expect(r1.isError).toBeFalsy();
++
++			await scope.dispose?.();
++
++			// A second call after dispose must fail cleanly (the process is
++			// gone), not hang -- dispose has to actually be a real teardown,
++			// not a no-op that leaves the child process running.
++			const r2 = await tool.execute("t2", { code: "1 + 1" }, undefined, undefined, undefined as never);
++			expect(r2.isError).toBe(true);
++		},
++		60_000,
++	);
++});
+-- 
+2.55.0
+

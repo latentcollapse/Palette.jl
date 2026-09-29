@@ -1,0 +1,16 @@
+New task, in the same repository. Port: module PyBisect in ports/bisect.jl. Python's bisect functions (lo, hi as Python indices, 0-based; hi === nothing means len(a); a negative lo throws) and collections.Counter.most_common (ties keep first-insertion order; n === nothing means all) and the Counter +, -, &, | operators (return each result as the sorted vector of [element, count] pairs).
+
+Functions:
+  - bisect_left(a, x, lo, hi) -> Int (0-based)
+  - bisect_right(a, x, lo, hi) -> Int (0-based)
+  - insort_left(a, x) -> new Vector
+  - most_common(items, n) -> vector of [item, count]
+  - counter_total_ops(a, b) -> [sum, difference, intersection, union]
+
+A few examples (arguments shown as JSON):
+  bisect_left([], 0, 0, null) -> 0
+  bisect_right([], 0, 0, null) -> 0
+  insort_left([], 0) -> [0]
+  bisect_right([], 2, -1, null) -> throws
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

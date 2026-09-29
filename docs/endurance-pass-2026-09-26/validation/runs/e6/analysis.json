@@ -1,0 +1,61 @@
+{
+ "wall_min": 50.5,
+ "neurajl_calls": 226,
+ "errors": 17,
+ "requests": 274,
+ "input_tokens": 335991,
+ "output_tokens": 165122,
+ "cache_read_tokens": 11578937,
+ "cost_usd": 0.276,
+ "compactions": 5,
+ "neurajl_state_notes": 5,
+ "output_limit_continuations": 0,
+ "kernel_stopped_notices": 2,
+ "revival_reports": 2,
+ "changed_on_disk_notices": 5,
+ "reload_notices": 0,
+ "background_reports": 0,
+ "background_task_failures": 0,
+ "undefvar_errors": 2,
+ "interrupted_calls": 0,
+ "in_kernel_test_includes": 0,
+ "cli_test_runs": 37,
+ "background_jobs_started": 0,
+ "reuse_after_revival": [
+  {
+   "at_call": 63,
+   "revived_names": 14,
+   "reused_in_next_10_calls": [
+    "replace_once",
+    "tests"
+   ]
+  },
+  {
+   "at_call": 222,
+   "revived_names": 97,
+   "reused_in_next_10_calls": [
+    "tests"
+   ]
+  }
+ ],
+ "after_compaction": {
+  "post_calls": 183,
+  "reuse": 68,
+  "reconstruct": 19,
+  "reparse_log": 3,
+  "rediscover": 4,
+  "undef_errors": 2,
+  "distinct_reused": [
+   "append",
+   "expected",
+   "last",
+   "move_to_end",
+   "replace_once",
+   "result",
+   "slot",
+   "start",
+   "tests",
+   "value"
+  ]
+ }
+}

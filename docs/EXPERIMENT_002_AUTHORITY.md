@@ -1,0 +1,114 @@
+# Experiment 002 — Unbounded Cognition / Bounded Authority
+
+**Date:** 2026-09-22. Branch: `main` (local commits, not yet pushed -- no push access from this environment; see below). Builds on Experiment 001 (`docs/EXPERIMENT_001_RESULTS.md`, Rev 2, runtime-verified).
+
+## Research question
+
+Can NeuraJL retain an unrestricted, persistent Julia cognitive workspace
+while enforcing a real authority boundary below the language?
+
+## Answer
+
+**Yes**, demonstrated with a real, working, adversarially-tested minimal
+implementation. The narrowest architecture that did this:
+
+```
+model
+  |
+contained NeuraJL worker (real julia/IJulia process, full language power)
+  |  OS-level namespace isolation (bubblewrap) -- the actual boundary
+  |  one narrow channel out: a bind-mounted Unix socket
+  v
+host capability broker (separate process, outside the worker's namespace)
+  |  authorize (against a fixed, pre-set ceiling) -> execute -> receipt
+  v
+real host effects (filesystem outside the workspace, network, nested workers)
+```
+
+No in-language blacklist. No "collaborative AST cage." `eval`, `ccall`,
+`run`, raw sockets, metaprogramming, and reflection all work, unrestricted,
+inside the worker -- and none of them reach outside the sandbox's OS-level
+boundary, verified by adversarial testing with independent host-side checks
+for every claim (`docs/THREAT_MODEL.md`).
+
+## What was built
+
+| Component | File | Lines | Role |
+|---|---|---|---|
+| Contained worker launcher | `security/launch_worker.py` | 159 | Builds the bubblewrap sandbox: namespace isolation, bounded filesystem, no ambient credentials, network off by default. Reuses NeuraBash's proven flag set (see `docs/NEURABASH_SECURITY_PORT.md`). |
+| Host capability broker | `security/broker.py` | ~370 | Runs outside the sandbox. Unix-socket JSON protocol, three fully-implemented capability categories (`external_fs_write`, `network_access`, `package_management`) plus `spawn_child_worker` with real `C_child ⊆ C_caller` enforcement (including for network, after a real bug in that path was found and fixed -- see THREAT_MODEL.md row 19), append-only receipt log. |
+| Worker-side client | `src/Neura.jl`, `request_capability()` | +50 net (incl. new `JSON`/`Sockets` deps) | The only code path in the package that can reach a broker-mediated effect. Performs no effect itself. |
+| Executable test suite | `security/test_authority.py` | 582 | 26 real tests, no mocks: fast ceiling-subset-logic tests (no sandbox, including a `network_access` allowlist-widening regression), a direct redirect-safety regression, real-sandbox containment tests, real broker-mediated tests, and nested-worker tests (including two severe regressions found by external review and fixed: `spawn_child_worker` letting a request pick its own host workspace/project/repo paths, and network ceiling widening via omitted `allowed_hosts`). This count grows as real bugs are found; check the file itself, not this number, before citing it as current. |
+
+770 lines of new Python (430 implementation + 340 tests), 50 net lines
+added to the existing, already-tested `Neura` package. No changes to
+Experiment 001's proven behavior -- `Pkg.test()` is still 55/55 after every
+change in this pass (reverified, not assumed).
+
+## What's PROVEN, PARTIALLY PROVEN, NOT YET PROVEN
+
+Full detail and exact evidence in `docs/THREAT_MODEL.md`; summary:
+
+**PROVEN** (adversarially tested, independently verified from outside the sandbox):
+- The worker has genuinely unrestricted language power inside the sandbox (`eval`, `ccall`, `run`, subprocess spawning all work; `eval`'d code has identical power and identical failure modes to directly-typed code).
+- Network access is blocked at the kernel level regardless of mechanism (`run`, raw `Sockets.connect`, subprocess-inherited) -- not a policy, a missing network namespace.
+- Filesystem access outside the bounded workspace is blocked -- either the path doesn't exist in the sandbox's view at all (strongest case: sensitive host files), or it's read-only, or a write "succeeds" into the sandbox's own ephemeral, non-persistent storage and is confirmed absent from the real host afterward.
+- The broker-mediated path works correctly both ways: an approved request produces a real, verified host-side effect; a denied request produces neither the effect nor any trace of it on the host.
+- Bypassing the cooperative client and attempting a denied effect directly still fails, identically -- the broker is not a backdoor that widens the sandbox.
+- The worker cannot construct its own, differently-configured sandbox (a real kernel-level rejection: `ENOSPC`, nesting depth exceeded) -- self-expansion of authority is blocked below the application layer, not by convention.
+- Nested child workers: a request for a wider ceiling than the parent's is denied before any child is launched; a request for a genuine subset is approved and a real, independent second sandbox is launched (confirmed via the child's own separate PID namespace). A real bug in this path was found and fixed in the parity-pass follow-up: an approved child `network_access` grant used to hand the child a raw, unshared OS network namespace regardless of `allowed_hosts`, confirmed exploitable (reached a real host-side listener never in the allowlist). Fixed by giving every spawned child its own broker enforcing its own validated ceiling, with the child's network namespace never unshared. See `docs/THREAT_MODEL.md` row 19.
+
+**PARTIALLY PROVEN:**
+- `spawn_child_worker` / bounded long-running children: the synchronous, one-shot case is fully proven; an async start-now-poll-later child lifecycle is designed-for but not built.
+- `network_access`'s *approved* path (the broker actually performing an outbound request on the worker's behalf) exercises real code but wasn't driven end-to-end from inside a worker this pass -- the denial path, which is what the adversarial claim actually rests on, is fully proven.
+
+**NOT YET PROVEN:**
+- External filesystem *read* (only write is implemented).
+- Credential access, package-management effects, host service invocation as their own categories (design intent documented in `docs/CAPABILITY_MODEL.md`, no implementation).
+- Depot cold-start performance is **solved** (parity-pass follow-up to this experiment, not part of the original run): the ~35-40s tax on `using Neura` launches was traced to a build_id-mismatch cascade caused by a split writable+readonly `JULIA_DEPOT_PATH`, and fixed by giving each worker a real, cheap (`cp --reflink`) private clone of the depot as the *single* `JULIA_DEPOT_PATH` entry instead. Measured through the real code path: ~41s -> ~4.4s per cold launch, all 19 security tests still passing. Full root-cause and fix writeup in `docs/NEURABASH_SECURITY_PORT.md`.
+- Multi-level (grandchild) nesting -- the subset-check logic is recursive in principle but was only exercised one level deep.
+- Broker socket has no request authentication beyond filesystem reachability -- fine for one worker per broker (the only configuration tested), an open question for anything more.
+
+## Phase B — Experiment 001, reverified before this work started
+
+Per the goal's explicit gate, reverified fresh at the start of this pass,
+not assumed from memory: package parses, loads, `Pkg.test()` 55/55, real
+Jupyter-wire-protocol proof against a live IJulia kernel still passes
+(`x=41` then `x+1==42` over real ZMQ). Static tooling (`julia_analyzer.py`)
+was already correctly demoted to preflight-only in the prior pass -- no
+changes needed there.
+
+## Phase A — repo graduation
+
+Flattened the package to a conventional Julia layout (`Project.toml`/`src`/
+`test` at repo root, matching how real Julia package repos are shaped).
+Removed two dead scaffold artifacts (a duplicate `tests/` placeholder, a
+`.gitignore` rule that was silently shadowing the real `test/` directory).
+Added an explicit naming table distinguishing NeuraJL (product) / `Neura`
+(package) / IJulia (real upstream transport, not ours) / NeuraBash
+(reference implementation) -- see the root README.
+
+## Operational note
+
+This environment has no SSH access to push to the real GitHub remote (a
+recurring, already-known limitation this session -- see the NIRA-Prime
+Gate 2 provider report for the same finding on a different repo). All work
+in this experiment is committed locally only. Matt will need to pull or add
+push access for this to reach the real repo.
+
+## Recommendation
+
+The goal's own stop condition: once a minimal real authority fence is
+demonstrated, stop. It's demonstrated. The next experiment, per the goal's
+own framing, is **NeuraJL vs. NeuraBash** -- head-to-head, on the actual
+operator-surface question (which substrate makes the model more capable)
+and eventually the full-system question (which does so without giving away
+the house). Before that comparison is meaningful, the depot cold-start cost is now
+closed (see above); the remaining item worth closing is expanding the
+capability category coverage enough that a real task-shaped comparison
+(not just adversarial probes) can run through the broker for whatever
+categories that task actually needs.
+
+No CUDA, no kernel autotuning, no ML features, no additional operator
+commands, and no Prime integration were added or attempted in this pass,
+per the goal's explicit instruction.

@@ -1,0 +1,19 @@
+New task, in the same repository. Port: module PyCalendar in ports/calendar.jl. Python's calendar module in the C locale: English month and day names, TextCalendar layout exactly (month(y, m, w, l) is calendar.month; month_firstweekday uses TextCalendar(firstweekday).formatmonth with default w and l). timegm takes [year, month, day, hour, minute, second]. Out-of-range months throw.
+
+Functions:
+  - isleap(y)
+  - leapdays(y1, y2)
+  - weekday(y, m, d) (Monday == 0)
+  - monthrange(y, m) -> [first_weekday, days]
+  - monthcalendar(y, m) -> vector of weeks
+  - month(y, m, w, l) -> String
+  - month_firstweekday(y, m, firstweekday) -> String
+  - timegm(t::AbstractVector) -> Int
+
+A few examples (arguments shown as JSON):
+  isleap(1900) -> false
+  isleap(2000) -> true
+  isleap(2024) -> true
+  monthrange(2026, 13) -> throws
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

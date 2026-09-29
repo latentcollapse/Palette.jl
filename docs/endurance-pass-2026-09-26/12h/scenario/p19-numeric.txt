@@ -1,0 +1,18 @@
+New task, in the same repository. Port: module PyNumeric in ports/numeric.jl. Numeric behaviours of Python: math.fsum (exact, Shewchuk-style), repr() of a float (shortest round-tripping digits, Python's exponent thresholds and formatting), float.hex and float.fromhex, round(x, ndigits) on floats (correctly rounded, half-even on the exact decimal value, so round(2.675, 2) == 2.67), math.comb returned as a decimal string (it can exceed Int64), and math.isqrt.
+
+Functions:
+  - fsum(xs) -> Float64
+  - float_repr(x::Float64) -> String
+  - float_hex(x::Float64) -> String
+  - float_fromhex(s) -> Float64
+  - py_round(x::Float64, ndigits::Integer) -> Float64
+  - comb(n, k) -> String
+  - isqrt(n) -> Int
+
+A few examples (arguments shown as JSON):
+  float_repr(0.1) -> "0.1"
+  float_repr(1.0) -> "1.0"
+  float_repr(1e+16) -> "1e+16"
+  float_fromhex("0x1p1024") -> throws
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

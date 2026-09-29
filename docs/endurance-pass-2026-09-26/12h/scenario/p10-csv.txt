@@ -1,0 +1,12 @@
+New task, in the same repository. Port: module PyCsv in ports/csv.jl. Python's csv module, default excel dialect apart from the delimiter/quotechar given: doublequote on, skipinitialspace off, strict off, QUOTE_MINIMAL, lineterminator "\r\n" for writing. Reading accepts \n, \r and \r\n line endings and quoted fields spanning lines. Writing renders values as Python's str() would (None as an empty field, floats in Python repr form).
+
+Functions:
+  - reader(text, delimiter::AbstractString, quotechar::AbstractString) -> Vector of rows (Vector{String})
+  - write_rows(rows::AbstractVector, delimiter::AbstractString) -> String
+
+A few examples (arguments shown as JSON):
+  reader("a,b,c\n1,2,3\n", ",", "\"") -> [["a", "b", "c"], ["1", "2", "3"]]
+  reader("a,b\r\nc,d\r\n", ",", "\"") -> [["a", "b"], ["c", "d"]]
+  reader("a,\"b,c\",d\n", ",", "\"") -> [["a", "b,c", "d"]]
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.

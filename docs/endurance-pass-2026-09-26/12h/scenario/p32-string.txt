@@ -1,0 +1,14 @@
+New task, in the same repository. Port: module PyString in ports/string.jl. string.Template substitute and safe_substitute (default delimiter $, default idpattern, $$ escape, ${name} braces; substitute throws on a missing key or an invalid placeholder, safe_substitute leaves them), and string.capwords. mapping values are strings or numbers, rendered as Python's str() would. sep === nothing means the default whitespace splitting.
+
+Functions:
+  - template_substitute(template, mapping::AbstractDict) -> String
+  - template_safe_substitute(template, mapping::AbstractDict) -> String
+  - capwords(s, sep) -> String
+
+A few examples (arguments shown as JSON):
+  template_substitute("$who likes $what", {"who": "tim", "what": "kung pao", "n": 3, "x": 1.5, "_u": "under", "a1": "A"}) -> "tim likes kung pao"
+  template_safe_substitute("$who likes $what", {"who": "tim", "what": "kung pao", "n": 3, "x": 1.5, "_u": "under", "a1": "A"}) -> "tim likes kung pao"
+  template_substitute("${who}s", {"who": "tim", "what": "kung pao", "n": 3, "x": 1.5, "_u": "under", "a1": "A"}) -> "tims"
+  template_substitute("$missing", {"who": "tim", "what": "kung pao", "n": 3, "x": 1.5, "_u": "under", "a1": "A"}) -> throws
+
+The conventions for every port are in ports/README.md. Check your port against python3 on many inputs, edge cases included, before you finish. Say when the task is complete.
