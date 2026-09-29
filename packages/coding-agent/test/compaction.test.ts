@@ -241,7 +241,7 @@ describe("findCutPoint", () => {
 				id,
 				parentId: lastId,
 				timestamp: new Date().toISOString(),
-				customType: "neurajl_state",
+				customType: "palette_state",
 				content: "n".repeat(4000),
 				display: false,
 			};

@@ -48,11 +48,11 @@ export {
 	type NeurabashToolOptions,
 } from "./neurabash.js";
 export {
-	createNeurajlBaseToolsFactory,
-	type NeurajlToolDetails,
-	type NeurajlToolInput,
-	type NeurajlToolOptions,
-} from "./neurajl.js";
+	createPaletteBaseToolsFactory,
+	type PaletteToolDetails,
+	type PaletteToolInput,
+	type PaletteToolOptions,
+} from "./palette.js";
 export {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,

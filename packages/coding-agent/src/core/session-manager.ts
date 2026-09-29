@@ -29,7 +29,7 @@ import {
 	createCompactionSummaryMessage,
 	createCustomMessage,
 	HARNESS_DIGEST_CUSTOM_TYPE,
-	NEURAJL_STATE_CUSTOM_TYPE,
+	PALETTE_STATE_CUSTOM_TYPE,
 } from "./messages.js";
 import {
 	addAssistantUsage,
@@ -513,14 +513,14 @@ export function buildSessionContext(
 		}
 	}
 
-	// A NeuraJL state note is written after every compaction, and a kept tail
+	// A Palette state note is written after every compaction, and a kept tail
 	// can span several; the older ones describe a kernel that has since moved
 	// on, and at one per compaction they grew the tail past its budget.
-	let newestNeurajlStateEntryId: string | undefined;
+	let newestPaletteStateEntryId: string | undefined;
 	for (let i = path.length - 1; i >= 0; i--) {
 		const entry = path[i];
-		if (entry.type === "custom_message" && entry.customType === NEURAJL_STATE_CUSTOM_TYPE) {
-			newestNeurajlStateEntryId = entry.id;
+		if (entry.type === "custom_message" && entry.customType === PALETTE_STATE_CUSTOM_TYPE) {
+			newestPaletteStateEntryId = entry.id;
 			break;
 		}
 	}
@@ -545,7 +545,7 @@ export function buildSessionContext(
 			if (entry.customType === HARNESS_DIGEST_CUSTOM_TYPE && entry.id !== keepDigestEntryId) {
 				return;
 			}
-			if (entry.customType === NEURAJL_STATE_CUSTOM_TYPE && entry.id !== newestNeurajlStateEntryId) {
+			if (entry.customType === PALETTE_STATE_CUSTOM_TYPE && entry.id !== newestPaletteStateEntryId) {
 				return;
 			}
 			target.push(

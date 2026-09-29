@@ -47,8 +47,8 @@ export const MCP_CONNECTION_OUTCOME_CUSTOM_TYPE = "mcp_connection_outcome";
 export const REFINEMENT_OUTCOME_CUSTOM_TYPE = "refinement_outcome";
 export const REFINEMENT_NOTICE_CUSTOM_TYPE = "refinement_notice";
 export const HARNESS_DIGEST_CUSTOM_TYPE = "harness_digest";
-/** NeuraJL's note after a compaction; only the newest describes the kernel as it is. */
-export const NEURAJL_STATE_CUSTOM_TYPE = "neurajl_state";
+/** Palette's note after a compaction; only the newest describes the kernel as it is. */
+export const PALETTE_STATE_CUSTOM_TYPE = "palette_state";
 export const RLM_CHILD_FAILURE_CUSTOM_TYPE = "rlm_child_failure";
 export const RLM_CHILD_TERMINAL_NOTICE_CUSTOM_TYPE = "rlm_child_terminal_notice";
 export const ASYNC_BASH_COMPLETION_CUSTOM_TYPE = "async_bash_completion";

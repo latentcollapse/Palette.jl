@@ -8,18 +8,18 @@ import type { SessionBaseToolsFactory, SessionBaseToolsHost } from "../agent-ses
 import type { ToolDefinition } from "../extensions/types.js";
 import type { HostRequestHandlers } from "../kernel/index.js";
 import { capCellSourceCode } from "../kernel/repl-manager.js";
-import { NEURAJL_STATE_CUSTOM_TYPE } from "../messages.js";
+import { PALETTE_STATE_CUSTOM_TYPE } from "../messages.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 /**
- * NIRA-Prime integration point: exposes NeuraJL (neurajl-operator-lab) as this
+ * NIRA-Prime integration point: exposes Palette (palette-operator-lab) as this
  * fork's operator surface.
  *
  * It uses `baseToolsFactory`, not `baseToolsOverride`: the factory builds tools
  * once per agent session (including each RLM child) with a dispose hook, so
  * every session gets its own Julia kernel. A shared override map would let
  * every session and RLM child mutate one kernel's bindings, the same failure
- * NeuraJL's C_child ⊆ C_caller model prevents one level down.
+ * Palette's C_child ⊆ C_caller model prevents one level down.
  *
  * Each session drives one `security/session_cli.py` process over
  * newline-delimited JSON. That process owns a bubblewrap-contained Julia
@@ -30,16 +30,16 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.js";
  * earlier binding is gone and which epoch replaced which.
  */
 
-const CODE_DESCRIPTION = `Julia source to evaluate in this session's persistent NeuraJL kernel. The working directory is the task workspace. Bindings, functions and compiled methods survive across calls. Everything printed (println, @show, @warn, display, output of run(\`cmd\`) and sh"cmd") is returned along with the value of the last expression. To write a file's full text (source code, JSON, CSV), put the text in payload and call write(path, PAYLOAD) instead of embedding it in a Julia string literal.`;
+const CODE_DESCRIPTION = `Julia source to evaluate in this session's persistent Palette kernel. The working directory is the task workspace. Bindings, functions and compiled methods survive across calls. Everything printed (println, @show, @warn, display, output of run(\`cmd\`) and sh"cmd") is returned along with the value of the last expression. To write a file's full text (source code, JSON, CSV), put the text in payload and call write(path, PAYLOAD) instead of embedding it in a Julia string literal.`;
 const PAYLOAD_DESCRIPTION =
 	"Text bound as PAYLOAD for this call only, such as the complete contents of a file to write with write(path, PAYLOAD). It is not parsed as Julia, so quotes, triple quotes, $ and backslashes need no escaping.";
-// Experiment switch (NEURAJL_PAYLOAD_PARTS=1): payload may also be named texts,
+// Experiment switch (PALETTE_PAYLOAD_PARTS=1): payload may also be named texts,
 // so an edit's old and new text both travel outside Julia's string syntax.
 const CODE_DESCRIPTION_PARTS = `${CODE_DESCRIPTION.slice(0, CODE_DESCRIPTION.lastIndexOf(" To write"))} To write a file's full text, put the text in payload and call write(path, PAYLOAD); to edit a file, put the old and new text in payload as {"old": ..., "new": ...} and call write(path, replace(read(path, String), PAYLOAD["old"] => PAYLOAD["new"])); to run a shell script of more than one line, put it in payload and call bash(PAYLOAD). Do not embed file text or scripts in a Julia string literal.`;
 const PAYLOAD_PARTS_DESCRIPTION =
 	'Text bound as PAYLOAD for this call only, or, for an edit or anything needing several texts, an object of named texts such as {"old": ..., "new": ...}, read as PAYLOAD["old"] and PAYLOAD["new"]. It is not parsed as Julia, so quotes, triple quotes, $ and backslashes need no escaping.';
 
-function neurajlSchemaFor(parts: boolean) {
+function paletteSchemaFor(parts: boolean) {
 	return Type.Object({
 		code: Type.String({ description: parts ? CODE_DESCRIPTION_PARTS : CODE_DESCRIPTION }),
 		payload: Type.Optional(
@@ -57,13 +57,13 @@ function neurajlSchemaFor(parts: boolean) {
 		),
 	});
 }
-const neurajlSchema = neurajlSchemaFor(true);
+const paletteSchema = paletteSchemaFor(true);
 
-export type NeurajlToolInput = Static<typeof neurajlSchema>;
-// Named payload texts are the default; NEURAJL_PAYLOAD_PARTS=0 restores the single-string form for an A/B.
-const payloadParts = () => process.env.NEURAJL_PAYLOAD_PARTS !== "0";
+export type PaletteToolInput = Static<typeof paletteSchema>;
+// Named payload texts are the default; PALETTE_PAYLOAD_PARTS=0 restores the single-string form for an A/B.
+const payloadParts = () => process.env.PALETTE_PAYLOAD_PARTS !== "0";
 
-export interface NeurajlToolDetails {
+export interface PaletteToolDetails {
 	success: boolean;
 	epoch?: string;
 	restartedFromEpoch?: string;
@@ -71,15 +71,15 @@ export interface NeurajlToolDetails {
 	outputTruncated?: boolean;
 }
 
-export interface NeurajlToolOptions {
+export interface PaletteToolOptions {
 	/**
-	 * The Rust host (`neurajl-host`, built from the lab's host/ crate). When set (or NEURAJL_HOST_BIN is), it runs
+	 * The Rust host (`palette-host`, built from the lab's host/ crate). When set (or PALETTE_HOST_BIN is), it runs
 	 * the session -- sandbox, broker and bridge -- and no Python is involved.
 	 */
 	hostBin?: string;
 	/** Absolute path to security/session_cli.py, the Python host, used when no Rust host is configured. */
 	sessionCliPath?: string;
-	/** The neurajl-operator-lab checkout (session_cli.py's --repo-dir). Defaults to session_cli.py's grandparent. */
+	/** The palette-operator-lab checkout (session_cli.py's --repo-dir). Defaults to session_cli.py's grandparent. */
 	repoDir?: string;
 	/** A Julia project with Neura dev-installed. Unset fails closed at first use. */
 	projectDir?: string;
@@ -101,16 +101,16 @@ export interface NeurajlToolOptions {
 	/**
 	 * Directory under which each session's kernel saves its state after every completed call, one
 	 * subdirectory per session id, so a kernel that replaces it (after a crash, a kill, or a resumed
-	 * session) revives it. Default: `neurajl-state` in the OS temp directory. `false` turns saving off.
+	 * session) revives it. Default: `palette-state` in the OS temp directory. `false` turns saving off.
 	 */
 	stateRoot?: string | false;
 	/**
 	 * Open the session's first result, and the first after each compaction, with a compact map of the
 	 * workspace (languages, build and test entry points, git state, recent changes). Default: true, unless
-	 * NEURAJL_WORKSPACE_MAP=0.
+	 * PALETTE_WORKSPACE_MAP=0.
 	 */
 	workspaceMap?: boolean;
-	/** Open long failing build/test output with a digest of its errors. Default: true, unless NEURAJL_OUTPUT_DIGEST=0. */
+	/** Open long failing build/test output with a digest of its errors. Default: true, unless PALETTE_OUTPUT_DIGEST=0. */
 	outputDigest?: boolean;
 	/**
 	 * Stop a kernel that has had no call for this long; the next call revives its saved state. Only applies
@@ -125,7 +125,7 @@ interface PendingTurn {
 	reject: (err: Error) => void;
 }
 
-interface NeurajlKernel {
+interface PaletteKernel {
 	epoch: string;
 	/** This kernel found a saved state and revives it; its first reply says what it could and could not. */
 	revival: boolean;
@@ -139,7 +139,7 @@ interface NeurajlKernel {
 }
 
 function requiredSetting(value: string | undefined, name: string): string {
-	if (!value) throw new Error(`neurajl: ${name} is not configured`);
+	if (!value) throw new Error(`palette: ${name} is not configured`);
 	return value;
 }
 
@@ -155,7 +155,7 @@ export function truncateMiddle(
 	return { text: text.slice(0, head) + notice + text.slice(text.length - (keep - head)), truncated: true };
 }
 
-export function formatNeurajlResponse(response: Record<string, unknown>): string {
+export function formatPaletteResponse(response: Record<string, unknown>): string {
 	const parts: string[] = [];
 	const output = typeof response.output === "string" ? response.output.trimEnd() : "";
 	if (output) parts.push(output);
@@ -177,19 +177,19 @@ export function formatNeurajlResponse(response: Record<string, unknown>): string
 
 async function startKernel(
 	cwd: string,
-	options: NeurajlToolOptions | undefined,
+	options: PaletteToolOptions | undefined,
 	stateDir: string | undefined,
 	hostHandlers: (() => HostRequestHandlers) | undefined,
-): Promise<NeurajlKernel> {
-	const hostBin = options?.hostBin ?? process.env.NEURAJL_HOST_BIN;
+): Promise<PaletteKernel> {
+	const hostBin = options?.hostBin ?? process.env.PALETTE_HOST_BIN;
 	const cliPath = hostBin
 		? undefined
-		: requiredSetting(options?.sessionCliPath ?? process.env.NEURAJL_SESSION_CLI, "session_cli.py path");
+		: requiredSetting(options?.sessionCliPath ?? process.env.PALETTE_SESSION_CLI, "session_cli.py path");
 	const projectDir = requiredSetting(
-		options?.projectDir ?? process.env.NEURAJL_PROJECT_DIR,
+		options?.projectDir ?? process.env.PALETTE_PROJECT_DIR,
 		"Julia project directory",
 	);
-	const pythonBin = options?.pythonBin ?? process.env.NEURAJL_PYTHON ?? "python3";
+	const pythonBin = options?.pythonBin ?? process.env.PALETTE_PYTHON ?? "python3";
 	const startupTimeoutMs = options?.startupTimeoutMs ?? 180_000;
 
 	const args = [
@@ -282,7 +282,7 @@ async function startKernel(
 			try {
 				message = JSON.parse(line);
 			} catch {
-				markDead(`neurajl: bridge sent a non-JSON line: ${line.slice(0, 200)}`);
+				markDead(`palette: bridge sent a non-JSON line: ${line.slice(0, 200)}`);
 				child.kill("SIGTERM");
 				return;
 			}
@@ -290,7 +290,7 @@ async function startKernel(
 				helloSeen = true;
 				if (message.kind === "HELLO" && typeof message.epoch === "string") resolveHello(message);
 				else {
-					const reason = `neurajl: kernel failed to start: ${String(message.error ?? line)}`;
+					const reason = `palette: kernel failed to start: ${String(message.error ?? line)}`;
 					rejectHello(new Error(reason));
 					markDead(reason);
 				}
@@ -303,7 +303,7 @@ async function startKernel(
 			const requestId =
 				message.request_id === undefined || message.request_id === null ? undefined : String(message.request_id);
 			const waiter = requestId === undefined ? undefined : pending.get(requestId);
-			if (message.session_dead === true) markDeadAfterReply(String(message.error ?? "neurajl: kernel stopped"));
+			if (message.session_dead === true) markDeadAfterReply(String(message.error ?? "palette: kernel stopped"));
 			if (waiter && requestId !== undefined) {
 				pending.delete(requestId);
 				waiter.resolve(message);
@@ -314,12 +314,12 @@ async function startKernel(
 	// once, and "exit" can fire before that last stdout chunk is delivered.
 	child.on("close", (code, signal) => {
 		if (child.pid) untrackDetachedChildPid(child.pid);
-		markDead(`neurajl: kernel process exited (${signal ?? code}). stderr: ${stderrTail}`);
+		markDead(`palette: kernel process exited (${signal ?? code}). stderr: ${stderrTail}`);
 	});
-	child.on("error", (err) => markDead(`neurajl: kernel process failed to start: ${err.message}`));
+	child.on("error", (err) => markDead(`palette: kernel process failed to start: ${err.message}`));
 
 	const startupTimer = setTimeout(() => {
-		markDead(`neurajl: kernel did not start within ${startupTimeoutMs}ms. stderr: ${stderrTail}`);
+		markDead(`palette: kernel did not start within ${startupTimeoutMs}ms. stderr: ${stderrTail}`);
 		child.kill("SIGTERM");
 	}, startupTimeoutMs + 5000);
 	let hello: Record<string, unknown>;
@@ -347,7 +347,7 @@ async function startKernel(
 		isDead: () => deadReason !== undefined,
 		turn: (code, { ephemeral, payload, map, digest }, signal) => {
 			if (deadReason !== undefined) return Promise.reject(new Error(deadReason));
-			if (signal?.aborted) return Promise.reject(new Error("neurajl: aborted"));
+			if (signal?.aborted) return Promise.reject(new Error("palette: aborted"));
 			const requestId = String(++nextRequestId);
 			currentCode = code;
 			const request: Record<string, unknown> = { request_id: requestId, code };
@@ -360,7 +360,7 @@ async function startKernel(
 				// abandoned mid-flight leaves the kernel busy with no way to
 				// resynchronize, so an abort ends this kernel.
 				const onAbort = () => {
-					markDead("neurajl: turn aborted; kernel stopped");
+					markDead("palette: turn aborted; kernel stopped");
 					child.kill("SIGTERM");
 				};
 				signal?.addEventListener("abort", onAbort, { once: true });
@@ -382,9 +382,9 @@ async function startKernel(
 }
 
 const KERNEL_STOPPED =
-	"[neurajl: the kernel stopped. Output printed during this call and every binding, function and loaded package are gone; files written to the workspace remain. The next call starts a new kernel.]";
+	"[palette: the kernel stopped. Output printed during this call and every binding, function and loaded package are gone; files written to the workspace remain. The next call starts a new kernel.]";
 const KERNEL_STOPPED_REVIVING =
-	"[neurajl: the kernel stopped. Output printed during this call is gone; files written to the workspace remain. The next call starts a new kernel, which revives what it can of the last saved state and says which call that was and what it could not revive.]";
+	"[palette: the kernel stopped. Output printed during this call is gone; files written to the workspace remain. The next call starts a new kernel, which revives what it can of the last saved state and says which call that was and what it could not revive.]";
 
 /**
  * A binding list for a note, within `maxChars`. Entries read `name (type, call N)`;
@@ -427,9 +427,9 @@ function projectPackages(projectDir: string | undefined): string[] {
 
 /**
  * The host request types behind Neura.rlm. A session gets them only when its
- * ceiling names them: `ceiling: { host_request: { allowed_types: NEURAJL_RLM_REQUEST_TYPES } }`.
+ * ceiling names them: `ceiling: { host_request: { allowed_types: PALETTE_RLM_REQUEST_TYPES } }`.
  */
-export const NEURAJL_RLM_REQUEST_TYPES = [
+export const PALETTE_RLM_REQUEST_TYPES = [
 	"rlm.run",
 	"rlm.create_session",
 	"rlm.find_models",
@@ -439,17 +439,17 @@ export const NEURAJL_RLM_REQUEST_TYPES = [
 	"rlm.delete_subagent",
 ] as const;
 
-function allowsRlm(options: NeurajlToolOptions | undefined): boolean {
+function allowsRlm(options: PaletteToolOptions | undefined): boolean {
 	const cap = options?.ceiling?.host_request as { allowed_types?: unknown } | undefined;
 	return Array.isArray(cap?.allowed_types) && cap.allowed_types.includes("rlm.run");
 }
 
-function neurajlDescription(options: NeurajlToolOptions | undefined): string {
+function paletteDescription(options: PaletteToolOptions | undefined): string {
 	const timeout = options?.turnTimeout ?? 60;
-	const packages = projectPackages(options?.projectDir ?? process.env.NEURAJL_PROJECT_DIR);
+	const packages = projectPackages(options?.projectDir ?? process.env.PALETTE_PROJECT_DIR);
 	const loadable = ["the Julia standard library", ...packages].join(", ");
 	return [
-		"Execute Julia in this session's persistent NeuraJL kernel. The working directory is the task workspace; read and edit files with Julia's file I/O. Bindings, functions, types and loaded packages persist across calls, and ans is the last call's value. Printed output and the last expression's value are returned.",
+		"Execute Julia in this session's persistent Palette kernel. The working directory is the task workspace; read and edit files with Julia's file I/O. Bindings, functions, types and loaded packages persist across calls, and ans is the last call's value. Printed output and the last expression's value are returned.",
 		'Shell: sh"cmd" (or bash("cmd")) runs bash, so pipes, globs, redirects and && work, and returns ShellResult(exitcode, stdout, stderr) after printing the output. In sh"..." the $ belongs to the shell; in an ordinary "..." string it is Julia interpolation. run(`prog args`) starts one program without a shell.',
 		payloadParts()
 			? 'To write a file\'s text, put the text in payload and call write(path, PAYLOAD); to edit, give payload as {"old": ..., "new": ...} and use PAYLOAD["old"] and PAYLOAD["new"]. A payload is not parsed as Julia, so it needs no escaping.'
@@ -466,15 +466,15 @@ function neurajlDescription(options: NeurajlToolOptions | undefined): string {
 }
 
 /**
- * `SessionBaseToolsFactory` for NeuraJL: one kernel per agent session,
+ * `SessionBaseToolsFactory` for Palette: one kernel per agent session,
  * including each RLM child, started when the session's tools are built so
  * that its startup overlaps the model's first request.
  */
-export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlToolOptions): SessionBaseToolsFactory {
+export function createPaletteBaseToolsFactory(cwd: string, options?: PaletteToolOptions): SessionBaseToolsFactory {
 	return (sessionId: string, host?: SessionBaseToolsHost) => {
-		const stateRoot = options?.stateRoot ?? join(tmpdir(), "neurajl-state");
+		const stateRoot = options?.stateRoot ?? join(tmpdir(), "palette-state");
 		const stateDir = stateRoot === false ? undefined : join(stateRoot, sessionId.replace(/[^A-Za-z0-9._-]/g, "_"));
-		let kernelPromise: Promise<NeurajlKernel> | undefined;
+		let kernelPromise: Promise<PaletteKernel> | undefined;
 		let lastEpoch: string | undefined;
 		let disposed = false;
 		// The kernel lists its bindings in every reply. When it dies, the
@@ -482,9 +482,9 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 		// instead of relying on its own memory of the session.
 		let lastBindings: string[] = [];
 		// The workspace map opens the session's first result and the first
-		// after each compaction (NEURAJL_WORKSPACE_MAP=0 turns it off for an A/B).
-		const mapEnabled = options?.workspaceMap ?? process.env.NEURAJL_WORKSPACE_MAP !== "0";
-		const digestEnabled = options?.outputDigest ?? process.env.NEURAJL_OUTPUT_DIGEST !== "0";
+		// after each compaction (PALETTE_WORKSPACE_MAP=0 turns it off for an A/B).
+		const mapEnabled = options?.workspaceMap ?? process.env.PALETTE_WORKSPACE_MAP !== "0";
+		const digestEnabled = options?.outputDigest ?? process.env.PALETTE_OUTPUT_DIGEST !== "0";
 		let mapNext = mapEnabled;
 		const lostBindings = () =>
 			lastBindings.length === 0 ? "" : ` Lost bindings: ${describeBindings(lastBindings)}.`;
@@ -507,8 +507,8 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 
 		// Returns the live kernel, starting one if none exists or the last one
 		// died. `restartedFrom` names the dead kernel's epoch.
-		async function liveKernel(): Promise<{ kernel: NeurajlKernel; restartedFrom?: string }> {
-			if (disposed) throw new Error("neurajl: session disposed");
+		async function liveKernel(): Promise<{ kernel: PaletteKernel; restartedFrom?: string }> {
+			if (disposed) throw new Error("palette: session disposed");
 			if (kernelPromise) {
 				const current = await kernelPromise.catch(() => undefined);
 				if (current && !current.isDead()) return { kernel: current };
@@ -526,13 +526,13 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 		// reports the failure.
 		liveKernel().then(armIdleStop, () => undefined);
 
-		const definition: ToolDefinition<typeof neurajlSchema, NeurajlToolDetails> = {
-			name: "neurajl",
-			label: "neurajl",
-			description: neurajlDescription(options),
-			promptSnippet: "neurajl - persistent Julia kernel in the task workspace, OS-sandboxed",
+		const definition: ToolDefinition<typeof paletteSchema, PaletteToolDetails> = {
+			name: "palette",
+			label: "palette",
+			description: paletteDescription(options),
+			promptSnippet: "palette - persistent Julia kernel in the task workspace, OS-sandboxed",
 			executionMode: "sequential",
-			parameters: neurajlSchemaFor(payloadParts()) as typeof neurajlSchema,
+			parameters: paletteSchemaFor(payloadParts()) as typeof paletteSchema,
 			// The agent loop marks a tool result as an error only when execute
 			// throws; an `isError` field on a returned result is ignored.
 			execute: async (_toolCallId, params, signal) => {
@@ -549,8 +549,8 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 						restartedFrom === undefined
 							? ""
 							: kernel.revival
-								? `[neurajl: the previous kernel (epoch ${restartedFrom}) stopped${why}; this call ran in a NEW kernel (epoch ${kernel.epoch}), which revived the last saved state. Its report below says which call that was, and what was restored, rebuilt, or lost.]\n`
-								: `[neurajl: the previous kernel (epoch ${restartedFrom}) stopped; this call ran in a NEW kernel (epoch ${kernel.epoch}). All earlier bindings, functions and loaded packages are gone.${lostBindings()} Files written to the workspace remain.]\n`;
+								? `[palette: the previous kernel (epoch ${restartedFrom}) stopped${why}; this call ran in a NEW kernel (epoch ${kernel.epoch}), which revived the last saved state. Its report below says which call that was, and what was restored, rebuilt, or lost.]\n`
+								: `[palette: the previous kernel (epoch ${restartedFrom}) stopped; this call ran in a NEW kernel (epoch ${kernel.epoch}). All earlier bindings, functions and loaded packages are gone.${lostBindings()} Files written to the workspace remain.]\n`;
 					let response: Record<string, unknown>;
 					try {
 						response = await kernel.turn(
@@ -575,7 +575,7 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 							? `Neura.output(${response.call}) returns everything this call printed${response.success === true ? ", and ans its value" : ""}`
 							: undefined;
 					const { text, truncated } = truncateMiddle(
-						formatNeurajlResponse(response),
+						formatPaletteResponse(response),
 						options?.maxOutputChars,
 						fullText,
 					);
@@ -600,12 +600,12 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 		};
 
 		return {
-			tools: { neurajl: wrapToolDefinition(definition) },
+			tools: { palette: wrapToolDefinition(definition) },
 			// Compaction drops the calls that built the kernel's state; the
 			// kernel keeps it. Without this the model no longer knew what it had.
 			stateAfterCompaction: async () => {
 				// Experiment switch: suppresses the note for an A/B of its effect.
-				if (process.env.NEURAJL_COMPACTION_NOTE === "0") return null;
+				if (process.env.PALETTE_COMPACTION_NOTE === "0") return null;
 				const kernel = kernelPromise ? await kernelPromise.catch(() => undefined) : undefined;
 				if (!kernel || kernel.isDead()) return null;
 				mapNext = mapEnabled;
@@ -614,8 +614,8 @@ export function createNeurajlBaseToolsFactory(cwd: string, options?: NeurajlTool
 						? ` These bindings are defined (with the call that last set each): ${describeBindings(lastBindings)}.`
 						: " You have not defined any bindings yet.";
 				return {
-					customType: NEURAJL_STATE_CUSTOM_TYPE,
-					content: `[neurajl-state]\n\nYour NeuraJL kernel persisted through compaction; its bindings, functions, types and loaded packages are still available.${detail}${mapEnabled ? " Your next neurajl result opens with a map of the workspace." : ""}`,
+					customType: PALETTE_STATE_CUSTOM_TYPE,
+					content: `[palette-state]\n\nYour Palette kernel persisted through compaction; its bindings, functions, types and loaded packages are still available.${detail}${mapEnabled ? " Your next palette result opens with a map of the workspace." : ""}`,
 				};
 			},
 			dispose: async () => {

@@ -1,5 +1,5 @@
 /**
- * NIRA-Prime NeuraJL operator surface: does the chassis actually build a
+ * NIRA-Prime Palette operator surface: does the chassis actually build a
  * session around it, and does the real integration (not a stub) prove the
  * one thing NeuraBash's own first-pass adapter explicitly does not yet --
  * session persistence surviving across separate tool calls?
@@ -8,10 +8,10 @@
  * through createAgentSession (sdk.js), the real public entry point, not
  * direct AgentSession construction.
  *
- * The `baseToolsFactory` tests below use a REAL createNeurajlBaseToolsFactory
- * pointed at the actual neurajl-operator-lab checkout and a real Julia dev
+ * The `baseToolsFactory` tests below use a REAL createPaletteBaseToolsFactory
+ * pointed at the actual palette-operator-lab checkout and a real Julia dev
  * project (skipped cleanly if either isn't configured/available -- see
- * `skipIfNeurajlUnavailable`). This is deliberate: NeuraBash's own
+ * `skipIfPaletteUnavailable`). This is deliberate: NeuraBash's own
  * substrate-mode tests use stubs because real persistence wasn't the point
  * being proven there. Here it is the point.
  */
@@ -23,20 +23,20 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
-import { createAgentSession, createNeurajlBaseToolsFactory } from "../../src/core/sdk.js";
+import { createAgentSession, createPaletteBaseToolsFactory } from "../../src/core/sdk.js";
 import { SessionManager } from "../../src/core/session-manager.js";
-import { NEURAJL_RLM_REQUEST_TYPES } from "../../src/core/tools/neurajl.js";
+import { PALETTE_RLM_REQUEST_TYPES } from "../../src/core/tools/palette.js";
 import { createTestResourceLoader } from "../utilities.js";
 import { createHarness, type Harness } from "./harness.js";
 
 const REPL_DOCTRINE_MARKER = "persistent Python REPL";
 
-const SESSION_CLI_PATH = process.env.NEURAJL_SESSION_CLI;
+const SESSION_CLI_PATH = process.env.PALETTE_SESSION_CLI;
 // With the Rust host configured, it runs every session and SESSION_CLI_PATH is not used.
-const HOST_BIN = process.env.NEURAJL_HOST_BIN;
-const PROJECT_DIR = process.env.NEURAJL_PROJECT_DIR;
+const HOST_BIN = process.env.PALETTE_HOST_BIN;
+const PROJECT_DIR = process.env.PALETTE_PROJECT_DIR;
 
-function skipIfNeurajlUnavailable(): boolean {
+function skipIfPaletteUnavailable(): boolean {
 	const host = HOST_BIN ?? SESSION_CLI_PATH;
 	if (!host || !existsSync(host)) return true;
 	if (!PROJECT_DIR || !existsSync(PROJECT_DIR)) return true;
@@ -58,7 +58,7 @@ function stubTool(name: string): AgentTool {
 	};
 }
 
-describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
+describe("NIRA-Prime: Palette substrate modes (via createAgentSession)", () => {
 	let harness: Harness | undefined;
 
 	afterEach(() => {
@@ -84,15 +84,15 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 		return result.session;
 	}
 
-	it("NEURA mode (stub): baseToolsOverride still reaches AgentSession with a neurajl-named tool", async () => {
+	it("NEURA mode (stub): baseToolsOverride still reaches AgentSession with a palette-named tool", async () => {
 		const session = await buildSession({
-			baseToolsOverride: { neurajl: stubTool("neurajl") },
-			initialActiveToolNames: ["neurajl"],
+			baseToolsOverride: { palette: stubTool("palette") },
+			initialActiveToolNames: ["palette"],
 			includeGoals: false,
 		});
 
 		const activeNames = session.getActiveToolNames();
-		expect(activeNames).toContain("neurajl");
+		expect(activeNames).toContain("palette");
 		expect(activeNames).not.toContain("ipython");
 		expect(session.getToolDefinition("ipython")).toBeUndefined();
 		expect(session.systemPrompt).not.toContain(REPL_DOCTRINE_MARKER);
@@ -103,22 +103,22 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 	}
 
 	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
-	it.skipIf(skipIfNeurajlUnavailable())(
+	it.skipIf(skipIfPaletteUnavailable())(
 		"REAL integration: state persists across calls, in the task workspace, with printed output returned",
 		async () => {
 			harness = await createHarness({ tools: [] });
 			writeFileSync(join(harness.tempDir, "marker.txt"), "from-host");
 			const session = await buildSessionIn(harness, {
-				baseToolsFactory: createNeurajlBaseToolsFactory(harness.tempDir, {
+				baseToolsFactory: createPaletteBaseToolsFactory(harness.tempDir, {
 					workspaceMap: false,
 					sessionCliPath: SESSION_CLI_PATH,
 					projectDir: PROJECT_DIR,
 				}),
-				initialActiveToolNames: ["neurajl"],
+				initialActiveToolNames: ["palette"],
 				includeGoals: false,
 			});
 			expect(session.getToolDefinition("ipython")).toBeUndefined();
-			const tool = session.getToolDefinition("neurajl")!;
+			const tool = session.getToolDefinition("palette")!;
 			const call = (id: string, params: { code: string; ephemeral?: boolean }) =>
 				tool.execute(id, params, undefined, undefined, undefined as never);
 
@@ -147,18 +147,18 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 	);
 
 	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
-	it.skipIf(skipIfNeurajlUnavailable())(
+	it.skipIf(skipIfPaletteUnavailable())(
 		"REAL integration: a timed-out wait keeps the kernel; compute that never yields stops it and the next call says so",
 		async () => {
-			const workspace = mkdtempSync(join(tmpdir(), "neurajl-timeout-"));
-			const scope = createNeurajlBaseToolsFactory(workspace, {
+			const workspace = mkdtempSync(join(tmpdir(), "palette-timeout-"));
+			const scope = createPaletteBaseToolsFactory(workspace, {
 				workspaceMap: false,
 				sessionCliPath: SESSION_CLI_PATH,
 				projectDir: PROJECT_DIR,
 				turnTimeout: 5,
 				stateRoot: false,
 			})("timeout-test-session");
-			const tool = scope.tools.neurajl!;
+			const tool = scope.tools.palette!;
 			try {
 				await tool.execute("t1", { code: "x = 1" }, undefined, undefined);
 				const waited = tool.execute("t2", { code: "sleep(30)" }, undefined, undefined);
@@ -180,19 +180,19 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 	);
 
 	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
-	it.skipIf(skipIfNeurajlUnavailable())(
+	it.skipIf(skipIfPaletteUnavailable())(
 		"REAL integration: a kernel that never yields is replaced by one that revives the last completed call's state",
 		async () => {
-			const workspace = mkdtempSync(join(tmpdir(), "neurajl-revive-"));
-			const stateRoot = mkdtempSync(join(tmpdir(), "neurajl-revive-state-"));
-			const scope = createNeurajlBaseToolsFactory(workspace, {
+			const workspace = mkdtempSync(join(tmpdir(), "palette-revive-"));
+			const stateRoot = mkdtempSync(join(tmpdir(), "palette-revive-state-"));
+			const scope = createPaletteBaseToolsFactory(workspace, {
 				workspaceMap: false,
 				sessionCliPath: SESSION_CLI_PATH,
 				projectDir: PROJECT_DIR,
 				turnTimeout: 5,
 				stateRoot,
 			})("revive-test-session");
-			const tool = scope.tools.neurajl!;
+			const tool = scope.tools.palette!;
 			try {
 				await tool.execute("t1", { code: "x = [1, 2]; y = x; double(v) = 2v" }, undefined, undefined);
 				await expect(
@@ -215,18 +215,18 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 	);
 
 	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
-	it.skipIf(skipIfNeurajlUnavailable())(
+	it.skipIf(skipIfPaletteUnavailable())(
 		"REAL integration: the workspace map opens the first result and the first after a compaction",
 		async () => {
-			const workspace = mkdtempSync(join(tmpdir(), "neurajl-map-"));
+			const workspace = mkdtempSync(join(tmpdir(), "palette-map-"));
 			writeFileSync(join(workspace, "lib.rs"), "pub fn f() {}\n");
-			const scope = createNeurajlBaseToolsFactory(workspace, {
+			const scope = createPaletteBaseToolsFactory(workspace, {
 				sessionCliPath: SESSION_CLI_PATH,
 				projectDir: PROJECT_DIR,
 				stateRoot: false,
 				workspaceMap: true,
 			})("map-test-session");
-			const tool = scope.tools.neurajl!;
+			const tool = scope.tools.palette!;
 			try {
 				const first = textOf(await tool.execute("t1", { code: "1 + 1" }, undefined, undefined));
 				expect(first).toMatch(/^\[workspace map\] 1 files/);
@@ -236,7 +236,7 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 					/workspace map/,
 				);
 				const note = await scope.stateAfterCompaction?.();
-				expect(note?.content).toMatch(/Your next neurajl result opens with a map of the workspace/);
+				expect(note?.content).toMatch(/Your next palette result opens with a map of the workspace/);
 				expect(textOf(await tool.execute("t3", { code: "3" }, undefined, undefined))).toMatch(/^\[workspace map\]/);
 				expect(textOf(await tool.execute("t4", { code: "4" }, undefined, undefined))).not.toMatch(/workspace map/);
 			} finally {
@@ -249,19 +249,19 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 	);
 
 	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
-	it.skipIf(skipIfNeurajlUnavailable())(
+	it.skipIf(skipIfPaletteUnavailable())(
 		"REAL integration: an idle kernel is stopped and revived on the next call; a long call is never stopped",
 		async () => {
-			const workspace = mkdtempSync(join(tmpdir(), "neurajl-idle-"));
-			const stateRoot = mkdtempSync(join(tmpdir(), "neurajl-idle-state-"));
-			const scope = createNeurajlBaseToolsFactory(workspace, {
+			const workspace = mkdtempSync(join(tmpdir(), "palette-idle-"));
+			const stateRoot = mkdtempSync(join(tmpdir(), "palette-idle-state-"));
+			const scope = createPaletteBaseToolsFactory(workspace, {
 				workspaceMap: false,
 				sessionCliPath: SESSION_CLI_PATH,
 				projectDir: PROJECT_DIR,
 				stateRoot,
 				idleStopMs: 4000,
 			})("idle-test-session");
-			const tool = scope.tools.neurajl!;
+			const tool = scope.tools.palette!;
 			// Kernels of this workspace only: other sessions on the host may run their own.
 			const kernels = () =>
 				execFileSync("pgrep", ["-f", "session_loop.jl"], { encoding: "utf8" })
@@ -297,16 +297,16 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 	);
 
 	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
-	it.skipIf(skipIfNeurajlUnavailable())(
+	it.skipIf(skipIfPaletteUnavailable())(
 		"REAL integration: an abort mid-call stops the kernel and says so; one before the call does not",
 		async () => {
-			const workspace = mkdtempSync(join(tmpdir(), "neurajl-abort-"));
-			const scope = createNeurajlBaseToolsFactory(workspace, {
+			const workspace = mkdtempSync(join(tmpdir(), "palette-abort-"));
+			const scope = createPaletteBaseToolsFactory(workspace, {
 				workspaceMap: false,
 				sessionCliPath: SESSION_CLI_PATH,
 				projectDir: PROJECT_DIR,
 			})("abort-test-session");
-			const tool = scope.tools.neurajl!;
+			const tool = scope.tools.palette!;
 			try {
 				await tool.execute("t1", { code: "x = 1" }, undefined, undefined);
 				const early = new AbortController();
@@ -343,17 +343,17 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 	);
 
 	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
-	it.skipIf(skipIfNeurajlUnavailable())(
+	it.skipIf(skipIfPaletteUnavailable())(
 		"REAL integration: elided output names the call whose full output the kernel kept",
 		async () => {
-			const workspace = mkdtempSync(join(tmpdir(), "neurajl-elide-"));
-			const scope = createNeurajlBaseToolsFactory(workspace, {
+			const workspace = mkdtempSync(join(tmpdir(), "palette-elide-"));
+			const scope = createPaletteBaseToolsFactory(workspace, {
 				workspaceMap: false,
 				sessionCliPath: SESSION_CLI_PATH,
 				projectDir: PROJECT_DIR,
 				maxOutputChars: 400,
 			})("elide-test-session");
-			const tool = scope.tools.neurajl!;
+			const tool = scope.tools.palette!;
 			try {
 				const long = textOf(
 					await tool.execute("t1", { code: 'for i in 1:500; println("line ", i); end' }, undefined, undefined),
@@ -379,20 +379,20 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 	);
 
 	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
-	it.skipIf(skipIfNeurajlUnavailable())(
+	it.skipIf(skipIfPaletteUnavailable())(
 		"REAL integration: after compaction the model is told what the live kernel holds",
 		async () => {
-			const workspace = mkdtempSync(join(tmpdir(), "neurajl-compact-"));
-			const scope = createNeurajlBaseToolsFactory(workspace, {
+			const workspace = mkdtempSync(join(tmpdir(), "palette-compact-"));
+			const scope = createPaletteBaseToolsFactory(workspace, {
 				workspaceMap: false,
 				sessionCliPath: SESSION_CLI_PATH,
 				projectDir: PROJECT_DIR,
 			})("compact-test-session");
-			const tool = scope.tools.neurajl!;
+			const tool = scope.tools.palette!;
 			try {
 				await tool.execute("t1", { code: "rows = [1, 2, 3]; total(v) = sum(v)" }, undefined, undefined);
 				const state = await scope.stateAfterCompaction?.();
-				expect(state?.customType).toBe("neurajl_state");
+				expect(state?.customType).toBe("palette_state");
 				expect(state?.content).toContain("rows (Vector{Int64}, call 1), total (function, call 1)");
 			} finally {
 				await scope.dispose?.();
@@ -404,16 +404,16 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 	);
 
 	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
-	it.skipIf(skipIfNeurajlUnavailable())(
+	it.skipIf(skipIfPaletteUnavailable())(
 		"REAL integration: dispose terminates the kernel and later calls fail",
 		async () => {
-			const workspace = mkdtempSync(join(tmpdir(), "neurajl-dispose-"));
-			const scope = createNeurajlBaseToolsFactory(workspace, {
+			const workspace = mkdtempSync(join(tmpdir(), "palette-dispose-"));
+			const scope = createPaletteBaseToolsFactory(workspace, {
 				workspaceMap: false,
 				sessionCliPath: SESSION_CLI_PATH,
 				projectDir: PROJECT_DIR,
 			})("dispose-test-session");
-			const tool = scope.tools.neurajl!;
+			const tool = scope.tools.palette!;
 			try {
 				expect(textOf(await tool.execute("t1", { code: "1 + 1" }, undefined, undefined))).toBe("2");
 				await scope.dispose?.();
@@ -427,30 +427,30 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 	);
 
 	describe("REAL integration: RLM children from Julia code", () => {
-		const rlmCeiling = { host_request: { allowed_types: [...NEURAJL_RLM_REQUEST_TYPES] } };
+		const rlmCeiling = { host_request: { allowed_types: [...PALETTE_RLM_REQUEST_TYPES] } };
 
 		async function rlmSession(ceiling: Record<string, unknown>, turnTimeout = 60) {
 			harness = await createHarness({ tools: [] });
 			const session = await buildSessionIn(harness, {
-				baseToolsFactory: createNeurajlBaseToolsFactory(harness.tempDir, {
+				baseToolsFactory: createPaletteBaseToolsFactory(harness.tempDir, {
 					workspaceMap: false,
 					sessionCliPath: SESSION_CLI_PATH,
 					projectDir: PROJECT_DIR,
 					ceiling,
 					turnTimeout,
-					stateRoot: mkdtempSync(join(tmpdir(), "neurajl-rlm-state-")),
+					stateRoot: mkdtempSync(join(tmpdir(), "palette-rlm-state-")),
 				}),
-				initialActiveToolNames: ["neurajl"],
+				initialActiveToolNames: ["palette"],
 				includeGoals: false,
 			});
-			const tool = session.getToolDefinition("neurajl")!;
+			const tool = session.getToolDefinition("palette")!;
 			let n = 0;
 			const call = (code: string) => tool.execute(`t${++n}`, { code }, undefined, undefined, undefined as never);
 			return { session, tool, call, harness };
 		}
 
 		// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
-		it.skipIf(skipIfNeurajlUnavailable())(
+		it.skipIf(skipIfPaletteUnavailable())(
 			"spawns and collects in one call and across calls, reports a failing child, and keeps the parent's ceiling",
 			async () => {
 				const { session, tool, call, harness: h } = await rlmSession(rlmCeiling);
@@ -467,8 +467,8 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 				const rows = (await session.listRlmSubagents()).subagents;
 				expect(rows.map((r) => r.session_name)).toEqual(["adder"]);
 				const child = session.getRlmChildSession(rows[0]!.rlm_child_id)!;
-				expect(child.getActiveToolNames()).toEqual(["neurajl"]);
-				expect(child.getToolDefinition("neurajl")!.description).toBe(tool.description);
+				expect(child.getActiveToolNames()).toEqual(["palette"]);
+				expect(child.getToolDefinition("palette")!.description).toBe(tool.description);
 
 				// Spawned in one call, collected in a later one.
 				h.setResponses([fauxAssistantMessage("second answer")]);
@@ -506,7 +506,7 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 		);
 
 		// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
-		it.skipIf(skipIfNeurajlUnavailable())(
+		it.skipIf(skipIfPaletteUnavailable())(
 			"without the permission nothing is spawned, and the description does not offer it",
 			async () => {
 				const { session, tool, call } = await rlmSession({});
@@ -521,7 +521,7 @@ describe("NIRA-Prime: NeuraJL substrate modes (via createAgentSession)", () => {
 		);
 
 		// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
-		it.skipIf(skipIfNeurajlUnavailable())(
+		it.skipIf(skipIfPaletteUnavailable())(
 			"a child outlives the kernel that spawned it, and the revived kernel finds it",
 			async () => {
 				const { call, harness: h } = await rlmSession(rlmCeiling, 8);

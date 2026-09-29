@@ -37,7 +37,7 @@ import {
 	createEditTool,
 	createIpythonTool,
 	createNeurabashTool,
-	createNeurajlBaseToolsFactory,
+	createPaletteBaseToolsFactory,
 	withFileMutationQueue,
 } from "./tools/index.js";
 
@@ -127,7 +127,7 @@ export {
 	createEditTool,
 	createIpythonTool,
 	createNeurabashTool,
-	createNeurajlBaseToolsFactory,
+	createPaletteBaseToolsFactory,
 	withFileMutationQueue,
 };
 

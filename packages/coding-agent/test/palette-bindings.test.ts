@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeBindings } from "../src/core/tools/neurajl.js";
+import { describeBindings } from "../src/core/tools/palette.js";
 
 describe("describeBindings", () => {
 	it("lists short sets in full, in the kernel's order", () => {

@@ -1,6 +1,6 @@
 /**
  * A compaction during an active task resumes that same task: once, repeatedly,
- * with a tool that keeps its own state across compactions (as NeuraJL's kernel
+ * with a tool that keeps its own state across compactions (as Palette's kernel
  * does), with tool calls after it, and without running the user's request twice
  * or skipping any scripted step. Also: a reply cut off at the output limit is
  * resumed rather than taken as the end of the run, a bounded number of times.
@@ -78,10 +78,7 @@ describe("AgentSession: compaction continues the active task", () => {
 		const counter = { calls: 0 };
 		const harness = await createHarness({ ...compacting, tools: [bigTool(counter)] });
 		harnesses.push(harness);
-		harness.setResponses([
-			toolCallReply(),
-			() => fauxAssistantMessage("final answer"),
-		]);
+		harness.setResponses([toolCallReply(), () => fauxAssistantMessage("final answer")]);
 		await harness.session.prompt(PROMPT);
 		await harness.session.waitForHeadlessIdle();
 		expect(completedCompactions(harness)).toBeGreaterThanOrEqual(1);
@@ -116,8 +113,8 @@ describe("AgentSession: compaction continues the active task", () => {
 			baseToolsFactory: () => ({
 				tools: { big: bigTool(counter) },
 				stateAfterCompaction: async () => ({
-					customType: "neurajl_state",
-					content: `[neurajl-state]\n\nBindings: calls (Int64, call ${counter.calls}).`,
+					customType: "palette_state",
+					content: `[palette-state]\n\nBindings: calls (Int64, call ${counter.calls}).`,
 				}),
 			}),
 		});
@@ -132,7 +129,7 @@ describe("AgentSession: compaction continues the active task", () => {
 		await harness.session.waitForHeadlessIdle();
 		const compactions = completedCompactions(harness);
 		expect(compactions).toBeGreaterThanOrEqual(2);
-		expect(customCount(harness, "neurajl_state")).toBe(compactions);
+		expect(customCount(harness, "palette_state")).toBe(compactions);
 		expect(harness.getPendingResponseCount()).toBe(0);
 		expect(counter.calls).toBe(3);
 		expect(userPromptCount(harness)).toBe(1);

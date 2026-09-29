@@ -93,7 +93,7 @@ export interface HarnessOptions {
 	autoRefineReviewer?: AutoRefineReviewer;
 	serializedRefine?: boolean;
 	initialGoal?: { objective: string; tokenBudget?: number };
-	/** Used instead of `tools` when set: per-session tools with their own state, like NeuraJL's kernel. */
+	/** Used instead of `tools` when set: per-session tools with their own state, like Palette's kernel. */
 	baseToolsFactory?: SessionBaseToolsFactory;
 }
 

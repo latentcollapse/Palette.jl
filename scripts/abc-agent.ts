@@ -1,4 +1,4 @@
-/** One scored D (NeuraJL) trial. The task fixture is process.cwd(). */
+/** One scored D (Palette) trial. The task fixture is process.cwd(). */
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { AuthStorage } from "../packages/coding-agent/src/core/auth-storage.js";
@@ -8,19 +8,19 @@ import { createAgentSession } from "../packages/coding-agent/src/core/sdk.js";
 import { SessionManager } from "../packages/coding-agent/src/core/session-manager.js";
 import { SettingsManager } from "../packages/coding-agent/src/core/settings-manager.js";
 import { createModelRequestBudget } from "../packages/coding-agent/src/core/model-request-budget.js";
-import { createNeurajlBaseToolsFactory } from "../packages/coding-agent/src/core/tools/neurajl.js";
+import { createPaletteBaseToolsFactory } from "../packages/coding-agent/src/core/tools/palette.js";
 
 const promptFile = process.env.ABC_PROMPT_FILE;
 const traceFile = process.env.ABC_TRACE_FILE;
 const agentDir = process.env.ABC_AGENT_DIR;
-const sessionCliPath = process.env.NEURAJL_SESSION_CLI;
-const projectDir = process.env.NEURAJL_PROJECT_DIR;
-const repoDir = process.env.NEURAJL_REPO_DIR;
-const maxOutputChars = Number(process.env.ABC_NEURAJL_MAX_OUTPUT_CHARS);
+const sessionCliPath = process.env.PALETTE_SESSION_CLI;
+const projectDir = process.env.PALETTE_PROJECT_DIR;
+const repoDir = process.env.PALETTE_REPO_DIR;
+const maxOutputChars = Number(process.env.ABC_PALETTE_MAX_OUTPUT_CHARS);
 if (!promptFile || !traceFile || !agentDir || !sessionCliPath || !projectDir || !repoDir) {
 	throw new Error("Missing A/B/C/D trial configuration");
 }
-if (!Number.isSafeInteger(maxOutputChars) || maxOutputChars <= 0) throw new Error("Invalid NeuraJL output cap");
+if (!Number.isSafeInteger(maxOutputChars) || maxOutputChars <= 0) throw new Error("Invalid Palette output cap");
 const configuredBaseUrl = process.env.ABC_BASE_URL;
 const localBaseUrl = configuredBaseUrl && !configuredBaseUrl.includes("openrouter.ai") ? configuredBaseUrl : undefined;
 const requestBaseUrl = configuredBaseUrl ?? "https://openrouter.ai/api/v1";
@@ -88,15 +88,15 @@ const { session } = await createAgentSession({
 	resourceLoader,
 	model,
 	sessionManager,
-	baseToolsFactory: createNeurajlBaseToolsFactory(cwd, {
+	baseToolsFactory: createPaletteBaseToolsFactory(cwd, {
 		sessionCliPath,
 		projectDir,
 		repoDir,
 		turnTimeout: toolTimeoutMs / 1000,
 		maxOutputChars,
 	}),
-	initialActiveToolNames: ["neurajl"],
-	allowedToolNames: ["neurajl"],
+	initialActiveToolNames: ["palette"],
+	allowedToolNames: ["palette"],
 	includeGoals: false,
 	modelRequestBudget,
 });
@@ -108,7 +108,7 @@ const persistTrace = () => {
 		temporaryTraceFile,
 		JSON.stringify(
 			{
-				stack: "nira-neurajl",
+				stack: "nira-palette",
 				model: `${model.provider}/${model.id}`,
 				started,
 				ended: Date.now(),
@@ -137,7 +137,7 @@ const unsubscribe = session.subscribe((event) => {
 	if (event.type === "message_end") persistTrace();
 });
 try {
-	if (session.getToolDefinition("ipython")) throw new Error("IPython leaked into NeuraJL condition");
+	if (session.getToolDefinition("ipython")) throw new Error("IPython leaked into Palette condition");
 	await session.prompt(readFileSync(promptFile, "utf8"));
 	await session.waitForHeadlessIdle();
 	const terminalAssistant = [...session.messages].reverse().find(

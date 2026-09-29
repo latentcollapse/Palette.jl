@@ -1,14 +1,14 @@
 # NIRA
 
-NIRA is an agent harness whose model works in a persistent, sandboxed **Julia** environment ([NeuraJL](https://github.com/latentcollapse/neurajl-operator-lab)), including recursive sub-agents started from Julia code, with no IPython kernel and no Python privilege layer between the model and the chassis. "NIRA" is the working name during Project NIRA; the finished system will be called **Cyan**.
+NIRA is an agent harness whose model works in a persistent, sandboxed **Julia** environment ([Palette](https://github.com/latentcollapse/palette-operator-lab)), including recursive sub-agents started from Julia code, with no IPython kernel and no Python privilege layer between the model and the chassis. "NIRA" is the working name during Project NIRA; the finished system will be called **Cyan**.
 
 **NIRA is a fork and refactor of [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent)** by Prime Intellect, which is itself built on Mario Zechner's [`pi`](https://github.com/earendil-works/pi). Their agent loop, sessions and compaction, provider layer, RLM orchestration and terminal interface are the chassis NIRA keeps. Thank you to Prime Intellect and to Mario Zechner for that work, and for releasing it under the MIT License.
 
 ## What NIRA changes
 
-- **Julia operator surface.** The model's code tool is NeuraJL: a persistent Julia kernel in a bubblewrap sandbox whose state survives kernel death and compaction, with authority mediated by a host-side capability broker. See `packages/coding-agent/src/core/tools/neurajl.ts`.
+- **Julia operator surface.** The model's code tool is Palette: a persistent Julia kernel in a bubblewrap sandbox whose state survives kernel death and compaction, with authority mediated by a host-side capability broker. See `packages/coding-agent/src/core/tools/palette.ts`.
 - **Sub-agents from Julia.** `Neura.rlm.spawn`, `collect`, `list_subagents`, `find_models`, `progress_note`, `delete_subagent` and `create_session` reach the chassis's existing RLM orchestration through the kernel's broker. The permission is off unless the session's ceiling names it.
-- **Harness fixes found in long runs**: compaction that could loop on stacked state notes, retry waits the provider states only in its error text, and encrypted reasoning that token estimates ignored. The research record is in the [lab repository](https://github.com/latentcollapse/neurajl-operator-lab).
+- **Harness fixes found in long runs**: compaction that could loop on stacked state notes, retry waits the provider states only in its error text, and encrypted reasoning that token estimates ignored. The research record is in the [lab repository](https://github.com/latentcollapse/palette-operator-lab).
 
 ## Names still inherited
 
@@ -24,7 +24,7 @@ cd /path/to/project
 /path/to/this/repo/prime-agent.sh
 ```
 
-NeuraJL needs `bwrap`, Julia 1.12 and the lab checkout; see the lab repository's README.
+Palette needs `bwrap`, Julia 1.12 and the lab checkout; see the lab repository's README.
 
 ## Upstream documentation
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HARNESS_DIGEST_CUSTOM_TYPE, NEURAJL_STATE_CUSTOM_TYPE } from "../../src/core/messages.js";
+import { HARNESS_DIGEST_CUSTOM_TYPE, PALETTE_STATE_CUSTOM_TYPE } from "../../src/core/messages.js";
 import {
 	type BranchSummaryEntry,
 	buildSessionContext,
@@ -88,7 +88,7 @@ function chain(...specs: string[]): SessionEntry[] {
 				id,
 				parentId,
 				timestamp: T,
-				customType: NEURAJL_STATE_CUSTOM_TYPE,
+				customType: PALETTE_STATE_CUSTOM_TYPE,
 				content: text,
 				display: false,
 			});
@@ -206,13 +206,13 @@ describe("buildSessionContext", () => {
 		expect(buildSessionContext(entries, "2").messages).toHaveLength(1);
 	});
 
-	describe("NeuraJL state notes", () => {
+	describe("Palette state notes", () => {
 		it("keeps only the newest note", () => {
 			const ctx = buildSessionContext(
 				chain("u hello", "j state-a", "a reply", "j state-b", "u again", "j state-c", "a done"),
 			);
 			const notes = ctx.messages.filter(
-				(m) => (m as { customType?: string }).customType === NEURAJL_STATE_CUSTOM_TYPE,
+				(m) => (m as { customType?: string }).customType === PALETTE_STATE_CUSTOM_TYPE,
 			);
 			expect(notes.map((m) => (m as { content: string }).content)).toEqual(["state-c"]);
 			expect(ctx.messages.map((m) => m.role)).toEqual(["user", "assistant", "user", "custom", "assistant"]);
@@ -223,7 +223,7 @@ describe("buildSessionContext", () => {
 				chain("u q", "j state-old", "a kept", "c Summary|2", "j state-new", "u after"),
 			);
 			const notes = ctx.messages.filter(
-				(m) => (m as { customType?: string }).customType === NEURAJL_STATE_CUSTOM_TYPE,
+				(m) => (m as { customType?: string }).customType === PALETTE_STATE_CUSTOM_TYPE,
 			);
 			expect(notes.map((m) => (m as { content: string }).content)).toEqual(["state-new"]);
 		});
