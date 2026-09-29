@@ -1,7 +1,7 @@
 From a94d320b9ad36ff5b5308a56991278671454a483 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Mon, 21 Sep 2026 22:58:17 -0400
-Subject: [PATCH 04/42] Fix goal-reactivation silent failure and contaminated
+Subject: [PATCH 04/45] Fix goal-reactivation silent failure and contaminated
  tool description
 
 Second-round adversarial review found that the previous commit's

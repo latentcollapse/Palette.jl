@@ -1,7 +1,7 @@
 From 8821611bda892cbf09c6e75d3cd76c051f88d5e5 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Wed, 23 Sep 2026 09:58:58 -0400
-Subject: [PATCH 17/42] test: bound model requests for ABC trials
+Subject: [PATCH 17/45] test: bound model requests for ABC trials
 
 ---
  .../src/core/agent-session-runtime.ts         |  1 +

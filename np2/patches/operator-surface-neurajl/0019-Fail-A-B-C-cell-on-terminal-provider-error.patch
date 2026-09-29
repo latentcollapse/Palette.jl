@@ -1,7 +1,7 @@
 From 6706b8aa5550d9d0dcc0073c08c3870d6174e67d Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Wed, 23 Sep 2026 11:36:59 -0400
-Subject: [PATCH 19/42] Fail A/B/C cell on terminal provider error
+Subject: [PATCH 19/45] Fail A/B/C cell on terminal provider error
 
 ---
  scripts/abc-agent.ts | 8 +++++++-

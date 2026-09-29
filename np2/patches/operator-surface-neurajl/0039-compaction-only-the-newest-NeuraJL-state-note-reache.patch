@@ -1,7 +1,7 @@
 From 0214407387fafcfaf6d9e9609491ca1f68d34cd5 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Mon, 28 Sep 2026 19:22:17 -0400
-Subject: [PATCH 39/42] compaction: only the newest NeuraJL state note reaches
+Subject: [PATCH 39/45] compaction: only the newest NeuraJL state note reaches
  the model; custom messages count toward the kept tail
 
 tin3 compacted 255 times, after nearly every call for its last hour. A

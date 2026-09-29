@@ -1,7 +1,7 @@
 From 2412385cf7a0b3332be9fb455efe6773afb49718 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Thu, 24 Sep 2026 21:02:54 -0400
-Subject: [PATCH 27/42] np2: say what a stopped kernel loses, and describe
+Subject: [PATCH 27/45] np2: say what a stopped kernel loses, and describe
  tools accurately
 
 - When a call ends with the kernel dead (timeout, abort mid-call, exit),

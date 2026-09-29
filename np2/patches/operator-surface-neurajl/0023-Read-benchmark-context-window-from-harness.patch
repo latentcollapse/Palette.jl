@@ -1,7 +1,7 @@
 From 1304b93056eb17cb8414e3d6469c8f45b122fc8a Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Wed, 23 Sep 2026 14:33:13 -0400
-Subject: [PATCH 23/42] Read benchmark context window from harness
+Subject: [PATCH 23/45] Read benchmark context window from harness
 
 ---
  scripts/abc-agent.ts | 4 +++-

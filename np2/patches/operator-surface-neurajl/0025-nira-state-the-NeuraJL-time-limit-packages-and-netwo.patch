@@ -1,7 +1,7 @@
 From dcdbe2ae9aac1dd3b55dbf8c9f1f6ee05ee4f8f8 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Thu, 24 Sep 2026 04:06:13 -0400
-Subject: [PATCH 25/42] nira: state the NeuraJL time limit, packages and
+Subject: [PATCH 25/45] nira: state the NeuraJL time limit, packages and
  network in the tool description
 
 The model could only learn the per-call limit by losing its kernel, and

@@ -1,7 +1,7 @@
 From f020af235a94c45b789a75d22b13931235052198 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Sat, 26 Sep 2026 19:54:12 -0400
-Subject: [PATCH 32/42] np2: resume a reply cut off at the output limit instead
+Subject: [PATCH 32/45] np2: resume a reply cut off at the output limit instead
  of ending the run
 
 A NeuraJL trial run stopped mid-task after a threshold compaction. The

@@ -1,7 +1,7 @@
 From 50383b8562b2822eeac8db97a45246207db2aed5 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Wed, 23 Sep 2026 11:23:12 -0400
-Subject: [PATCH 18/42] Pin A/B/C model route and compaction policy
+Subject: [PATCH 18/45] Pin A/B/C model route and compaction policy
 
 ---
  scripts/abc-agent.ts | 23 ++++++++++++++++++-----

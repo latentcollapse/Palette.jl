@@ -1,7 +1,7 @@
 From 1339109a9d55c35a2ce4f4da5df91b3d2fa57774 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Mon, 28 Sep 2026 19:29:50 -0400
-Subject: [PATCH 41/42] retry: take the wait an error states in its text when
+Subject: [PATCH 41/45] retry: take the wait an error states in its text when
  no Retry-After came with it
 
 OpenAI's TPM errors say "Please try again in 578ms" and arrived without a

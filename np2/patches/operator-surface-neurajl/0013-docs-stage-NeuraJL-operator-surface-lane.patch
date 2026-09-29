@@ -1,7 +1,7 @@
 From 433dc57e31a56cd61a01e8573ea8ffa21dee5470 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Wed, 23 Sep 2026 02:20:00 -0400
-Subject: [PATCH 13/42] docs: stage NeuraJL operator surface lane
+Subject: [PATCH 13/45] docs: stage NeuraJL operator surface lane
 
 ---
  docs/NIRA_OPERATOR_SURFACE_STAGING.md | 29 +++++++++++++++++++++++++++

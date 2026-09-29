@@ -1,7 +1,7 @@
 From a28e38746f6e98b153916b498ce3ee90fd12e717 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Mon, 28 Sep 2026 03:36:43 -0400
-Subject: [PATCH 38/42] neurajl: outputDigest option (NEURAJL_OUTPUT_DIGEST=0)
+Subject: [PATCH 38/45] neurajl: outputDigest option (NEURAJL_OUTPUT_DIGEST=0)
  turns the kernel's digest off for an A/B
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

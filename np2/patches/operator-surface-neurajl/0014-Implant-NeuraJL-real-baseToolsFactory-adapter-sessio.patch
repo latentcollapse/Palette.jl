@@ -1,7 +1,7 @@
 From 2fe2c2016575212a823a43ed8e1b5ab72e3a7301 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Wed, 23 Sep 2026 03:45:43 -0400
-Subject: [PATCH 14/42] Implant NeuraJL: real baseToolsFactory adapter, session
+Subject: [PATCH 14/45] Implant NeuraJL: real baseToolsFactory adapter, session
  persistence proven end to end
 
 Closes NIRA_OPERATOR_SURFACE_STAGING.md's "prepares the chassis only" gap

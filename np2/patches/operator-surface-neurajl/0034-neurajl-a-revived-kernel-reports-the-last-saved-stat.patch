@@ -1,7 +1,7 @@
 From 25f9d0528aac2988e2a6288f62bebcb2b69a156c Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Sun, 27 Sep 2026 08:06:00 -0400
-Subject: [PATCH 34/42] neurajl: a revived kernel reports the last saved state,
+Subject: [PATCH 34/45] neurajl: a revived kernel reports the last saved state,
  not the last completed call
 
 A slow snapshot can now give way to a waiting request (lab rnd/snapshot-yield),

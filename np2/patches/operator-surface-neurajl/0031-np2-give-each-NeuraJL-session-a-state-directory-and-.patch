@@ -1,7 +1,7 @@
 From 593482ebc75476bcdf0ae755946b3048299d7eab Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Sat, 26 Sep 2026 16:06:40 -0400
-Subject: [PATCH 31/42] np2: give each NeuraJL session a state directory, and
+Subject: [PATCH 31/45] np2: give each NeuraJL session a state directory, and
  describe revival truthfully
 
 A replacement kernel revives the state at the end of the last completed

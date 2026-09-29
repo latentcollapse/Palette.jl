@@ -1,7 +1,7 @@
 From ec6d6af9e7dd3e04715426741d968df1dc0da269 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Sat, 26 Sep 2026 06:49:24 -0400
-Subject: [PATCH 30/42] np2: name lost NeuraJL bindings, and reorient the model
+Subject: [PATCH 30/45] np2: name lost NeuraJL bindings, and reorient the model
  after compaction
 
 - When the kernel dies, the error and the next call's notice list the lost

@@ -1,7 +1,7 @@
 From 71b245f4075ad705e5b62667821b798317550066 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Wed, 23 Sep 2026 23:28:27 -0400
-Subject: [PATCH 24/42] nira: make the NeuraJL operator usable for scored D
+Subject: [PATCH 24/45] nira: make the NeuraJL operator usable for scored D
  trials
 
 scripts/abc-agent.ts is B's trial runner with only the tool surface

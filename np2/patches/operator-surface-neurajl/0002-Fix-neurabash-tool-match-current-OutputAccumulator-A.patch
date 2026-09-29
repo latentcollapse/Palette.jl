@@ -1,7 +1,7 @@
 From d8ad675ec9713a1d8d2a9500851f1ab8b6b7b5bb Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Mon, 21 Sep 2026 06:29:07 -0400
-Subject: [PATCH 02/42] Fix neurabash tool: match current OutputAccumulator API
+Subject: [PATCH 02/45] Fix neurabash tool: match current OutputAccumulator API
  and error convention
 
 npm run check caught two real issues after rebasing onto the 284-commit

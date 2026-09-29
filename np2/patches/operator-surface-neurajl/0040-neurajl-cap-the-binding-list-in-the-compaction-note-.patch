@@ -1,7 +1,7 @@
 From 1ea0071be888a790d3e44342248c163679ff3238 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Mon, 28 Sep 2026 19:25:32 -0400
-Subject: [PATCH 40/42] neurajl: cap the binding list in the compaction note
+Subject: [PATCH 40/45] neurajl: cap the binding list in the compaction note
  and the lost-bindings notice
 
 tin3's note listed 1,000+ bindings in 7.4k characters. Past 2,000 characters

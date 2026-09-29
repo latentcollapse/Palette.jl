@@ -1,7 +1,7 @@
 From b38f4ab156fa509783442b55827e6fbca21d32db Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Wed, 23 Sep 2026 14:22:10 -0400
-Subject: [PATCH 22/42] Await headless continuation in benchmark trials
+Subject: [PATCH 22/45] Await headless continuation in benchmark trials
 
 ---
  scripts/abc-agent.ts | 1 +

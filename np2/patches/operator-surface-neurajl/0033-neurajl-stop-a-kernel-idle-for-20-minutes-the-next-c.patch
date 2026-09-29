@@ -1,7 +1,7 @@
 From 425c61161a16274dc3aba6c28bf878df822b8071 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Sun, 27 Sep 2026 04:53:33 -0400
-Subject: [PATCH 33/42] neurajl: stop a kernel idle for 20 minutes; the next
+Subject: [PATCH 33/45] neurajl: stop a kernel idle for 20 minutes; the next
  call revives it
 
 A finished RLM child is retained for the parent's lifetime, and so was its

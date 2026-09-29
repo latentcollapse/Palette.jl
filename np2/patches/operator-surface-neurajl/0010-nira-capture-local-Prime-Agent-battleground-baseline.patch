@@ -1,7 +1,7 @@
 From c2951292a32d7980c65c9c012de1b7f6e036f3c6 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Wed, 23 Sep 2026 01:42:03 -0400
-Subject: [PATCH 10/42] nira: capture local Prime-Agent battleground baseline
+Subject: [PATCH 10/45] nira: capture local Prime-Agent battleground baseline
 
 ---
  ENHANCED_HARNESS.md                           | 121 ++++++

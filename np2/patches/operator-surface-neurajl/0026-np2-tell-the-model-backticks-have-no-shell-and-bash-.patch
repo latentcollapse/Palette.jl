@@ -1,7 +1,7 @@
 From faa878cd9280d30c58a62bfd0c1a1e5c0eb4acc4 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Thu, 24 Sep 2026 17:32:08 -0400
-Subject: [PATCH 26/42] np2: tell the model backticks have no shell and
+Subject: [PATCH 26/45] np2: tell the model backticks have no shell and
  bash("...") does
 
 In the first scored NP2 cell the model put pipes, globs and 2>&1 inside

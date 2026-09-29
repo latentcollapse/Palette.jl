@@ -1,7 +1,7 @@
 From 557e5ec2724e752da82673cc3954bbba5e33bbdf Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Mon, 21 Sep 2026 17:54:02 -0400
-Subject: [PATCH 03/42] NIRA Stage 0 spike: NeuraBash-only session without
+Subject: [PATCH 03/45] NIRA Stage 0 spike: NeuraBash-only session without
  kernel construction
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

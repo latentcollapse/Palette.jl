@@ -1,7 +1,7 @@
 From 567635c16bc2faa91ad6f2976dcf7085ee62a994 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Thu, 24 Sep 2026 03:51:00 -0400
-Subject: [PATCH 12/42] nira: keep IPython-only guidance out of non-IPython
+Subject: [PATCH 12/45] nira: keep IPython-only guidance out of non-IPython
  operator prompts
 
 The background bash() handle, time.sleep() polling, and Python package lines

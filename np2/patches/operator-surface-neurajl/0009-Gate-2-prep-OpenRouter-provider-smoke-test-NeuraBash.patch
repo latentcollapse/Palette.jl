@@ -1,7 +1,7 @@
 From 4791be079b72851be23a56fc45098f4e01f4afde Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Tue, 22 Sep 2026 06:25:54 -0400
-Subject: [PATCH 09/42] Gate 2 prep: OpenRouter provider smoke test + NeuraBash
+Subject: [PATCH 09/45] Gate 2 prep: OpenRouter provider smoke test + NeuraBash
  literacy check driver
 
 No provider code changes needed -- OpenRouter already works through the

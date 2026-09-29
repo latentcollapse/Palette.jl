@@ -1,7 +1,7 @@
 From 326061256303fd83845737b5833e0b6946368f70 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Mon, 28 Sep 2026 20:09:36 -0400
-Subject: [PATCH 42/42] compaction: count encrypted reasoning in token
+Subject: [PATCH 42/45] compaction: count encrypted reasoning in token
  estimates
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

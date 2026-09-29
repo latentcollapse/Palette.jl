@@ -1,7 +1,7 @@
 From 90fd54a31f3afc262d2ab5059e67392526459e2f Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Mon, 28 Sep 2026 00:48:00 -0400
-Subject: [PATCH 36/42] neurajl: named payload texts by default; teach
+Subject: [PATCH 36/45] neurajl: named payload texts by default; teach
  bash(PAYLOAD) and background jobs
 
 The named-payload pilot: 7 of 7 runs adopted it, with no quoting failures

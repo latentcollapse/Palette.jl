@@ -1,7 +1,7 @@
 From 920d1987a736870b8947db629e2ce88f7fca7705 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Mon, 21 Sep 2026 06:20:16 -0400
-Subject: [PATCH 01/42] Add neurabash as an additive code-execution tool
+Subject: [PATCH 01/45] Add neurabash as an additive code-execution tool
  alongside ipython
 
 NIRA-Prime integration, first pass. Adds `neurabash` to the ToolName

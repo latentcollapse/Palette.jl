@@ -1,7 +1,7 @@
 From e91b10f50d30cb84107be994f397dab02ba12c21 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Wed, 23 Sep 2026 03:17:14 -0400
-Subject: [PATCH 11/42] nira: give each operator session its own base tools
+Subject: [PATCH 11/45] nira: give each operator session its own base tools
 
 ---
  .../src/core/agent-session-services.ts        |  3 ++

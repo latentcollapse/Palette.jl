@@ -1,7 +1,7 @@
 From 2aaa128e2a7a4f6c74db74c5822e3860e7a29799 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Sun, 27 Sep 2026 08:34:31 -0400
-Subject: [PATCH 35/42] neurajl: experiment switch NEURAJL_PAYLOAD_PARTS=1 lets
+Subject: [PATCH 35/45] neurajl: experiment switch NEURAJL_PAYLOAD_PARTS=1 lets
  payload carry named texts for an edit
 
 In the hint pilot 90% of the inline writes after a quoting failure embedded

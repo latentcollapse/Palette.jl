@@ -4,7 +4,7 @@ NP2 is a fork of [PrimeIntellect-ai/prime-agent](https://github.com/PrimeIntelle
 
 | Series | Branch | Upstream base | Patches |
 |---|---|---|---|
-| `patches/operator-surface-neurajl/` | `operator-surface/neurajl` (main line; contains `nira-prime/base`) | `298cf406e446aa5e7205af9a108c45762f3ba380` | 42 |
+| `patches/operator-surface-neurajl/` | `operator-surface/neurajl` (main line; contains `nira-prime/base`) | `298cf406e446aa5e7205af9a108c45762f3ba380` | 45 |
 | `patches/battleground-neurajl/` | `battleground/neurajl` (earlier line, diverged) | `e311d6495124cf0bdc629c813fc97a39a9a3054d` | 10 |
 
 ## Restore

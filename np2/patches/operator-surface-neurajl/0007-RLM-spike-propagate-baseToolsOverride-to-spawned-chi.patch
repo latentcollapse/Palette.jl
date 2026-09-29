@@ -1,7 +1,7 @@
 From e7d693f557d225b542436de75651d6602013c344 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Tue, 22 Sep 2026 04:30:23 -0400
-Subject: [PATCH 07/42] RLM spike: propagate baseToolsOverride to spawned
+Subject: [PATCH 07/45] RLM spike: propagate baseToolsOverride to spawned
  children
 
 Neither the inline (_createInlineRlmSubagentRuntime) nor daemon-mode

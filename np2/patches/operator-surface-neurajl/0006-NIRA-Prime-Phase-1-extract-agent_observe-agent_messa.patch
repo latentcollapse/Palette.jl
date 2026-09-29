@@ -1,7 +1,7 @@
 From 802c0fac1e09a57826bdfae0f1ddb027ccd6b9de Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Tue, 22 Sep 2026 02:13:11 -0400
-Subject: [PATCH 06/42] NIRA-Prime Phase 1: extract agent_observe/agent_message
+Subject: [PATCH 06/45] NIRA-Prime Phase 1: extract agent_observe/agent_message
  as host services
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

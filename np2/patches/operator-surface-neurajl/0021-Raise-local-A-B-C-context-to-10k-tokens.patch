@@ -1,7 +1,7 @@
 From 12a59e8bcf8ed00f3adacaa4fa40ba3f92621c47 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Wed, 23 Sep 2026 14:13:55 -0400
-Subject: [PATCH 21/42] Raise local A/B/C context to 10k tokens
+Subject: [PATCH 21/45] Raise local A/B/C context to 10k tokens
 
 ---
  scripts/abc-agent.ts | 2 +-

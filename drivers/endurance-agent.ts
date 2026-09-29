@@ -10,7 +10,10 @@ import { createAgentSession } from "../packages/coding-agent/src/core/sdk.js";
 import { SessionManager } from "../packages/coding-agent/src/core/session-manager.js";
 import { SettingsManager } from "../packages/coding-agent/src/core/settings-manager.js";
 import { createModelRequestBudget } from "../packages/coding-agent/src/core/model-request-budget.js";
-import { createNeurajlBaseToolsFactory } from "../packages/coding-agent/src/core/tools/neurajl.js";
+import {
+	createNeurajlBaseToolsFactory,
+	NEURAJL_RLM_REQUEST_TYPES,
+} from "../packages/coding-agent/src/core/tools/neurajl.js";
 
 // As cli-main does. Without it, Node's bundled undici keeps a destroyed HTTP/2 session
 // in its pool after a stream is cut, and every later request to that origin fails at once.
@@ -23,7 +26,7 @@ const sessionCliPath = process.env.NEURAJL_SESSION_CLI;
 const projectDir = process.env.NEURAJL_PROJECT_DIR;
 const repoDir = process.env.NEURAJL_REPO_DIR;
 const maxOutputChars = Number(process.env.ABC_NEURAJL_MAX_OUTPUT_CHARS);
-if (!promptFile || !traceFile || !agentDir || !rlmSessionDir || !sessionCliPath || !projectDir || !repoDir) {
+if (!promptFile || !traceFile || !agentDir || !rlmSessionDir || !(sessionCliPath || process.env.NEURAJL_HOST_BIN) || !projectDir || !repoDir) {
 	throw new Error("Missing A/B/C trial configuration");
 }
 if (!Number.isSafeInteger(maxOutputChars) || maxOutputChars <= 0) throw new Error("Invalid NeuraJL output cap");
@@ -133,6 +136,8 @@ const stallMs = Number(process.env.ABC_STALL_MS ?? 0);
 const maxRecoveries = Number(process.env.ABC_MAX_RECOVERIES ?? 0);
 const deadline = process.env.ABC_DEADLINE_MS ? Date.now() + Number(process.env.ABC_DEADLINE_MS) : Number.POSITIVE_INFINITY;
 const cwd = process.cwd();
+// NEURAJL_RLM_ONLY=1 leaves out the rlm tool: sub-agents only through Julia's Neura.rlm.
+const operatorToolNames = process.env.NEURAJL_RLM_ONLY === "1" ? ["neurajl"] : ["neurajl", "rlm"];
 const retryPolicy = {
 	enabled: true,
 	maxRetries: Number(process.env.ABC_MAX_RETRIES ?? 3),
@@ -213,9 +218,13 @@ const { session } = await createAgentSession({
 		turnTimeout: toolTimeoutMs / 1000,
 		maxOutputChars,
 		...(process.env.NEURAJL_STATE_ROOT ? { stateRoot: process.env.NEURAJL_STATE_ROOT } : {}),
+		// NEURAJL_RLM=1: the kernel may start and collect sub-agents itself (Neura.rlm).
+		...(process.env.NEURAJL_RLM === "1"
+			? { ceiling: { host_request: { allowed_types: [...NEURAJL_RLM_REQUEST_TYPES] } } }
+			: {}),
 	}),
-	initialActiveToolNames: ["neurajl", "rlm"],
-	allowedToolNames: ["neurajl", "rlm"],
+	initialActiveToolNames: operatorToolNames,
+	allowedToolNames: operatorToolNames,
 	rlmSessionDir,
 	includeGoals: true,
 	modelRequestBudget,
@@ -348,7 +357,7 @@ async function runPrompt(text: string) {
 	}
 }
 try {
-	if (JSON.stringify(activeTools) !== JSON.stringify(["neurajl", "rlm"])) {
+	if (JSON.stringify(activeTools) !== JSON.stringify([...operatorToolNames].sort())) {
 		throw new Error(`NeuraJL tool inventory mismatch: ${activeTools.join(", ")}`);
 	}
 	if (session.getToolDefinition("ipython")) throw new Error("IPython leaked into NeuraJL condition");

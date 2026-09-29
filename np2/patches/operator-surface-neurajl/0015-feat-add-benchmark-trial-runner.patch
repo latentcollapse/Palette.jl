@@ -1,7 +1,7 @@
 From afe0b0caec2cf75389432eefab60c55dd4a4f1a3 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Wed, 23 Sep 2026 07:36:40 -0400
-Subject: [PATCH 15/42] feat: add benchmark trial runner
+Subject: [PATCH 15/45] feat: add benchmark trial runner
 
 ---
  scripts/abc-agent.ts | 96 ++++++++++++++++++++++++++++++++++++++++++++

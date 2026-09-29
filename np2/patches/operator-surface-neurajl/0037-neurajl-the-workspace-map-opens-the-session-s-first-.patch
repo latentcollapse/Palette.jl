@@ -1,7 +1,7 @@
 From c959763209ee4ad2abee09c2c6c513ed99a91be5 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Mon, 28 Sep 2026 01:55:01 -0400
-Subject: [PATCH 37/42] neurajl: the workspace map opens the session's first
+Subject: [PATCH 37/45] neurajl: the workspace map opens the session's first
  result and the first after each compaction
 
 The kernel (lab d469d29) builds the map on request. The compaction note

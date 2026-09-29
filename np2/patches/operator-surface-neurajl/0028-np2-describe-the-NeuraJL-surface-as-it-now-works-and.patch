@@ -1,7 +1,7 @@
 From 4bec2d369745fefca61dcd193b5f35c30078c27a Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Fri, 25 Sep 2026 23:51:00 -0400
-Subject: [PATCH 28/42] np2: describe the NeuraJL surface as it now works, and
+Subject: [PATCH 28/45] np2: describe the NeuraJL surface as it now works, and
  pass payload
 
 The neurajl tool gains a payload field that the kernel binds as PAYLOAD

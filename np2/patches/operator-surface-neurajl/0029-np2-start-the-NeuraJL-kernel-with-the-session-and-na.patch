@@ -1,7 +1,7 @@
 From 4767842a0f31250b3cd4fc3a99dd869a0c51bac9 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Sat, 26 Sep 2026 05:08:53 -0400
-Subject: [PATCH 29/42] np2: start the NeuraJL kernel with the session, and
+Subject: [PATCH 29/45] np2: start the NeuraJL kernel with the session, and
  name the call behind elided output
 
 - The kernel starts when the session's tools are built, so its startup

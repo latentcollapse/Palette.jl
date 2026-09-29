@@ -1,7 +1,7 @@
 From d36d951edeac59a594f95dcda89c2e93c6674343 Mon Sep 17 00:00:00 2001
 From: Matt C <latentcollapse@gmail.com>
 Date: Tue, 22 Sep 2026 05:17:15 -0400
-Subject: [PATCH 08/42] RLM reachability spike: expose subagent lifecycle as a
+Subject: [PATCH 08/45] RLM reachability spike: expose subagent lifecycle as a
  host tool
 
 rlm.spawn/rlm.run (and list/collect/delete/find_models/progress_note/
