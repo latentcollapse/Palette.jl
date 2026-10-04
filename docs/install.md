@@ -2,7 +2,7 @@
 
 The Linux supervised runtime requires Julia, Python 3, bubblewrap, and a built
 Rust host. Julia dependencies are defined by `Project.toml`; Rust dependencies
-are locked in `host/Cargo.lock`. Instantiate the Julia project and build the host
+are locked in `runtime/host/Cargo.lock`. Instantiate the Julia project and build the host
 before installing the adapter. Additional packages must be provisioned by the
 host, not silently downloaded inside an offline worker.
 
@@ -17,8 +17,8 @@ Run it before connecting an interactive client, and after runtime or source
 updates:
 
 ```sh
-python3 security/prewarm_depot.py --project-dir "$PWD" \
-  --host-bin "$PWD/host/target/release/palette-host"
+python3 runtime/security/prewarm_depot.py --project-dir "$PWD" \
+  --host-bin "$PWD/runtime/host/target/release/palette-host"
 ```
 
 A successful command records `state: prepared`; sessions validate its source,
@@ -29,7 +29,7 @@ raising a client's call timeout is not a substitute for a prepared installation.
 ## Local stdio plugin
 
 ```sh
-python3 security/install_operator_plugin.py \
+python3 runtime/security/install_operator_plugin.py \
   --plugin-dir /absolute/path/to/plugin \
   --workspace-dir /absolute/path/to/workspace \
   --repo-dir /absolute/path/to/Palette
@@ -40,7 +40,7 @@ checks the local build and preserves configuration when updating an existing
 Palette entry. The client must separately support and enable that plugin format.
 Installing these files does not register a remote ChatGPT connection.
 
-The adapter's entrypoint is `security/operator_workspace_router.py`. It exposes
+The adapter's entrypoint is `runtime/security/operator_workspace_router.py`. It exposes
 `palette`, `palette_control`, `palette_workspace`, and `palette_patch`. See
 [workspace routing](workspaces.md) before sharing it between conversations.
 

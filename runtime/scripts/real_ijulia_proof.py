@@ -29,7 +29,7 @@ Setup (one-time):
 
 Run:
   JUPYTER_DATA_DIR=<jdata-dir> JUPYTER_PATH=<jdata-dir> \\
-    <venv-dir>/bin/python scripts/real_ijulia_proof.py
+    <venv-dir>/bin/python runtime/scripts/real_ijulia_proof.py
 
 If the kernelspec's display name differs from "PaletteTest 1.12",
 update KERNEL_NAME below to match the actual installed kernel directory

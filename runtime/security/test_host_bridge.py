@@ -5,7 +5,7 @@ for instance) while a call runs, through its broker, and only for the request
 types its ceiling names. These tests play the host on session_cli's stdio.
 
 Run:
-    python3 security/test_host_bridge.py
+    python3 runtime/security/test_host_bridge.py
 """
 from __future__ import annotations
 

@@ -16,9 +16,9 @@ import sys
 import tempfile
 import unittest
 
-REPO = Path(__file__).resolve().parent.parent
-ROUTER = REPO / "security/operator_workspace_router.py"
-HOST = REPO / "host/target/release/palette-host"
+REPO = Path(__file__).resolve().parents[2]
+ROUTER = REPO / "runtime/security/operator_workspace_router.py"
+HOST = REPO / "runtime/host/target/release/palette-host"
 
 
 class WorkspaceRouterIntegration(unittest.TestCase):
@@ -108,7 +108,7 @@ class WorkspaceRouterIntegration(unittest.TestCase):
         for fmt in ("portable", "codex"):
             with self.subTest(format=fmt):
                 plugin = Path(self.tmp.name) / fmt
-                command = [sys.executable, str(REPO / "security/install_operator_plugin.py"), "--format", fmt,
+                command = [sys.executable, str(REPO / "runtime/security/install_operator_plugin.py"), "--format", fmt,
                     "--plugin-dir", str(plugin), "--workspace-dir", str(self.workspace), "--bin-dir", str(Path(self.tmp.name) / "bin")]
                 subprocess.run(command, capture_output=True, text=True, check=True)
                 config_path = plugin / ("mcp.json" if fmt == "portable" else ".mcp.json")

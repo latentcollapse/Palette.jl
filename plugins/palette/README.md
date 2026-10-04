@@ -9,10 +9,10 @@ From the Palette repository root, after installing the runtime prerequisites:
 
 ```sh
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
-cargo build --manifest-path host/Cargo.toml --release --locked
-python3 security/prewarm_depot.py --project-dir "$PWD" \
-  --host-bin "$PWD/host/target/release/palette-host"
-python3 security/install_operator_plugin.py --format portable \
+cargo build --manifest-path runtime/host/Cargo.toml --release --locked
+python3 runtime/security/prewarm_depot.py --project-dir "$PWD" \
+  --host-bin "$PWD/runtime/host/target/release/palette-host"
+python3 runtime/security/install_operator_plugin.py --format portable \
   --plugin-dir "$HOME/.local/share/palette-plugin" \
   --workspace-dir /absolute/path/to/workspace \
   --bin-dir "$HOME/.local/bin"
@@ -24,7 +24,7 @@ interactive client; see [preparation and updates](../../docs/install.md).
 Import that generated directory in an Agent Plugins-compatible client. For the
 Codex compatibility format, omit `--format portable` and choose a separate plugin
 directory. Generic stdio MCP clients can run `palette-mcp`, or run
-`python3 /absolute/path/to/Palette/security/serve_palette.py` directly.
+`python3 /absolute/path/to/Palette/runtime/security/serve_palette.py` directly.
 
 The repository marketplace is `.agents/plugins/marketplace.json`. Install the
 runtime and put the generated `palette-mcp` command on PATH before enabling its

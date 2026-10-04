@@ -7,9 +7,9 @@ import sys
 
 
 def main():
-    repo = Path(os.environ.get("PALETTE_REPO", Path(__file__).resolve().parents[1])).resolve()
-    host = Path(os.environ.get("PALETTE_HOST", repo / "host/target/release/palette-host"))
-    for required in (repo / "Project.toml", repo / "Manifest.toml", repo / "security/operator_workspace_router.py", host):
+    repo = Path(os.environ.get("PALETTE_REPO", Path(__file__).resolve().parents[2])).resolve()
+    host = Path(os.environ.get("PALETTE_HOST", repo / "runtime/host/target/release/palette-host"))
+    for required in (repo / "Project.toml", repo / "Manifest.toml", repo / "runtime/security/operator_workspace_router.py", host):
         if not required.is_file():
             raise SystemExit(f"Palette setup incomplete: missing {required}; instantiate Julia and build the host before starting")
     if not os.access(host, os.X_OK):
@@ -20,8 +20,8 @@ def main():
     os.environ.setdefault("OPERATOR_WORKSPACE", str(data / "workspace"))
     os.environ.setdefault("PALETTE_STATE_DIR", str(data / "state"))
     os.environ.setdefault("PALETTE_WORKSPACE_STATE_ROOT", str(data / "worlds"))
-    sys.path.insert(0, str(repo / "security"))
-    runpy.run_path(str(repo / "security/operator_workspace_router.py"), run_name="__main__")
+    sys.path.insert(0, str(repo / "runtime/security"))
+    runpy.run_path(str(repo / "runtime/security/operator_workspace_router.py"), run_name="__main__")
 
 
 if __name__ == "__main__":

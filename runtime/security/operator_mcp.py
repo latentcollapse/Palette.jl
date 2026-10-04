@@ -14,8 +14,8 @@ import uuid
 
 from prewarm_depot import prepare, preparation_identity, preparation_status, resolve_real_julia_binary
 
-REPO = os.environ.get("PALETTE_REPO", str(Path(__file__).absolute().parent.parent))
-HOST = os.environ.get("PALETTE_HOST", str(Path(REPO, "host/target/release/palette-host")))
+REPO = os.environ.get("PALETTE_REPO", str(Path(__file__).absolute().parents[2]))
+HOST = os.environ.get("PALETTE_HOST", str(Path(REPO, "runtime/host/target/release/palette-host")))
 WORKSPACE = str(Path(os.environ["OPERATOR_WORKSPACE"]).absolute())
 STATE_DIR = Path(os.environ.get("PALETTE_STATE_DIR", str(Path.home() / ".local/share/operator-surfaces/palette-state" /
     hashlib.sha256(WORKSPACE.encode()).hexdigest()))).absolute()

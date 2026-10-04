@@ -10,7 +10,7 @@ this process, not handed in by the orchestrator -- so a caller holding a
 handle from a previous process (this one crashed and got relaunched) gets
 a real, unambiguous mismatch instead of silently talking to a different
 Julia world that happens to share a session_id. See
-`security/session.py`'s `NeuraSession` for the orchestrator side and why
+`runtime/security/session.py`'s `NeuraSession` for the orchestrator side and why
 this mirrors (not copies) NeuraBash's own `RUNTIME_EPOCH` lesson
 (`Project-LIRA-NeuraBash/julia/bin/daemon.jl`).
 
@@ -44,7 +44,7 @@ inside the sandbox" thesis. The fix is not a smarter checker; it's
 putting the boundary underneath the language instead of inside it:
 `EPHEMERAL` spawns a real, disposable, OS-sandboxed CHILD process via the
 already-adversarially-proven `spawn_child_worker` capability (see
-`security/broker.py`, `docs/THREAT_MODEL.md` rows 16-19). If the child's
+`runtime/security/broker.py`, `docs/THREAT_MODEL.md` rows 16-19). If the child's
 code corrupts its own `Base.show`, that corruption dies with the child
 process -- Linux throws the whole thing away, which is a fundamentally
 stronger guarantee than trying to detect or reverse the corruption

@@ -139,11 +139,11 @@ pub fn default_repo_dir() -> String {
     }
     let exe = std::env::current_exe().ok().and_then(|p| std::fs::canonicalize(p).ok());
     for dir in exe.iter().flat_map(|p| p.ancestors()) {
-        if dir.join("scripts/session_loop.jl").is_file() {
+        if dir.join("runtime/scripts/session_loop.jl").is_file() {
             return dir.to_string_lossy().into_owned();
         }
     }
-    env!("CARGO_MANIFEST_DIR").trim_end_matches("/host").to_string()
+    env!("CARGO_MANIFEST_DIR").trim_end_matches("/runtime/host").to_string()
 }
 
 /// Text, or an object of named texts; anything else is dropped.

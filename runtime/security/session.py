@@ -5,7 +5,7 @@ Palette persistent session -- "persistent mind, disposable machinery".
 The rest of this codebase (launch_worker.py, broker.py) launches one
 `julia -e script` process per call: real state persistence only within
 that one process's lifetime. This module keeps ONE sandboxed worker alive
-across many turns instead, running scripts/session_loop.jl, while reusing
+across many turns instead, running runtime/scripts/session_loop.jl, while reusing
 every existing authority primitive unchanged: the same bwrap argv builder,
 the same broker/ceiling model, the same depot-clone mechanism (now
 session-lifetime, via create_session_depot, instead of one-shot).
@@ -46,8 +46,8 @@ from launch_worker import resolve_real_julia_binary, build_bwrap_argv, create_se
 
 import broker as _broker
 
-REPO_DIR = str(Path(__file__).resolve().parent.parent)
-SESSION_LOOP_SCRIPT = str(Path(REPO_DIR) / "scripts" / "session_loop.jl")
+REPO_DIR = str(Path(__file__).resolve().parents[2])
+SESSION_LOOP_SCRIPT = str(Path(REPO_DIR) / "runtime/scripts" / "session_loop.jl")
 
 
 class SessionDeadError(Exception):
@@ -199,7 +199,7 @@ class NeuraSession:
             for name in ("PALETTE_STATE_MAX_BINDING_BYTES", "PALETTE_STATE_MAX_BYTES"):
                 if name in os.environ:
                     argv += ["--setenv", name, os.environ[name]]
-            argv += ["--", julia_bin, "--startup-file=no", str(Path(self.repo_dir) / "scripts/session_loop.jl")]
+            argv += ["--", julia_bin, "--startup-file=no", str(Path(self.repo_dir) / "runtime/scripts/session_loop.jl")]
             self._proc = subprocess.Popen(
                 argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 # Turn output is arbitrary bytes; one invalid byte used to

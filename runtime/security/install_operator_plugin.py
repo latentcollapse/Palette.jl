@@ -9,7 +9,7 @@ import tempfile
 import shutil
 import shlex
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def write_json(path, value):
@@ -33,8 +33,8 @@ def main():
     parser.add_argument("--bin-dir", help="Optional directory for a palette-mcp executable on PATH")
     args = parser.parse_args()
     repo, plugin = Path(args.repo_dir).resolve(), Path(args.plugin_dir).resolve()
-    host = repo / "host/target/release/palette-host"
-    for path in (repo / "Project.toml", repo / "Manifest.toml", repo / "security/operator_mcp.py", repo / "security/operator_workspace_router.py", repo / "security/serve_palette.py", host):
+    host = repo / "runtime/host/target/release/palette-host"
+    for path in (repo / "Project.toml", repo / "Manifest.toml", repo / "runtime/security/operator_mcp.py", repo / "runtime/security/operator_workspace_router.py", repo / "runtime/security/serve_palette.py", host):
         if not path.is_file():
             parser.error(f"missing {path}; instantiate the local project and build the Rust host before installing")
     if not os.access(host, os.X_OK):
@@ -50,7 +50,7 @@ def main():
     if set(config.get("mcpServers", {})) - {"palette"}:
         parser.error("target contains other servers; use a dedicated Palette plugin")
     entry = config.setdefault("mcpServers", {}).setdefault("palette", {})
-    entry.update(command=sys.executable, args=[str(repo / "security/serve_palette.py")],
+    entry.update(command=sys.executable, args=[str(repo / "runtime/security/serve_palette.py")],
         env={**entry.get("env", {}), "PALETTE_REPO": str(repo), "PALETTE_HOST": str(host), "OPERATOR_WORKSPACE": str(Path(args.workspace_dir).resolve())})
     entry.setdefault("startup_timeout_sec", 200)
     entry.setdefault("tool_timeout_sec", 210)
@@ -85,7 +85,7 @@ def main():
             old = launcher.read_text()
             if not old.startswith("#!/bin/sh\n# Palette-managed launcher\n"):
                 parser.error("refusing to overwrite an unmanaged palette-mcp executable")
-        launcher.write_text("#!/bin/sh\n# Palette-managed launcher\nexec " + shlex.quote(sys.executable) + " " + shlex.quote(str(repo / "security/serve_palette.py")) + ' "$@"\n')
+        launcher.write_text("#!/bin/sh\n# Palette-managed launcher\nexec " + shlex.quote(sys.executable) + " " + shlex.quote(str(repo / "runtime/security/serve_palette.py")) + ' "$@"\n')
         launcher.chmod(0o755)
     print(json.dumps({"plugin": str(plugin), "repo": str(repo), "workspace": entry["env"]["OPERATOR_WORKSPACE"],
         "preparation": "checked on first operator start", "state": "existing state directory wired by operator"}))

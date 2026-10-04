@@ -21,9 +21,9 @@ For supervised, sandboxed sessions on Linux, install Julia 1.12, Python 3,
 bubblewrap, and a Rust build toolchain, then build the host:
 
 ```sh
-cargo build --manifest-path host/Cargo.toml --release --locked
-python3 security/prewarm_depot.py --project-dir "$PWD" --host-bin "$PWD/host/target/release/palette-host"
-host/target/release/palette-host session --repo-dir "$PWD" --project-dir "$PWD" --workspace-dir /absolute/path/to/workspace --state-dir /absolute/path/to/state --ceiling '{}'
+cargo build --manifest-path runtime/host/Cargo.toml --release --locked
+python3 runtime/security/prewarm_depot.py --project-dir "$PWD" --host-bin "$PWD/runtime/host/target/release/palette-host"
+runtime/host/target/release/palette-host session --repo-dir "$PWD" --project-dir "$PWD" --workspace-dir /absolute/path/to/workspace --state-dir /absolute/path/to/state --ceiling '{}'
 ```
 
 The session speaks newline-delimited JSON on stdin/stdout. After its startup
@@ -46,15 +46,23 @@ OS sandbox; the supervised host does.
 [Plugin installation](plugins/palette/README.md) · [Operator API](docs/operator.md) · [Installation and MCP](docs/install.md) ·
 [Workspaces and patches](docs/workspaces.md) · [Authority boundaries](docs/authority.md) · [Static analysis policy](docs/static-analysis.md)
 
+## Optional operator briefing
+
+[BRAIN_BLAST.md](BRAIN_BLAST.md) explains how to exploit persistent Julia state,
+representations, compiled helpers, provenance, and controlled experiments.
+Provide it as context when you want a model to start with those practices, or
+withhold it when evaluating unprimed exploration. It is guidance, not a required
+runtime dependency. You can use it as a seed for curated training examples;
+validate those examples and evaluate a tuned model on held-out tasks rather than
+assuming that fine-tuning on this prose improves performance.
+
 ## Repository layout
 
 | Directory | Contents |
 | --- | --- |
 | `src/` | Julia package and operator helpers |
-| `host/` | Rust supervisor and capability broker |
-| `security/` | Python adapters, launcher, installation, and process conformance tests |
+| `runtime/` | Rust host, Python adapters, installer, worker entrypoint, and development checks |
 | `test/` | Julia package tests and fixtures |
-| `scripts/` | Session entrypoint and development checks |
 | `docs/` | Public installation, API, and authority documentation |
 | `plugins/` | Portable plugin manifests and assets |
 
@@ -63,19 +71,26 @@ kernels and SDKs are provisioned by deployments, rather than bundled with Palett
 
 ## Development
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for scope, verification, and research archival.
+
 ```sh
 julia --project=. -e 'using Pkg; Pkg.test()'
-cargo test --manifest-path host/Cargo.toml --locked
-python3 scripts/test_julia_analyzer.py
-node scripts/check-test-policy.mjs
+cargo test --manifest-path runtime/host/Cargo.toml --locked
+python3 runtime/scripts/test_julia_analyzer.py
+node runtime/scripts/check-test-policy.mjs
 ```
 
 For the complete Linux process conformance gates, prepare a Julia environment
 with this checkout plus JSON, CSV, DataFrames, EzXML, and IJulia, then run:
 
 ```sh
-python3 security/verify_operator.py --project-dir /absolute/path/to/test-env --implementation both
+python3 runtime/security/verify_operator.py --project-dir /absolute/path/to/test-env --implementation both
 ```
+
+Internal development research and run receipts belong in the gitignored
+`.archive/` directory or a private external archive. Keep revisions, hashes,
+attribution, and failed attempts for future research publication. Public `docs/`
+contains supported product documentation.
 
 CI runs package, host, Jupyter integration, workspace/patch, and process gates.
 The package manifest declares Julia 1.10+; supervised development and CI are tested on Julia 1.12.

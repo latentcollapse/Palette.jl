@@ -197,7 +197,7 @@ mutable struct KernelState
         # precompilation refuses evaluation into any other module.
         state.eval_module = something(eval_module, Module(Symbol("KernelScope_$(replace(string(state.id), '-' => '_'))")))
         # `Core.eval`'d code lands in this fresh module, not Main -- `using
-        # Neura` at Main scope (e.g. in scripts/session_loop.jl) does not
+        # Neura` at Main scope (e.g. in runtime/scripts/session_loop.jl) does not
         # make `Neura` visible here (confirmed by direct testing: a real
         # UndefVarError for `Neura` from inside eval_module otherwise).
         # Bound once here so turn code can call
@@ -1676,7 +1676,7 @@ This is the ONLY code path in this package that can reach outside the
 sandbox's own bounded filesystem/network envelope. It does not perform any
 external effect itself: it connects to the host capability broker over the
 Unix socket named by the `PALETTE_BROKER_SOCKET` environment variable (set
-by `security/launch_worker.py`, reachable only because that one socket path
+by `runtime/security/launch_worker.py`, reachable only because that one socket path
 was explicitly bind-mounted into this sandbox), sends one JSON request, and
 returns the broker's JSON response. The broker -- a separate process
 running outside this sandbox's OS namespace entirely -- decides whether to

@@ -16,8 +16,8 @@ own self-reported stdout -- see docs/THREAT_MODEL.md's note on why two
 early manual tests were false positives until checked this way.
 
 Run:
-    python3 security/test_authority.py            # full suite (slow: real sandboxes)
-    python3 security/test_authority.py -k subset   # ceiling_is_subset only (fast, no sandbox)
+    python3 runtime/security/test_authority.py            # full suite (slow: real sandboxes)
+    python3 runtime/security/test_authority.py -k subset   # ceiling_is_subset only (fast, no sandbox)
 
 Requires: bubblewrap (bwrap) on PATH, a Julia install with this package and
 IJulia available in some project environment (see README.md's Naming
@@ -41,7 +41,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 # The broker and worker launcher under test: the Rust host when PALETTE_HOST_BIN is set.
 from host_adapter import B, create_session_depot, run_worker  # noqa: E402
 
-REPO_DIR = str(Path(__file__).resolve().parent.parent)
+REPO_DIR = str(Path(__file__).resolve().parents[2])
 
 # A Julia project environment with `Neura` (this repo, dev-installed) and
 # `IJulia` available. Point this at your own dev environment via env var;

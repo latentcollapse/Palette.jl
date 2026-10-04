@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Executable tests for security/session.py -- Palette's persistent worker.
+Executable tests for runtime/security/session.py -- Palette's persistent worker.
 
-Same evidence standard as security/test_authority.py: real sandboxes, real
+Same evidence standard as runtime/security/test_authority.py: real sandboxes, real
 broker, real host filesystem checks, never the worker's own self-report
 alone for anything that claims to cross the authority boundary.
 
 Run:
-    python3 security/test_session.py
+    python3 runtime/security/test_session.py
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(__file__))
 from host_adapter import HOST_BIN, NeuraSession, SessionDeadError  # noqa: E402
 
-REPO_DIR = str(Path(__file__).resolve().parent.parent)
+REPO_DIR = str(Path(__file__).resolve().parents[2])
 PROJECT_DIR = os.environ.get(
     "PALETTE_TEST_PROJECT_DIR",
     "/tmp/claude-1000/-mnt-d-Code-Projects/c3c092a4-acab-472c-b26c-e9672fac8468/scratchpad/ijulia-harness-env",

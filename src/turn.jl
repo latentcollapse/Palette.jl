@@ -1,4 +1,4 @@
-# The turn machinery of scripts/session_loop.jl: capturing a turn's output,
+# The turn machinery of runtime/scripts/session_loop.jl: capturing a turn's output,
 # running it under a deadline, and shaping its value for the protocol. It
 # lives in the package so its native code is cached with the package; as
 # part of the unprecompiled script it compiled in every new kernel, about
@@ -731,7 +731,7 @@ function execute_turn(code::String, timeout_s::Union{Nothing, Float64})
     call = length(state.execution_history) + 1
     costs = Dict{String, Any}("call" => call, "phase" => "maintenance", "execution_seconds" => nothing,
         "projection_seconds" => nothing, "serialization_seconds" => nothing, "worker_pipe_seconds" => nothing,
-        "limits" => "Execution includes parsing, lowering, import/compilation and bookkeeping. Completed response encoding and worker-pipe write/flush are queryable via Neura.costs(call) on a subsequent call; they exclude host/MCP delivery. Wall-clock observations include concurrent work.")
+        "limits" => "Execution includes parsing, lowering, import/compilation and bookkeeping. Completed response encoding and worker-pipe write/flush are queryable via Neura.costs(call) on a subsequent call; they exclude runtime/host/MCP delivery. Wall-clock observations include concurrent work.")
     TURN_COSTS[call] = costs
     filter!(kv -> kv.first > call - KEEP_OUTPUTS, TURN_COSTS)
     return capture_output() do

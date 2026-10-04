@@ -1,7 +1,7 @@
 version: 2
 updates:
   - package-ecosystem: cargo
-    directory: /host
+    directory: /runtime/host
     schedule:
       interval: weekly
     cooldown:

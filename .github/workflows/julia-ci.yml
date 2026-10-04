@@ -22,10 +22,10 @@ jobs:
       run: julia --project=@. -e 'using Pkg; Pkg.instantiate()'
 
     - name: Test the static analysis preflight tool itself
-      run: python3 scripts/test_julia_analyzer.py
+      run: python3 runtime/scripts/test_julia_analyzer.py
 
     - name: Run static analysis preflight
-      run: python3 scripts/julia_analyzer.py src/Neura.jl --verbose
+      run: python3 runtime/scripts/julia_analyzer.py src/Neura.jl --verbose
 
     - name: Build package
       run: julia --project=@. -e 'using Pkg; Pkg.build()'
@@ -95,7 +95,7 @@ jobs:
     - name: Run the real Jupyter-wire-protocol proof (a live IJulia kernel, real ZMQ)
       run: |
         JUPYTER_DATA_DIR="$GITHUB_WORKSPACE/jupyter-data" JUPYTER_PATH="$GITHUB_WORKSPACE/jupyter-data" \
-          python3 scripts/real_ijulia_proof.py
+          python3 runtime/scripts/real_ijulia_proof.py
 
   security-suite:
     runs-on: ubuntu-latest
@@ -129,7 +129,7 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
 
     - name: Configure runner Bubblewrap namespaces
-      run: bash scripts/setup-ci-bubblewrap.sh
+      run: bash runtime/scripts/setup-ci-bubblewrap.sh
 
     - name: Instantiate the operator and its test environment
       run: |
@@ -144,7 +144,7 @@ jobs:
 
     - name: Run the canonical operator gates
       run: >-
-        python3 security/verify_operator.py
+        python3 runtime/security/verify_operator.py
         --project-dir "$GITHUB_WORKSPACE/security-test-env"
         --implementation "${{ matrix.implementation }}"
 
@@ -161,22 +161,22 @@ jobs:
         python-version: '3.12'
     - uses: dtolnay/rust-toolchain@stable
     - name: Configure runner Bubblewrap namespaces
-      run: bash scripts/setup-ci-bubblewrap.sh
+      run: bash runtime/scripts/setup-ci-bubblewrap.sh
     - name: Prepare real operator dependencies and host
       run: |
         julia --project=@. -e 'using Pkg; Pkg.instantiate()'
-        cargo build --manifest-path host/Cargo.toml --release --locked
+        cargo build --manifest-path runtime/host/Cargo.toml --release --locked
     - name: Prepare the sandbox depot before bounded MCP interactions
       env:
         JULIA_NUM_THREADS: '1'
         JULIA_PKG_OFFLINE: 'true'
       run: >-
-        python3 security/prewarm_depot.py
+        python3 runtime/security/prewarm_depot.py
         --project-dir "$GITHUB_WORKSPACE"
-        --host-bin "$GITHUB_WORKSPACE/host/target/release/palette-host"
+        --host-bin "$GITHUB_WORKSPACE/runtime/host/target/release/palette-host"
     - name: Check routing, ownership, recovery and one-shot patch authority
       env:
         JULIA_NUM_THREADS: '1'
         JULIA_PKG_OFFLINE: 'true'
-        PYTHONPATH: security
+        PYTHONPATH: runtime/security
       run: python3 -m unittest -v test_workspace_router test_patch_broker

@@ -4,7 +4,7 @@
 *.jl.cov
 *.jl.mem
 /Manifest.toml
-/host/target/
+/runtime/host/target/
 /deps/
 node_modules/
 
@@ -35,3 +35,6 @@ coverage/
 .DS_Store
 Thumbs.db
 *.tmp
+
+# Private development research, provenance, and future-paper material
+/.archive/

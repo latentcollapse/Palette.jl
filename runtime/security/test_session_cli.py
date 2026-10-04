@@ -3,7 +3,7 @@
 
 Julia subprocesses must use stdin=DEVNULL: inheriting this process's stdin
 breaks later CLI requests, even when the first scratch request succeeds.
-Run directly with python3 security/test_session_cli.py.
+Run directly with python3 runtime/security/test_session_cli.py.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from host_adapter import session_cmd  # noqa: E402
 
-REPO_DIR = str(Path(__file__).resolve().parent.parent)
+REPO_DIR = str(Path(__file__).resolve().parents[2])
 CLI = str(Path(__file__).resolve().parent / "session_cli.py")
 PROJECT_DIR = os.environ.get(
     "PALETTE_TEST_PROJECT_DIR",
@@ -142,11 +142,11 @@ class TestSessionCli(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="palette-legacy-wire-") as root:
             repo = Path(root, "repo")
             repo.mkdir()
-            for name in ("src", "scripts"):
+            for name in ("src", "runtime/scripts"):
                 shutil.copytree(Path(REPO_DIR, name), repo / name)
             for name in ("Project.toml", "Manifest.toml"):
                 shutil.copyfile(Path(REPO_DIR, name), repo / name)
-            loop = repo / "scripts/session_loop.jl"
+            loop = repo / "runtime/scripts/session_loop.jl"
             source = loop.read_text()
             marker = "function respond(resp::Dict{String,Any})\n"
             self.assertEqual(source.count(marker), 1)
@@ -274,11 +274,11 @@ class TestSessionCli(unittest.TestCase):
         self.assertEqual(r3["data"], 5)
 
     def test_stdlib_loads_without_precompiling(self):
-        """Fails until security/prewarm_depot.py has run for this depot: a
+        """Fails until runtime/security/prewarm_depot.py has run for this depot: a
         cold `using Pkg` took ~80s per session, longer than a turn."""
         r = self._turn("using Test, Pkg, SparseArrays; 1")
         self.assertTrue(r["success"], r)
-        self.assertNotIn("Precompiling", r["output"], "run security/prewarm_depot.py for this depot")
+        self.assertNotIn("Precompiling", r["output"], "run runtime/security/prewarm_depot.py for this depot")
 
     def test_bash_runs_shell_syntax_and_returns_its_output_and_status(self):
         """bash() used to return only the exit code, so a command's output
@@ -811,11 +811,11 @@ class TestSessionCli(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="palette-preparation-test-") as root:
             repo = Path(root, "repo")
             repo.mkdir()
-            for name in ("src", "scripts"):
+            for name in ("src", "runtime/scripts"):
                 shutil.copytree(Path(REPO_DIR, name), repo / name)
             shutil.copyfile(Path(REPO_DIR, "Project.toml"), repo / "Project.toml")
             shutil.copyfile(Path(PROJECT_DIR, "Manifest.toml"), repo / "Manifest.toml")
-            command = [sys.executable, str(Path(REPO_DIR, "security/prewarm_depot.py")),
+            command = [sys.executable, str(Path(REPO_DIR, "runtime/security/prewarm_depot.py")),
                        "--project-dir", str(repo), "--repo-dir", str(repo), "--state-dir", str(Path(root, "state"))]
             def invoke(*flags):
                 result = subprocess.run([*command, *flags], stdin=subprocess.DEVNULL, capture_output=True, text=True)
@@ -850,7 +850,7 @@ class TestSessionCli(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="palette-mcp-state-") as state_root:
             state = str(Path(state_root, "state"))
             plugin = Path(state_root, "plugin")
-            subprocess.run([sys.executable, str(Path(REPO_DIR, "security/install_operator_plugin.py")),
+            subprocess.run([sys.executable, str(Path(REPO_DIR, "runtime/security/install_operator_plugin.py")),
                 "--plugin-dir", str(plugin), "--workspace-dir", self.task_workspace], stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL, check=True)
             connection = json.loads((plugin / ".mcp.json").read_text())["mcpServers"]["palette"]

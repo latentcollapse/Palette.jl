@@ -2,8 +2,10 @@
 
 This repository owns the Julia operator surface, Rust host, adapters, tests, and
 public documentation. Cyan's harness and deployment-specific language toolchains
-live separately. Internal research notes and run receipts belong outside this
-release tree; retain their provenance in a local archive and Git history.
+live separately. Internal research notes and run receipts belong in the gitignored `.archive/`
+or an external private archive. Preserve source revisions, hashes, original
+receipts, failed attempts, and attribution for a future research paper. Never
+stage internal research or credentials into the public release.
 
 ## Implementation
 
@@ -20,11 +22,11 @@ release tree; retain their provenance in a local archive and Git history.
 
 ## Verification
 
-- Run `git diff --check` and `node scripts/check-test-policy.mjs` after code changes.
+- Run `git diff --check` and `node runtime/scripts/check-test-policy.mjs` after code changes.
   This standalone Julia/Rust repository does not have npm package scripts.
 - Run every modified test file directly. Run Julia package tests for Julia changes
   and Rust tests for host changes. Real process/conformance entrypoints are in
-  `security/verify_operator.py`; its prepared test environment must point here.
+  `runtime/security/verify_operator.py`; its prepared test environment must point here.
 - Tests must fail on broken behavior. Prove regressions with negative controls.
 - No fabricated results, retries, weakened assertions, conditional skips, optional
   assertions, or environment-gated success paths. Record every failed attempt.

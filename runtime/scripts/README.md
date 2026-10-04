@@ -7,4 +7,4 @@
 - `setup-ci-bubblewrap.sh`: namespace setup for disposable GitHub Ubuntu runners.
 - `real_ijulia_proof.py`: integration with a live IJulia kernel over Jupyter/ZMQ.
 
-Run process conformance through `security/verify_operator.py`.
+Run process conformance through `runtime/security/verify_operator.py`.

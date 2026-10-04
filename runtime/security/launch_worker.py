@@ -87,7 +87,7 @@ def resolve_real_julia_binary() -> str:
     testing that `julia -e ...` invoked WITHOUT an explicit stdin (the
     default: inherit the caller's own stdin fd) silently breaks the
     CALLER's own subsequent reads from its own stdin -- invisible for
-    every one-shot caller so far (nothing before security/session_cli.py
+    every one-shot caller so far (nothing before runtime/security/session_cli.py
     depended on a live stdin pipe surviving past this call), but fatal for
     a persistent process like session_cli.py, which reads turn requests
     from its own stdin for its entire lifetime. This one call, running
@@ -177,7 +177,7 @@ def build_bwrap_argv(
         # namespace -- background runs, setsid double forks, daemons that
         # ignore TERM and HUP. --die-with-parent (below) ends it if the
         # supervising process dies first. Nothing a worker starts outlives
-        # it; security/test_session_cli.py proves it for ephemeral children.
+        # it; runtime/security/test_session_cli.py proves it for ephemeral children.
         # Not --as-pid-1: julia as PID 1 inherited every orphaned process and
         # never reaped it, so finished background jobs stayed as zombies that
         # `ps` and `pgrep` still reported.
@@ -274,7 +274,7 @@ def create_session_depot(real_depot: str | None = None, clone_root: str | None =
     """Create one private, writable depot clone for a whole session (not
     one launch) to share. Exists as a public entry point, not just an
     internal `run_worker` detail, because `package_management` (see
-    `security/broker.py`) needs the broker to install into the EXACT same
+    `runtime/security/broker.py`) needs the broker to install into the EXACT same
     directory a running worker already has bound -- a bind mount is a live
     view of a directory, not a snapshot, so a host-side write into a
     worker's depot clone while it's still running appears inside the

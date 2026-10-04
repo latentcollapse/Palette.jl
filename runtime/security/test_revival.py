@@ -12,7 +12,7 @@ adversarial case checks that the report does NOT claim what is not true.
 
 Run:
     JULIA_DEPOT_PATH=~/.palette-trial/depot PALETTE_TEST_PROJECT_DIR=~/.palette-trial/project \\
-        python3 security/test_revival.py
+        python3 runtime/security/test_revival.py
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ class Kernel:
 
     def __init__(self, workspace: str, state: str, timeout: float = 20, env: dict | None = None):
         self.proc = subprocess.Popen(
-            [*session_cmd(), "--repo-dir", str(Path(__file__).resolve().parents[1]), "--project-dir", PROJECT_DIR, "--ceiling", "{}", "--workspace-dir", workspace,
+            [*session_cmd(), "--repo-dir", str(Path(__file__).resolve().parents[2]), "--project-dir", PROJECT_DIR, "--ceiling", "{}", "--workspace-dir", workspace,
              "--turn-timeout", str(timeout), "--state-dir", state],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1,
             env={**os.environ, **(env or {})},
@@ -412,8 +412,11 @@ class RevivalTest(unittest.TestCase):
         # saw one, because the stream does not read ahead.
         k = Kernel(self.ws, self.state, timeout=120)
         try:
-            k.turn("using Random; Random.seed!(1); "
-                   "for i in 1:40; @eval $(Symbol(:b, i)) = [randstring(24) for _ in 1:60_000]; end")
+            # Delay serialization itself; data volume is machine-speed dependent.
+            self.assertTrue(k.turn("using Serialization; struct SlowState; value::Int; end; "
+                       "function Serialization.serialize(s::Serialization.AbstractSerializer, x::SlowState); "
+                       "sleep(0.1); invoke(Serialization.serialize, Tuple{Serialization.AbstractSerializer,Any}, s, x); end; "
+                       "for i in 1:40; @eval $(Symbol(:b, i)) = SlowState($i); end")["success"])
             deadline = time.time() + 60   # the first snapshot always completes, and is timed
             while not Path(self.state, "manifest.json").exists() and time.time() < deadline:
                 time.sleep(0.5)
@@ -426,7 +429,9 @@ class RevivalTest(unittest.TestCase):
             for _ in range(6):
                 self.assertTrue(k.turn("1 + 1")["success"])
             saved_meanwhile = self.manifest()["call"]
-            time.sleep(15)
+            deadline = time.monotonic() + 60
+            while self.manifest()["call"] != 9 and time.monotonic() < deadline:
+                time.sleep(0.05)
             m = self.manifest()
         finally:
             k.close()

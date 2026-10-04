@@ -3,9 +3,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-const root = resolve(import.meta.dirname, "..");
+const root = resolve(import.meta.dirname, "../..");
 const testFilePattern =
-	/(?:^|\/)(?:test|tests|__tests__)(?:\/|$)|\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)vitest\.config\.[cm]?[jt]s$|^(?:security|scripts)\/test_[^/]+\.py$/;
+	/(?:^|\/)(?:test|tests|__tests__)(?:\/|$)|\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)vitest\.config\.[cm]?[jt]s$|^(?:runtime\/security|runtime\/scripts)\/test_[^/]+\.py$/;
 
 function git(args, allowFailure = false) {
 	try {
@@ -277,7 +277,7 @@ function directObjectProperties(argument) {
 
 function changedTestFiles(base) {
 	if (!base) throw new Error("No test-policy comparison history: fetch Git history or set TEST_POLICY_BASE to an available revision");
-	const roots = ["scripts", "security"];
+	const roots = ["runtime/scripts", "runtime/security"];
 	const tracked = git(["diff", "--name-only", "--diff-filter=ACMR", base, "--", ...roots]);
 	const untracked = git(["ls-files", "--others", "--exclude-standard", "--", ...roots], true);
 	return [...new Set(`${tracked}\n${untracked}`.split("\n"))].filter(
@@ -552,9 +552,13 @@ function counts(violations) {
 
 const base = resolveBase();
 const failures = [];
+const previousPaths = new Map(git(["diff", "--name-status", "--find-renames", base])
+	.split("\n").map((line) => line.split("\t"))
+	.filter(([status]) => status.startsWith("R"))
+	.map(([, oldPath, newPath]) => [newPath, oldPath]));
 for (const path of changedTestFiles(base)) {
 	const current = scan(readFileSync(resolve(root, path), "utf8"), path);
-	const oldContent = base ? git(["show", `${base}:${path}`], true) : "";
+	const oldContent = base ? git(["show", `${base}:${previousPaths.get(path) ?? path}`], true) : "";
 	const allowed = counts(oldContent ? scan(oldContent, path) : []);
 	const seen = new Map();
 	for (const violation of current) {

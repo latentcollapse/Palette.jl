@@ -21,7 +21,7 @@ import uuid
 
 from patch_broker import PatchBroker, PATCH_SCHEMA
 
-REPO = Path(os.environ.get("PALETTE_REPO", Path(__file__).absolute().parent.parent)).resolve()
+REPO = Path(os.environ.get("PALETTE_REPO", Path(__file__).absolute().parents[2])).resolve()
 BASE = Path(os.environ["OPERATOR_WORKSPACE"]).resolve()
 LEGACY = Path(os.environ.get("PALETTE_STATE_DIR", str(Path.home() / ".local/share/operator-surfaces/palette-state" / hashlib.sha256(str(BASE).encode()).hexdigest()))).resolve()
 ROOT = Path(os.environ.get("PALETTE_WORKSPACE_STATE_ROOT", str(Path.home() / ".local/share/operator-surfaces/palette-workspaces"))).resolve()
@@ -116,7 +116,7 @@ class Child:
         env["PALETTE_SCRATCH_ROOT"] = str(scratch)
         self.frames = queue.Queue()
         try:
-            self.proc = subprocess.Popen([sys.executable, str(REPO / "security/operator_mcp.py")], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=sys.stderr, text=True, bufsize=1, cwd=self.entry["workspace_dir"], env=env, pass_fds=(self.lease.fileno(),))
+            self.proc = subprocess.Popen([sys.executable, str(REPO / "runtime/security/operator_mcp.py")], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=sys.stderr, text=True, bufsize=1, cwd=self.entry["workspace_dir"], env=env, pass_fds=(self.lease.fileno(),))
             threading.Thread(target=self.pump, args=(self.proc, self.frames), daemon=True).start()
             self.exchange("initialize", {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "palette-router", "version": "0.3.0"}})
         except Exception:

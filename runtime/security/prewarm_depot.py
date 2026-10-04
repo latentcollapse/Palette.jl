@@ -19,7 +19,7 @@ Run it where sessions will run, with the same mounts; a harness that places
 the Julia runtime or this repo at other paths must run it there.
 
 Run once per depot, and again after Neura or the project changes:
-    python3 security/prewarm_depot.py --project-dir <project>
+    python3 runtime/security/prewarm_depot.py --project-dir <project>
 """
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ def preparation_identity(project_dir: str, repo_dir: str, julia_bin: str) -> dic
     files = {str(p): hashlib.sha256(p.read_bytes()).hexdigest()
              for p in sorted(set([*repo.joinpath("src").rglob("*.jl"),
                                   *project.joinpath("src").rglob("*.jl"),
-                                  *repo.joinpath("scripts").glob("*.jl"),
+                                  *repo.joinpath("runtime", "scripts").glob("*.jl"),
                                   *project.glob("*Project.toml"), *project.glob("*Manifest.toml")]))}
     version = subprocess.run([julia_bin, "--startup-file=no", "--version"],
                              stdin=subprocess.DEVNULL, capture_output=True, text=True, check=True).stdout.strip()
@@ -149,7 +149,7 @@ def prepare(project_dir: str, repo_dir: str, *, state_dir: str | None = None,
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--project-dir", required=True)
-    ap.add_argument("--repo-dir", default=str(Path(__file__).resolve().parent.parent))
+    ap.add_argument("--repo-dir", default=str(Path(__file__).resolve().parents[2]))
     ap.add_argument("--state-dir")
     ap.add_argument("--host-bin")
     ap.add_argument("--status", action="store_true")

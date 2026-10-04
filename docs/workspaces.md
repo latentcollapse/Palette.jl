@@ -16,15 +16,15 @@ PALETTE_MAX_LIVE_WORKSPACES defaults to 4 per router. On reaching the cap, close
 
 A trusted local operator configures PALETTE_PATCH_ROOTS as JSON mapping target names to canonical source directories. This mapping is outside Julia and is not set by tool arguments. Patch storage defaults to the router registry's patches directory, outside all worker mounts.
 
-Use palette_patch action=read, target=palette-core, path=security/example.py to inspect bounded UTF-8 content and its SHA-256. Use action=prepare with target and changes, where each change is exactly `{path, before_sha256, content}`. Null before_sha256 means create a file. Existing parent directories are required. The response includes the full review diff, digest, expiry and request_id.
+Use palette_patch action=read, target=palette-core, path=runtime/security/example.py to inspect bounded UTF-8 content and its SHA-256. Use action=prepare with target and changes, where each change is exactly `{path, before_sha256, content}`. Null before_sha256 means create a file. Existing parent directories are required. The response includes the full review diff, digest, expiry and request_id.
 
 Use action=apply with request_id in the same logical workspace. When the client advertises MCP form elicitation, the broker asks the client to present an explicit confirmation for the exact digest and review diff. Accepting that form authorizes one attempt. Client-confirmed approval is not proof of a named human's identity; this relies on a trusted MCP client honoring user interaction. Julia and model-supplied tool arguments cannot mint grants.
 
 If the client does not support confirmation, the request remains pending. An explicitly authorized local administrator can inspect and approve it:
 
 ```
-python3 security/patch_broker.py --storage /actual/registry/patches review REQUEST_ID
-python3 security/patch_broker.py --storage /actual/registry/patches approve REQUEST_ID --digest REVIEWED_SHA256
+python3 runtime/security/patch_broker.py --storage /actual/registry/patches review REQUEST_ID
+python3 runtime/security/patch_broker.py --storage /actual/registry/patches approve REQUEST_ID --digest REVIEWED_SHA256
 ```
 
 Then repeat action=apply. A future grant must be authorized explicitly; merely requesting a patch is not permission for Codex or another agent to approve it on the user's behalf.

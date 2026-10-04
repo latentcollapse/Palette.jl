@@ -366,7 +366,7 @@ impl Broker {
     }
 
     /// Digest files with host privilege -- the independent eye (FM-SLICE-A2b),
-    /// mirroring security/broker.py's _handle_fs_digest: a digest computed
+    /// mirroring runtime/security/broker.py's _handle_fs_digest: a digest computed
     /// inside the sandbox is the kernel grading its own writes, so this reads
     /// the requested paths OUTSIDE the sandbox, on the host, and the request
     /// is receipted regardless of outcome -- a mutation claim can be
@@ -596,7 +596,7 @@ fn handle_conn(conn: UnixStream, broker: &Broker) {
 }
 
 // The host's first Rust test module: the fs_digest parity suite, mirroring
-// security/test_fs_digest.py check-for-check (FM-SLICE-A2b), plus the 64-path
+// runtime/security/test_fs_digest.py check-for-check (FM-SLICE-A2b), plus the 64-path
 // cap. Direct Broker construction -- no sockets.
 #[cfg(test)]
 mod tests {

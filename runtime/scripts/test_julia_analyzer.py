@@ -21,9 +21,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-REPO_DIR = Path(__file__).resolve().parents[1]
+REPO_DIR = Path(__file__).resolve().parents[2]
 REAL_SRC = REPO_DIR / "src" / "Neura.jl"
-ANALYZER = REPO_DIR / "scripts" / "julia_analyzer.py"
+ANALYZER = REPO_DIR / "runtime/scripts" / "julia_analyzer.py"
 
 
 def _run(path: Path, *extra_args: str) -> subprocess.CompletedProcess:

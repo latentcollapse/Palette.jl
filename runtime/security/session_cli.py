@@ -6,13 +6,13 @@ Prime-Agent's `baseToolsFactory`) to spawn ONCE per agent session and drive
 for that session's whole lifetime, instead of shelling out fresh per call.
 
 This is the missing piece between what Palette already proves
-(security/session.py's NeuraSession: real state persistence, real epoch
+(runtime/security/session.py's NeuraSession: real state persistence, real epoch
 handshake, real authority fence, all adversarially tested) and an actual
 chassis integration: Prime-Agent's tool boundary is TypeScript calling a
 subprocess, not a Python API. NeuraSession itself does not change here --
 this only exposes it over one more stdio hop, mirroring (structurally, not
 literally) the same "newline-delimited JSON, one line per turn" shape
-scripts/session_loop.jl already uses one layer down, for the same reason:
+runtime/scripts/session_loop.jl already uses one layer down, for the same reason:
 simple to spawn, simple to pipe, no new transport to build.
 
 Protocol (all newline-delimited JSON):
@@ -33,7 +33,7 @@ Mid-call host requests (kernel -> host, while a call runs):
   fails every waiting request.
 
 `ephemeral`/`ceiling` map directly onto `NeuraSession.turn()`'s own
-`ephemeral`/`ephemeral_ceiling` parameters -- see security/session.py for
+`ephemeral`/`ephemeral_ceiling` parameters -- see runtime/security/session.py for
 what they mean and why the default ceiling is `{}` (full language power,
 zero broker-mediated authority) rather than inherited automatically.
 

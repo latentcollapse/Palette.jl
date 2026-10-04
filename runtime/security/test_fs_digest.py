@@ -8,7 +8,7 @@ regardless of outcome (which is what makes this eye survive kernel death —
 probe P15: kernel receipts die with the kernel; host receipts do not).
 
 Run:
-    python3 security/test_fs_digest.py
+    python3 runtime/security/test_fs_digest.py
 """
 from __future__ import annotations
 

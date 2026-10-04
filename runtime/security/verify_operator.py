@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import sys
 
-ROOT = Path(__file__).absolute().parent.parent
+ROOT = Path(__file__).absolute().parents[2]
 
 
 def run(command, env):
@@ -34,13 +34,13 @@ def main():
          'realpath(dirname(dirname(pathof(Neura)))) == realpath(ARGS[1]) || '
          'error("Test environment points to a different Neura source tree")', ROOT], env)
     run(["git", "diff", "--check"], env)
-    run(["node", ROOT / "scripts/check-test-policy.mjs"], env)
+    run(["node", ROOT / "runtime/scripts/check-test-policy.mjs"], env)
     run(["julia", "--startup-file=no", f"--project={ROOT}", ROOT / "test/runtests.jl"], env)
-    run(["cargo", "test", "--manifest-path", ROOT / "host/Cargo.toml"], env)
-    run(["cargo", "build", "--release", "--manifest-path", ROOT / "host/Cargo.toml"], env)
-    run([sys.executable, ROOT / "security/test_fs_digest.py", "-v"], env)
-    host = ROOT / "host/target/release/palette-host"
-    run([sys.executable, ROOT / "security/prewarm_depot.py", "--project-dir", project,
+    run(["cargo", "test", "--manifest-path", ROOT / "runtime/host/Cargo.toml"], env)
+    run(["cargo", "build", "--release", "--manifest-path", ROOT / "runtime/host/Cargo.toml"], env)
+    run([sys.executable, ROOT / "runtime/security/test_fs_digest.py", "-v"], env)
+    host = ROOT / "runtime/host/target/release/palette-host"
+    run([sys.executable, ROOT / "runtime/security/prewarm_depot.py", "--project-dir", project,
          "--repo-dir", ROOT, "--host-bin", host], env)
     implementations = ("rust", "python") if args.implementation == "both" else (args.implementation,)
     for implementation in implementations:
@@ -49,7 +49,7 @@ def main():
         if implementation == "rust":
             implementation_env["PALETTE_HOST_BIN"] = str(host)
         for suite in ("test_authority.py", "test_session.py", "test_session_cli.py", "test_revival.py", "test_host_bridge.py"):
-            run([sys.executable, ROOT / "security" / suite, "-v"], implementation_env)
+            run([sys.executable, ROOT / "runtime/security" / suite, "-v"], implementation_env)
     print("\nAll operator verification gates passed.", flush=True)
 
 

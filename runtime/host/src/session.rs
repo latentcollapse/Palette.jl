@@ -1,4 +1,4 @@
-//! One persistent sandboxed worker (scripts/session_loop.jl) with its own
+//! One persistent sandboxed worker (runtime/scripts/session_loop.jl) with its own
 //! broker, ceiling and depot clone, kept alive across calls. Its epoch comes
 //! from the worker's own first line and dies with it: a dead worker is
 //! reported, never silently replaced, because a new process is a different
@@ -185,7 +185,7 @@ impl NeuraSession {
                 setenv(name, v);
             }
         }
-        let loop_script = Path::new(&o.repo_dir).join("scripts").join("session_loop.jl");
+        let loop_script = Path::new(&o.repo_dir).join("runtime/scripts").join("session_loop.jl");
         argv.extend(["--".into(), julia, "--startup-file=no".into(), loop_script.to_string_lossy().into_owned()]);
 
         let mut child = Command::new(&argv[0])
