@@ -8,6 +8,24 @@ host, not silently downloaded inside an offline worker.
 
 See the [portable plugin setup](../plugins/palette/README.md) for Agent Plugins manifests, a repository marketplace, and a generic MCP launcher.
 
+## Prepare before interactive use
+
+Cold preparation compiles standard libraries and project dependencies in the
+actual sandbox, with the same paths later sessions use. On a fresh depot this
+can take several minutes and exceed a client's interactive request deadline.
+Run it before connecting an interactive client, and after runtime or source
+updates:
+
+```sh
+python3 security/prewarm_depot.py --project-dir "$PWD" \
+  --host-bin "$PWD/host/target/release/palette-host"
+```
+
+A successful command records `state: prepared`; sessions validate its source,
+runtime, and loaded-cache identity before reusing it. `--status` inspects the
+record without starting preparation. Preparation failures remain failures;
+raising a client's call timeout is not a substitute for a prepared installation.
+
 ## Local stdio plugin
 
 ```sh

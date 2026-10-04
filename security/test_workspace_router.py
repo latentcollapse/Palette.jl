@@ -71,6 +71,10 @@ class WorkspaceRouterIntegration(unittest.TestCase):
         if getattr(self, "tmp", None):
             self.tmp.cleanup()
 
+    def diagnostics(self):
+        self.router_stderr.flush()
+        return Path(self.router_stderr.name).read_text(errors="replace")[-12000:]
+
     def call(self, name, arguments, *, error=False):
         request = {
             "jsonrpc": "2.0",
@@ -82,15 +86,14 @@ class WorkspaceRouterIntegration(unittest.TestCase):
         self.proc.stdin.flush()
         with selectors.DefaultSelector() as selector:
             selector.register(self.proc.stdout, selectors.EVENT_READ)
-            self.assertTrue(selector.select(timeout=240), "MCP reply deadline exceeded")
+            ready = selector.select(timeout=240)
+            self.assertTrue(ready, "MCP reply deadline exceeded\n" + self.diagnostics())
         raw = self.proc.stdout.readline()
-        self.assertTrue(raw, "Router exited without reply")
+        self.assertTrue(raw, "Router exited without reply\n" + self.diagnostics())
         frame = json.loads(raw)
         self.assertIn("result", frame, frame)
         reply = frame["result"]
-        self.router_stderr.flush()
-        diagnostics = Path(self.router_stderr.name).read_text(errors="replace")[-12000:]
-        self.assertEqual(bool(reply.get("isError")), error, f"{reply}\n{diagnostics}")
+        self.assertEqual(bool(reply.get("isError")), error, f"{reply}\n{self.diagnostics()}")
         return json.loads(reply["content"][0]["text"])
 
     def test_startup_failure_keeps_its_cause_through_router(self):
