@@ -2,6 +2,7 @@ using Test
 using Neura
 using JSON
 using Sockets
+using SHA
 
 # A stand-in for the broker and the agent host behind it: each connection gets
 # one JSON request; `reply` maps (type, payload) to the broker's response.
@@ -150,6 +151,18 @@ end
     @test isempty(state.execution_history)
 end
 
+@testset "Bounded nested results (field B03)" begin
+    @test Neura.bounded_data((method_list=methods(Neura.Api.output),)) isa AbstractString
+    normal = (values=[[1, 2], [3, 4]], label="λ")
+    @test Neura.bounded_data(normal) === normal
+    cycle = Any[]; push!(cycle, cycle)
+    @test Neura.bounded_data(cycle) isa AbstractString
+    for scalar in (Symbol(repeat("q", 2_000_000)), repeat("\0", Neura.MAX_DATA_JSON_BYTES))
+        projected = Neura.bounded_data(scalar)
+        @test projected isa AbstractString && projected !== scalar && ncodeunits(projected) <= Neura.MAX_OUTPUT_BYTES + 64
+    end
+end
+
 @testset "ExecuteCode Operation" begin
     reset_kernel_state()
 
@@ -160,6 +173,18 @@ end
     @test receipt.operation_type == "ExecuteCode"
     @test receipt.result.success
     @test receipt.result.data == 42
+    @testset "Whole-call parse gate (field B01)" begin
+        execute(ExecuteCode("parse_guard = Ref(7)"))
+        for tail in ("function incomplete(", ")", "begin\n1")
+            bad = execute(ExecuteCode("parse_guard[] = 99\n" * tail))
+            @test !bad.result.success && occursin("ParseError", bad.result.error)
+            @test execute(ExecuteCode("parse_guard[]")).result.data == 7
+        end
+        @test execute(ExecuteCode("parse_guard[] = 8; parse_guard[]")).result.data == 8
+        @test !execute(ExecuteCode("parse_guard[] = 9; error(\"runtime failure\")")).result.success
+        @test execute(ExecuteCode("parse_guard[]")).result.data == 9
+        @test execute(ExecuteCode("Expr(:incomplete, :literal)")).result.success
+    end
 end
 
 @testset "Phase 1: real cross-request state persistence" begin
@@ -236,6 +261,89 @@ end
     fail_receipt = execute(ShellEscape("exit 3"))
     @test !fail_receipt.result.success
     @test fail_receipt.result.data["exit_code"] == 3
+end
+
+@testset "fs_digest broker request (FM-SLICE-A2)" begin
+    # Category-aware fake broker: with_fake_broker maps host_request-shaped
+    # params; fs_digest needs the raw category, so this test runs its own
+    # minimal broker over the same one-JSON-line protocol.
+    reset_kernel_state()
+    dir = mktempdir()
+    path = joinpath(dir, "watched.txt")
+    write(path, "independently observed\n")
+    server = Sockets.listen(joinpath(dir, "b.sock"))
+    seen = Any[]
+    task = @async while isopen(server)
+        conn = try Sockets.accept(server) catch; break end
+        req = JSON.parse(readline(conn))
+        push!(seen, req)
+        resp = if req["category"] == "fs_digest" && req["params"]["paths"] == [path]
+            Dict("id" => req["id"], "approved" => true,
+                 "result" => Dict("digests" => Dict(path => Dict("sha256" => "ff"^32)),
+                                  "observer" => "host", "algorithm" => "sha256"))
+        else
+            Dict("id" => req["id"], "approved" => false, "reason" => "not in ceiling")
+        end
+        write(conn, JSON.json(resp) * "\n")
+        close(conn)
+    end
+    old = get(ENV, "PALETTE_BROKER_SOCKET", nothing)
+    ENV["PALETTE_BROKER_SOCKET"] = joinpath(dir, "b.sock")
+    try
+        result = Neura.fs_digest([path])
+        @test result["observer"] == "host"
+        @test result["digests"][path]["sha256"] == "ff"^32
+        @test seen[1]["category"] == "fs_digest"
+        @test seen[1]["params"]["paths"] == [path]
+        @test_throws ErrorException Neura.fs_digest([joinpath(dir, "other.txt")])
+    finally
+        old === nothing ? delete!(ENV, "PALETTE_BROKER_SOCKET") : (ENV["PALETTE_BROKER_SOCKET"] = old)
+        close(server)
+    end
+end
+
+@testset "ShellEscape typed errors + output digests (FM-SLICE-A1)" begin
+    reset_kernel_state()
+
+    clean = execute(ShellEscape("exit 3"))
+    @test clean.result.data["error_class"] == "clean_failure"
+    @test !clean.result.success
+    @test clean.metadata["error_class"] == "clean_failure"
+    @test clean.metadata["working_dir"] == pwd()
+
+    tout = execute(ShellEscape("sleep 5"; timeout_ms = 80))
+    @test tout.result.data["error_class"] == "timeout"
+    @test !tout.result.success
+
+    dir = mktempdir(); rm(dir; force = true)
+    spawn = execute(ShellEscape("pwd"; working_dir = dir))
+    @test spawn.result.data["error_class"] == "spawn_error"
+    @test !spawn.result.success
+
+    dir2 = mktempdir(); script = joinpath(dir2, "killself.sh")
+    write(script, "#!/bin/sh\nkill -9 \$\$\n")
+    sig = execute(ShellEscape("sh '$script'"))
+    @test sig.result.data["error_class"] == "signal_death"
+    @test sig.result.data["exit_code"] == 137
+
+    ok = execute(ShellEscape("printf hi"))
+    @test ok.result.success
+    @test !haskey(ok.result.data, "error_class")
+    @test ok.result.data["stdout_sha256"] == bytes2hex(sha256("hi")) # printf adds no newline
+    @test ok.result.data["stderr_sha256"] == bytes2hex(sha256(""))
+end
+
+@testset "ShellEscape (signal death reports failure)" begin
+    # FM-RQ-A1 probe P13: Julia's Process.exitcode is 0 alongside a nonzero
+    # termsignal, so a SIGKILLed shell used to be reported as success with
+    # exit_code 0. It must report failure with 128 + signal, like a shell.
+    reset_kernel_state()
+    dir = mktempdir()
+    script = joinpath(dir, "killself.sh")
+    write(script, "#!/bin/sh\nkill -9 \$\$\n")
+    receipt = execute(ShellEscape("sh '$script'"))
+    @test !receipt.result.success
+    @test receipt.result.data["exit_code"] == 137 # 128 + SIGKILL(9)
 end
 
 @testset "DiscoveryService" begin

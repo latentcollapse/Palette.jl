@@ -22,10 +22,10 @@ jobs:
       run: julia --project=@. -e 'using Pkg; Pkg.instantiate()'
 
     - name: Test the static analysis preflight tool itself
-      run: python3 test_julia_analyzer.py
+      run: python3 scripts/test_julia_analyzer.py
 
     - name: Run static analysis preflight
-      run: python3 julia_analyzer.py src/Neura.jl --verbose
+      run: python3 scripts/julia_analyzer.py src/Neura.jl --verbose
 
     - name: Build package
       run: julia --project=@. -e 'using Pkg; Pkg.build()'
@@ -98,13 +98,12 @@ jobs:
           python3 scripts/real_ijulia_proof.py
 
   security-suite:
-    # Was missing entirely -- neither security/test_authority.py nor
-    # security/test_session.py ran anywhere in CI, despite being this
-    # project's actual authority-fence and persistent-session evidence.
-    # Found by external review, confirmed real: a regression in either
-    # file could land on main unnoticed by anything automated.
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        implementation: [rust, python]
 
     steps:
     - uses: actions/checkout@v4
@@ -114,25 +113,60 @@ jobs:
       with:
         version: '1.12'
 
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+
     - name: Install bubblewrap
       run: sudo apt-get update && sudo apt-get install -y bubblewrap
 
-    - name: Build a Julia dev environment with Neura + IJulia
+    - name: Instantiate the operator and its test environment
       run: |
+        julia --project=@. -e 'using Pkg; Pkg.instantiate()'
         julia -e '
           using Pkg
           Pkg.activate("security-test-env")
           Pkg.develop(path=".")
-          Pkg.add("IJulia")
+          Pkg.add(["JSON", "CSV", "DataFrames", "EzXML", "IJulia"])
           Pkg.instantiate()
         '
 
-    - name: Run the authority-fence suite
-      env:
-        PALETTE_TEST_PROJECT_DIR: ${{ github.workspace }}/security-test-env
-      run: python3 security/test_authority.py -v
+    - name: Run the canonical operator gates
+      run: >-
+        python3 security/verify_operator.py
+        --project-dir "$GITHUB_WORKSPACE/security-test-env"
+        --implementation "${{ matrix.implementation }}"
 
-    - name: Run the persistent-session suite
+  operator-adapters:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@v4
+    - uses: julia-actions/setup-julia@v2
+      with:
+        version: '1.12'
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Install bubblewrap
+      run: sudo apt-get update && sudo apt-get install -y bubblewrap
+    - name: Prepare real operator dependencies and host
+      run: |
+        julia --project=@. -e 'using Pkg; Pkg.instantiate()'
+        cargo build --manifest-path host/Cargo.toml --release --locked
+    - name: Check routing, ownership, recovery and one-shot patch authority
       env:
-        PALETTE_TEST_PROJECT_DIR: ${{ github.workspace }}/security-test-env
-      run: python3 security/test_session.py -v
+        JULIA_NUM_THREADS: '1'
+        JULIA_PKG_OFFLINE: 'true'
+        PYTHONPATH: security
+      run: python3 -m unittest -v test_workspace_router test_patch_broker

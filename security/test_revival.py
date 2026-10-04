@@ -39,7 +39,7 @@ class Kernel:
 
     def __init__(self, workspace: str, state: str, timeout: float = 20, env: dict | None = None):
         self.proc = subprocess.Popen(
-            [*session_cmd(), "--project-dir", PROJECT_DIR, "--ceiling", "{}", "--workspace-dir", workspace,
+            [*session_cmd(), "--repo-dir", str(Path(__file__).resolve().parents[1]), "--project-dir", PROJECT_DIR, "--ceiling", "{}", "--workspace-dir", workspace,
              "--turn-timeout", str(timeout), "--state-dir", state],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1,
             env={**os.environ, **(env or {})},
@@ -71,7 +71,7 @@ def section(report: str, heading: str) -> str:
 class RevivalTest(unittest.TestCase):
     def setUp(self):
         if shutil.which("bwrap") is None or not Path(PROJECT_DIR).exists():
-            raise unittest.SkipTest("needs bwrap and the trial project")
+            self.fail("needs bwrap and the prepared test project")
         self.ws = tempfile.mkdtemp(prefix="palette-revival-ws-")
         self.state = tempfile.mkdtemp(prefix="palette-revival-state-")
 
@@ -101,7 +101,66 @@ class RevivalTest(unittest.TestCase):
     def manifest(self) -> dict:
         return json.loads(Path(self.state, "manifest.json").read_text())
 
+    def test_MT016_dynamic_include_and_five_dependents(self):
+        Path(self.ws, "foundation.jl").write_text("module Foundation; export Token; struct Token; n::Int; end; end\n")
+        self.session('path_="foundation.jl"; include(path_); using .Foundation; ' +
+                     '; '.join(f'function dependent{i}(x::Foundation.Token); x.n+{i}; end' for i in range(5)))
+        out, r = self.revive('([dependent0(Foundation.Token(7)), dependent4(Foundation.Token(7))], Neura.revival()["lost"])')
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["data"][0], [7, 11])
+        self.assertFalse(r["data"][1], out)
+
+    def test_MT016_definition_graph_handles_restored_constants(self):
+        self.session('const N=2; struct ParametricData; x::NTuple{N,Int}; end; retained=ParametricData((1,2)); next_value(x::ParametricData)=x.x[2]')
+        m=self.manifest(); m["definitions"].reverse()
+        Path(self.state,"manifest.json").write_text(json.dumps(m))
+        out,r=self.revive('next_value(retained)')
+        self.assertTrue(r["success"],r)
+        self.assertEqual(r["data"],2)
+        self.assertNotIn("not revived",out)
+
+    def test_MT026_dynamic_include_result_and_scoped_block(self):
+        Path(self.ws, "value.jl").write_text("81")
+        self.session('path="value.jl"; result=include(path); unrelated=42', 'begin local x=3; scoped_value=x+1; end')
+        Path(self.ws, "value.jl").write_text("82")
+        _, r = self.revive('(result, unrelated, scoped_value, Neura.provenance(:result)["freshness"], Neura.provenance(:unrelated)["freshness"])')
+        self.assertEqual(r["data"], [81, 42, 4, "source_files_changed", "no_observed_staleness"])
+
+    def test_MT017_world_identity_after_revival(self):
+        self.session("mt003_marker=[1,2,3]")
+        out, r = self.revive('((@__MODULE__) === Main, isdefined(Main,:mt003_marker), :mt003_marker in names(Main; all=true), getglobal(Main,:mt003_marker) === mt003_marker)')
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["data"], [True]*4)
+
+    def test_MT024_MT026_source_digest_and_precise_dependents(self):
+        source = Path(self.ws, "source.jl"); source.write_text("source_value=101\n")
+        self.session('include("source.jl"); derived_value=source_value+1; unrelated_integer=9; unrelated_string="independent"')
+        stamp = source.stat(); source.write_text("source_value=202\n"); os.utime(source, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        out, r = self.revive('[Neura.provenance(n)["freshness"] for n in (:source_value,:derived_value,:unrelated_integer,:unrelated_string)]')
+        self.assertTrue(r["success"], r)
+        self.assertEqual(r["data"], ["source_files_changed"]*2+["no_observed_staleness"]*2)
+        self.session('include("source.jl"); derived_value=source_value+1')
+        out, r = self.revive('Neura.provenance(:derived_value)["freshness"]')
+        self.assertEqual(r["data"], "no_observed_staleness")
+
+    def test_MT028_tracked_artifact_authority_advances(self):
+        import hashlib
+        artifact=Path(self.ws,"artifact.txt"); authority=Path(self.ws,"authority.json")
+        artifact.write_text("A"); authority.write_text(json.dumps({"generation":"A", "commit":"commit-A", "digest":hashlib.sha256(b"A").hexdigest()}))
+        self.session('artifact=Neura.read_artifact("artifact.txt"; authority_path="authority.json"); derived_artifact=artifact.content*"-derived"; unrelated=42')
+        artifact.write_text("B"); authority.write_text(json.dumps({"generation":"B", "commit":"commit-B", "digest":hashlib.sha256(b"B").hexdigest()}))
+        out,r=self.revive('(derived_artifact,Neura.provenance(:derived_artifact)["freshness"],Neura.provenance(:unrelated)["freshness"])')
+        self.assertTrue(r["success"],r)
+        self.assertEqual(r["data"],["A-derived","artifact_superseded","no_observed_staleness"])
+
     # --- what should come back ------------------------------------------
+
+    def test_parse_rejected_definitions_are_not_replayed(self):
+        results = self.session("guard() = 1", "guard() = 2\nfunction incomplete(", may_fail=True)
+        self.assertEqual([r["success"] for r in results], [True, False])
+        out, result = self.revive("guard()")
+        self.assertEqual(result["data"], 1)
+        self.assertIn("guard (function, call 1)", section(out, "rebuilt from source"))
 
     def test_plain_data_and_containers_are_restored_exactly(self):
         self.session('n = 42; x = 1.5; s = "héllo"; sym = :k; c = \'z\'; nothing_ = nothing; m = missing; '
@@ -180,8 +239,16 @@ class RevivalTest(unittest.TestCase):
         # Staleness is tracked per call: a value set by the call that read the
         # file counts as computed from it. `unrelated` comes from its own call.
         self.session('using CSV, DataFrames; d = CSV.read("data.csv", DataFrame); total = sum(d.a)', "unrelated = 5")
+        original = next(b["origin"] for b in self.manifest()["bindings"] if b["name"] == "total")
         Path(self.ws, "data.csv").write_text("a\n10\n20\n")
-        out, r = self.revive("total")
+        out, r = self.revive("(value=total,provenance=Neura.provenance(:total))")
+        self.assertTrue(r["success"], r)
+        provenance = r["data"]["provenance"]
+        self.assertEqual(provenance["source_digest"], original["source_digest"])
+        self.assertEqual(len(provenance["source_digest"]), 64)
+        self.assertEqual(provenance["origin_epoch"], original["epoch"])
+        self.assertNotEqual(provenance["epoch"], provenance["origin_epoch"])
+        self.assertEqual(provenance["freshness"], "source_files_changed")
         stale = section(out, "restored but stale (a file it was computed from changed)")
         self.assertIn("d (DataFrames.DataFrame, call 1): data.csv changed since", stale)
         self.assertIn("total (Int64, call 1): data.csv changed since", stale)
@@ -189,24 +256,35 @@ class RevivalTest(unittest.TestCase):
         self.assertNotIn("total (", section(out, "restored exactly"))
 
     def test_definitions_from_a_changed_include_are_not_called_the_same(self):
-        Path(self.ws, "lib.jl").write_text("helper(x) = 10x\nstruct Box; v::Int; end\n")
-        self.session('include("lib.jl"); b = Box(1)')
-        Path(self.ws, "lib.jl").write_text("helper(x) = 20x\nstruct Box; v::Float64; end\n")
-        out, r = self.revive("(helper(1), @isdefined(b))")
+        Path(self.ws, "lib.jl").write_text("helper(x) = 10x\nstruct Box; v::Int; end\nmodule Nested; struct B; v::Int; end; end\n")
+        self.session('include("lib.jl"); b = Box(1); nested_box=Nested.B(1)')
+        self.assertIn("Nested.B", self.manifest()["type_fingerprints"])
+        Path(self.ws, "lib.jl").write_text("helper(x) = 20x\nstruct Box; v::Float64; end\nmodule Nested; struct B; v::Float64; end; end\n")
+        out, r = self.revive("(helper(1), @isdefined(b), @isdefined(nested_box))")
         self.assertNotIn("helper (", section(out, "rebuilt from source"))
         self.assertIn("helper (function, call 1): rebuilt from a file that changed since", section(out, "not the same as before"))
         self.assertIn("Box (type, call 1): rebuilt, but its methods or fields differ", section(out, "not the same as before"))
         # A Box saved with an Int field is not poured into a Box with a Float64 field.
         self.assertIn("b (Box, call 1): type Box is defined differently now", section(out, "not revived"))
-        self.assertEqual(r["data"], [20, False])
+        self.assertIn("type Nested.B is defined differently now", section(out, "not revived"))
+        self.assertEqual(r["data"], [20, False, False])
 
     def test_a_value_of_a_replaced_struct_definition_is_not_revived(self):
-        self.session('struct P; x::Int; end\nold = P(1)',
-                     'struct P; x::Int; y::Int; end\nnew = P(1, 2)')
-        out, r = self.revive("(@isdefined(old), new.y)")
+        self.session('struct P; x::Int; end\nold = P(1); '
+                     'module Nested; struct R; x::Int; end; behavior(r::R)=r.x+1; end; '
+                     'nested_old=Nested.R(1); nested_type=Nested.R',
+                     'struct P; x::Int; y::Int; end\nnew = P(1, 2); '
+                     'module Nested; struct R; x::Int; end; behavior(r::R)=r.x+100; end; nested_new=Nested.R(2)')
+        out, r = self.revive("(@isdefined(old), new.y, @isdefined(nested_old), @isdefined(nested_type), "
+                             "Nested.behavior(nested_new), Neura.provenance(:nested_new))")
         self.assertIn("old (P, an earlier definition, call 1): its type P is an earlier definition", section(out, "not revived"))
         self.assertIn("new (P, call 2)", section(out, "restored exactly"))
-        self.assertEqual(r["data"], [False, 2])
+        self.assertIn("nested_old (", section(out, "not revived"))
+        self.assertIn("nested_type (", section(out, "not revived"))
+        self.assertIn("nested_new (", section(out, "restored exactly"))
+        self.assertIsInstance(r["data"], list)
+        self.assertEqual(r["data"][:5], [False, 2, False, False, 102])
+        self.assertIsInstance(r["data"][5]["definition_at_observation"], dict)
 
     def test_a_method_the_failed_call_never_reached_is_reported_different(self):
         self.session('h(x) = 1\nerror("stop")\nh(x::Int) = 2', "1", may_fail=True)
@@ -233,6 +311,26 @@ class RevivalTest(unittest.TestCase):
         out, r = self.revive("Wq.f()")
         self.assertIn("Wq (workspace package): loaded again from sources that changed since", section(out, "not the same as before"))
         self.assertEqual(r["data"], 2)
+
+    def test_workspace_numeric_type_layout_is_checked_before_restore(self):
+        pkg = Path(self.ws, "NumericDesk", "src"); pkg.mkdir(parents=True)
+        Path(self.ws, "NumericDesk", "Project.toml").write_text(
+            'name = "NumericDesk"\nuuid = "9c12dbf5-d18f-43b2-95bb-c00840bb6f60"\n')
+        source = pkg / "NumericDesk.jl"
+        source.write_text("module NumericDesk\nstruct N <: Number; value::Int; end\nf(n::N)=n.value+1\nend\n")
+        self.session('pushfirst!(LOAD_PATH, joinpath(pwd(), "NumericDesk")); using NumericDesk; '
+                     'retained=NumericDesk.N(3); callback=NumericDesk.f; nothing')
+        source.write_text(source.read_text().replace("n.value+1", "n.value+2"))
+        out, r = self.revive("(callback(retained), retained.value)")
+        self.assertEqual(r["data"], [5, 3])
+        self.assertIn("retained (", section(out, "not the same as before"))
+        self.assertIn("callback (", section(out, "not the same as before"))
+        self.assertNotIn("retained (", section(out, "restored exactly"))
+        source.write_text("module NumericDesk\nstruct N <: Number; value::Float64; extra::Int; end\nf(n::N)=n.value\nend\n")
+        out, r = self.revive("@isdefined(retained)")
+        self.assertFalse(r["data"])
+        self.assertIn("retained (", section(out, "not revived"))
+        self.assertIn("type @workspace:NumericDesk.N is defined differently now", out)
 
     def test_a_foreign_method_that_cannot_be_rebuilt_is_reported(self):
         self.session('struct T1; x::Int; end\nBase.show(io::IO, t::T1) = print(io, "T1:", t.x)\nv = T1(1)')

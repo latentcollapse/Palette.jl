@@ -1,73 +1,37 @@
-# --- Node / TypeScript chassis ---
-node_modules/
-dist/
-*.log
-.DS_Store
-*.tsbuildinfo
-packages/*/dist/
-packages/*/dist-chrome/
-packages/*/dist-firefox/
-*.cpuprofile
-
-# --- Julia (Palette operator surface) ---
+# Local dependencies and build products
 .julia/
 *.ji
 *.jl.cov
 *.jl.mem
-docs/build/
+/Manifest.toml
+/host/target/
+/deps/
+node_modules/
 
-# Ephemeral-tool cold provenance (mechanical, per-workspace runtime output,
-# not source -- see Neura.jl's record_tool_capsule)
+# Runtime state and verification environments
 .palette/
-deps/
+.kernel-venv/
+/security-test-env/
+/ijulia-env/
+/jupyter-data/
+*.log
+__pycache__/
+*.pyc
+coverage/
 
-# --- Rust (Palette host) ---
-target/
-**/*.rs.bk
-
-# --- Environment ---
+# Credentials, local configuration, and editor files
 .env
 .env.local
 *.env.*
-.prime/
-
-# --- Editors ---
 .vscode/
 .zed/
 .idea/
 .claude/
 .cursor/
+.worktrees/
 *.swp
 *.swo
 *~
-
-# --- Package specific ---
-packages/coding-agent/catalog/*.bundled.json
-prime-agent-catalog/
-.npm/
-coverage/
-.nyc_output/
-.pi_config/
-tui-debug.log
-compaction-results/
-.opencode/
-syntax.jsonl
-out.jsonl
-pi-*.html
-out.html
-packages/coding-agent/binaries/
-packages/coding-agent/release/
-todo.md
-plans/
-.prime/agent/
-collect.sh
-.kernel-venv/
-.worktrees/
-
-# --- System ---
+.DS_Store
 Thumbs.db
 *.tmp
-
-# --- Python ---
-__pycache__/
-*.pyc

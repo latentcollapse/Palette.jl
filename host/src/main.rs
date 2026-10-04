@@ -91,21 +91,7 @@ fn subset(argv: &[String]) -> Result<i32, String> {
 /// Precompile every stdlib and project dependency into the real depot, in the
 /// worker's own sandbox so the caches record the paths a worker sees. Run once
 /// per depot, and again after Neura or the project changes.
-const PREWARM: &str = r#"
-using Neura
-failed = String[]
-stdlibs = filter(n -> isfile(joinpath(Sys.STDLIB, n, "Project.toml")), readdir(Sys.STDLIB))
-project_deps = collect(keys(get(Base.parsed_toml(Base.active_project()), "deps", Dict())))
-for name in sort(unique([stdlibs; project_deps]))
-    try
-        Core.eval(Main, :(import $(Symbol(name))))
-    catch e
-        push!(failed, name * ": " * first(sprint(showerror, e), 200))
-    end
-end
-println("prewarmed ", length(Base.loaded_modules), " modules")
-foreach(f -> println("could not load ", f), failed)
-"#;
+const PREWARM: &str = include_str!("../../security/prewarm_workload.jl");
 
 fn prewarm(argv: &[String]) -> Result<i32, String> {
     let f = flags(argv, &[])?;

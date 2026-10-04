@@ -1,0 +1,26 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "palette",
+  "version": "0.3.0",
+  "description": "Persistent Julia operator surface with state revival, workspace routing, and explicit host authority.",
+  "author": {
+    "name": "Matt C"
+  },
+  "repository": "https://github.com/latentcollapse/Palette.jl",
+  "license": "MIT",
+  "keywords": [
+    "julia",
+    "mcp",
+    "developer-tools"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Palette",
+        "shortDescription": "Persistent Julia workbench",
+        "composerIcon": "./assets/palette.svg",
+        "logo": "./assets/palette.svg"
+      }
+    }
+  }
+}

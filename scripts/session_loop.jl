@@ -70,6 +70,7 @@ const UUIDs = Neura.UUIDs
 using Neura: safe_json, capture_output, run_turn, execute_turn, bounded_data, text_display, scrub, INTERRUPT_GRACE_S
 
 const EPOCH = string(UUIDs.uuid4())
+Neura.TASK_EPOCH[] = EPOCH
 
 # The protocol gets its own duplicate of fd 1, and fd 1/fd 2 are then pointed
 # at a sink file. Turn code prints, `run` children inherit fd 1, and tasks
@@ -125,8 +126,19 @@ import REPL
 
 
 function respond(resp::Dict{String,Any})
-    println(PROTO, safe_json(resp))
+    started = time_ns()
+    line = safe_json(resp)
+    encoded = time_ns()
+    println(PROTO, line)
     flush(PROTO)
+    finished = time_ns()
+    call = get(resp, "call", nothing)
+    if call isa Int && haskey(Neura.TURN_COSTS, call)
+        costs = Neura.TURN_COSTS[call]
+        costs["serialization_seconds"] = (encoded - started) / 1e9
+        costs["worker_pipe_seconds"] = (finished - encoded) / 1e9
+        costs["worker_response_bytes"] = sizeof(line) + 1
+    end
 end
 
 
@@ -185,13 +197,22 @@ collect_symbols(x) = x isa Symbol ? Symbol[x] : x isa Expr ? reduce(vcat, map(co
 
 function with_hint(err, code)
     err isa AbstractString || return err
-    if (name = interpolated_undefined_name(err, code)) !== nothing
+    missing = match(r"Package ([A-Za-z][A-Za-z0-9_]*) (?:not found in current path|\[[^\]]+\] is required but does not seem to be installed)", err)
+    if missing !== nothing
+        observed = Neura.package_environment(missing[1])
+        message = "Package $(missing[1]): $(observed["status"]). $(observed["action"])"
+        isempty(observed["local_paths"]) || (message *= " Local paths: " * join(observed["local_paths"], ", ") * ".")
+        PKG_OFFLINE && (message *= " This kernel has no network. Loadable: $LOADABLE.")
+        original = replace(err, r"(?m)^- (?:Otherwise, run|Run) `import Pkg; Pkg\.add\([^\n]+\n?" => "",
+            r"(?m)^ - Run `Pkg\.instantiate\(\)`[^\n]+\n?" => "")
+        return message * "\n" * original
+    elseif (name = interpolated_undefined_name(err, code)) !== nothing
         return err * "\nHint: `$name` is interpolated into a string in this call (`\$$name`). If the string holds text for a file, " *
                "write `\\\$$name`, or pass the text as this call's payload, which is not parsed: write(path, PAYLOAD), or for an edit " *
                "payload {\"old\": ..., \"new\": ...} and replace(text, PAYLOAD[\"old\"] => PAYLOAD[\"new\"])."
     elseif (lines = docstring_closed_string(err, code)) !== nothing
         return err * "\nHint: the string that begins on line $(lines[1]) ends at the docstring's \"\"\" on line $(lines[2]), " *
-               "so the lines after it ran as code. Pass the text as this call's payload, which is not parsed: write(path, PAYLOAD), " *
+               "so the following text escaped the string and was parsed as code. Pass the text as this call's payload, which is not parsed: write(path, PAYLOAD), " *
                "or for an edit payload {\"old\": ..., \"new\": ...} and replace(text, PAYLOAD[\"old\"] => PAYLOAD[\"new\"])."
     elseif occursin("must be quoted in commands", err)
         return err * "\nHint: backticks start one program without a shell. " *
@@ -226,12 +247,11 @@ let name = Neura.revival_module_name()
     mod = Neura.get_kernel_state().eval_module
     Core.eval(Main, Expr(:(=), nameof(mod), mod))
 end
-respond(Dict{String,Any}("kind" => "HELLO", "epoch" => EPOCH))
+revival_pending = true
 
-# Whatever the package image does not hold (the closures below, lowering of
-# turn code) compiles here, after HELLO, overlapping with the host deciding
-# what to send first. The warm-up calls leave no history, receipt or binding
-# behind.
+# Finish runtime compilation and revival before advertising readiness.
+# Otherwise the host charges this preparation against the first turn's limit.
+# Warm-up calls leave no user history, receipt, binding or phase observations.
 let state = Neura.get_kernel_state()
     Core.eval(state.eval_module, Expr(:global, Expr(:(=), :PAYLOAD, nothing)))
     (r, _, _), out = execute_turn("print(\"\"); [1 2]", 60.0)
@@ -243,22 +263,28 @@ let state = Neura.get_kernel_state()
     scrub(out); with_hint("x", "y"); safe_json(Dict{String,Any}("a" => 1))
     empty!(state.execution_history)
     empty!(state.receipt_log)
+    empty!(Neura.TURN_COSTS)
     empty!(Neura.DEFINITION_LOG); empty!(Neura.CALL_FILES); empty!(Neura.USED_FILES); empty!(Neura.BINDING_SEEN)
+    empty!(Neura.BINDING_ORIGINS); empty!(Neura.BINDING_IDENTITIES)
     Core.eval(state.eval_module, Expr(:global, Expr(:(=), :ans, nothing)))
     Neura.REVIVAL_REPORT[] = try
         Base.invokelatest(Neura.revive_state!)
     catch e
-        "[revival] The previous kernel stopped, and reviving its state failed ($(first(sprint(showerror, e), 200))). " *
-        "Treat every earlier binding as lost; files in the workspace remain."
+        Neura.revival_observation!(; uncertain=["revival failed after possible partial reconstruction"],
+            text="[revival] The previous kernel stopped, and reviving its state failed ($(first(sprint(showerror, e), 200))). " *
+                 "Partial reconstructed state may remain; inspect bindings. Files in the workspace remain.")
     end
 end
+
+respond(Dict{String,Any}("kind" => "HELLO", "epoch" => EPOCH, "schema_revision" => 3,
+    "capabilities" => Dict("revival_observation_v1" => true, "reload_observation_v1" => true, "phase_costs_v1" => true)))
 
 for line in eachline(PROTO_IN)
     isempty(strip(line)) && continue
 
     local req
     try
-        req = JSON.parse(line)
+        req = JSON.parse(line; dicttype=Dict{String, Any})
     catch e
         respond(Dict{String,Any}("kind" => "ERROR", "epoch" => EPOCH, "error" => sprint(showerror, e)))
         continue
@@ -270,6 +296,7 @@ for line in eachline(PROTO_IN)
     timeout_s = get(req, "timeout_s", nothing)
     resp = Dict{String,Any}("kind" => "RESULT", "epoch" => EPOCH, "request_id" => request_id)
     snapshot_call = nothing
+    previous_reload_sequence = Neura.RELOAD_SEQUENCE[]
 
     try
         code isa String || error("request 'code' must be a string")
@@ -293,7 +320,9 @@ for line in eachline(PROTO_IN)
             # (that's what `repr` is for); this is textual generation of
             # trusted host-side code embedding untrusted content as DATA,
             # not string-building a shell command.
-            child_script = string("using Neura; Neura.ephemeral_main(", repr(code), ")")
+            child_script = string("__palette_child_started__=time_ns(); using Neura; Neura.ephemeral_main(", repr(code),
+                "; payload=", repr(payload), ", timeout_s=", repr(timeout_s),
+                ", startup_seconds=(time_ns()-__palette_child_started__)/1e9)")
             # `child_workspace`/`child_project`/`child_repo` are no longer
             # part of this request: the broker now always allocates the
             # child's workspace itself and uses its own session-established
@@ -301,17 +330,19 @@ for line in eachline(PROTO_IN)
             # child's filesystem view points, only WHICH capabilities it
             # gets (see broker.py's _handle_spawn_child_worker docstring
             # for the exploit this closed).
+            child_started = time_ns()
             spawn_resp = Neura.request_capability("spawn_child_worker", Dict(
                 "ceiling" => requested_ceiling,
                 "script" => child_script,
             ))
+            child_roundtrip_seconds = (time_ns() - child_started) / 1e9
             if get(spawn_resp, "approved", false)
                 child_stdout = String(get(spawn_resp["result"], "stdout", ""))
                 lines = split(child_stdout, '\n')
                 idx = findlast(ln -> !isempty(strip(ln)), lines)
                 last_line = idx === nothing ? "" : lines[idx]
                 child_result = try
-                    JSON.parse(last_line)
+                    JSON.parse(last_line; dicttype=Dict{String, Any})
                 catch
                     # The child died before printing its result line.
                     stderr_tail = strip(String(get(spawn_resp["result"], "stderr", "")))
@@ -323,10 +354,13 @@ for line in eachline(PROTO_IN)
                 resp["display"] = get(child_result, "display", nothing)
                 resp["output"] = idx === nothing ? "" : rstrip(join(lines[1:idx-1], '\n'))
                 resp["error"] = get(child_result, "error", nothing)
+                resp["costs"] = get(child_result, "costs", Dict{String, Any}())
+                resp["costs"]["child_broker_roundtrip_seconds"] = child_roundtrip_seconds
+                get(child_result, "transport_shortened", false) && (resp["transport_shortened"] = true)
                 record_tool_capsule(
                     string(request_id), code,
                     OperationResult(resp["data"], resp["success"], resp["error"]),
-                    0.0,
+                    child_roundtrip_seconds * 1000,
                 )
             else
                 resp["success"] = false
@@ -340,7 +374,7 @@ for line in eachline(PROTO_IN)
             Core.eval(mod, Expr(:global, Expr(:(=), :PAYLOAD, payload)))
             call = length(Neura.get_kernel_state().execution_history) + 1
             (receipt, interrupted, stuck), output = execute_turn(code, timeout_s === nothing ? nothing : Float64(timeout_s))
-            printed = scrub(output)
+            printed = Neura.task_notice_hint(scrub(output))
             resp["call"] = call
             resp["bindings"] = Neura.binding_list!(Neura.get_kernel_state().eval_module, call)
             # Neura.output(call) gives back what the call printed, without what
@@ -355,9 +389,10 @@ for line in eachline(PROTO_IN)
                 resp["output"] = wmap * "\n\n" * resp["output"]
             end
             if stuck
+                resp["costs"] = deepcopy(get(Neura.TURN_COSTS, call, Dict{String, Any}()))
                 resp["success"] = false
                 resp["data"] = nothing
-                resp["error"] = "The call exceeded its $(timeout_s)s limit and kept running after being interrupted " *
+                resp["error"] = "During $(get(resp["costs"], "failed_phase", "execution")), the call exceeded its $(timeout_s)s limit and kept running after being interrupted " *
                                 "for $(Int(INTERRUPT_GRACE_S))s, so the kernel stopped. " *
                                 (isempty(Neura.STATE_DIR[]) ? "Every binding is gone; files written to the workspace remain." :
                                  "The next call starts a new kernel, which revives what it can of the last saved state (its report names the call) and says what it could not.")
@@ -371,16 +406,19 @@ for line in eachline(PROTO_IN)
                                                  0.0, Neura.get_kernel_state().id)
             end
             resp["success"] = receipt.result.success && !interrupted
-            resp["data"] = resp["success"] ? bounded_data(receipt.result.data) : nothing
-            resp["display"] = resp["success"] ? text_display(receipt.result.data) : nothing
+            projection = get(receipt.metadata, "transport", Dict{String, Any}())
+            resp["data"] = resp["success"] ? get(projection, "data", nothing) : nothing
+            resp["display"] = resp["success"] ? get(projection, "display", nothing) : nothing
+            resp["costs"] = deepcopy(get(Neura.TURN_COSTS, call, Dict{String, Any}()))
             resp["error"] = scrub(something(receipt.result.error, ""))
             if interrupted
                 resp["interrupted"] = true
-                resp["error"] = "Interrupted: the call exceeded its $(timeout_s)s limit. The kernel and every binding are intact; " *
+                resp["error"] = "Interrupted during $(get(resp["costs"], "failed_phase", "execution")): the call exceeded its $(timeout_s)s limit. The kernel and every binding are intact; " *
                                 "processes this call started were stopped. Output printed before the interrupt is above.\n" * resp["error"]
             end
             isempty(resp["error"]) && (resp["error"] = nothing)
-            resp["success"] && (snapshot_call = call; Neura.note_completed_call!(call))
+            Neura.note_completed_call!(call)
+            interrupted || (snapshot_call = call)
         else
             # Fail closed on an unrecognized `kind` -- confirmed by direct
             # testing that an earlier version of this branch ran ANY
@@ -398,6 +436,14 @@ for line in eachline(PROTO_IN)
     end
 
     resp["error"] = with_hint(get(resp, "error", nothing), code isa String ? code : "")
+    if revival_pending
+        resp["revival"] = Neura.revival_summary()
+        global revival_pending = false
+    end
+    if Neura.RELOAD_SEQUENCE[] > previous_reload_sequence
+        resp["reloads"] = [Dict(k => r[k] for k in ("module", "status", "identity_risks", "surviving_deleted_definitions",
+            "sequence", "source_digest_before", "source_digest_after", "recovery", "error")) for r in Neura.RELOAD_REPORTS if r["sequence"] > previous_reload_sequence]
+    end
     respond(resp)
     # The model is reading the reply: save the state this call ended with.
     # A request already waiting goes first, until five calls have gone unsaved.

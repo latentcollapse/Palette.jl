@@ -14,6 +14,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -24,13 +25,19 @@ sys.path.insert(0, str(HERE))
 HOST_BIN = os.environ.get("PALETTE_HOST_BIN") or None
 
 import launch_worker as _launch  # noqa: E402
+from session import NeuraSession as _PythonSession, SessionDeadError as _PythonSessionDeadError  # noqa: E402
 
 create_session_depot = _launch.create_session_depot
 
 
-def session_cmd() -> list[str]:
+def scratch_root() -> str:
+    return str(Path(tempfile.gettempdir()) / f"palette-adapter-{uuid.uuid4().hex}")
+
+
+def session_cmd(root: str | None = None) -> list[str]:
     """The command that starts the session bridge (session_cli's arguments follow)."""
-    return [HOST_BIN, "session"] if HOST_BIN else [sys.executable, str(HERE / "session_cli.py")]
+    command = [HOST_BIN, "session"] if HOST_BIN else [sys.executable, str(HERE / "session_cli.py")]
+    return command + ["--scratch-root", root or scratch_root()]
 
 
 def run_worker(*, workspace_dir, project_dir, repo_dir, script, broker_socket_dir=None, network_enabled=False,
@@ -65,20 +72,29 @@ class _RustBrokerServer:
             if val:
                 argv += [flag, val]
         self.proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-        ready = self.proc.stdout.readline()
-        if json.loads(ready or "{}").get("kind") != "READY":
-            raise RuntimeError(f"broker did not start: {ready!r}")
+        try:
+            ready = self.proc.stdout.readline()
+            if json.loads(ready or "{}").get("kind") != "READY":
+                raise RuntimeError(f"broker did not start: {ready!r}")
+        except Exception:
+            self.shutdown()
+            raise
 
     def shutdown(self):
-        if self.proc.poll() is None:
+        try:
+            if self.proc.poll() is None:
+                self.proc.stdin.close()
+                try:
+                    self.proc.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    self.proc.kill()
+                    self.proc.wait()
+        finally:
             self.proc.stdin.close()
-            try:
-                self.proc.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
+            self.proc.stdout.close()
 
     def server_close(self):
-        pass
+        self.shutdown()
 
 
 class _BrokerNamespace:
@@ -126,11 +142,11 @@ class _BrokerNamespace:
             self._server = _RustBrokerServer(self._sock, ceiling, receipts, session_id)
 
         def _call(self, category, params):
-            s = socket.socket(socket.AF_UNIX)
-            s.connect(self._sock)
-            s.sendall((json.dumps({"id": str(uuid.uuid4()), "category": category, "params": params}) + "\n").encode())
-            resp = json.loads(s.makefile().readline())
-            s.close()
+            with socket.socket(socket.AF_UNIX) as s:
+                s.connect(self._sock)
+                s.sendall((json.dumps({"id": str(uuid.uuid4()), "category": category, "params": params}) + "\n").encode())
+                with s.makefile() as reply:
+                    resp = json.loads(reply.readline())
             if not resp["approved"]:
                 raise RuntimeError(resp["reason"])
             return resp["result"]
@@ -156,10 +172,9 @@ class RustSession:
     """A whole session through the Rust bridge, with NeuraSession's surface."""
 
     def __init__(self, *, project_dir, ceiling, workspace_dir=None, turn_timeout=60.0, **_ignored):
-        argv = session_cmd() + ["--project-dir", project_dir, "--ceiling", json.dumps(ceiling),
+        workspace_dir = workspace_dir or scratch_root()
+        argv = session_cmd(workspace_dir) + ["--project-dir", project_dir, "--ceiling", json.dumps(ceiling),
                                 "--turn-timeout", str(turn_timeout)]
-        if workspace_dir:
-            argv += ["--scratch-root", workspace_dir]
         self.proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      text=True, bufsize=1)
         hello = json.loads(self.proc.stdout.readline() or "{}")
@@ -227,3 +242,14 @@ class RustSession:
 
     def __exit__(self, *exc):
         self.close()
+
+
+def NeuraSession(**kwargs):
+    if HOST_BIN:
+        return RustSession(**kwargs)
+    kwargs["workspace_dir"] = kwargs.get("workspace_dir") or scratch_root()
+    return _PythonSession(**kwargs)
+
+
+if not HOST_BIN:
+    SessionDeadError = _PythonSessionDeadError

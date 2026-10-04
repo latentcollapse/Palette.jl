@@ -1,32 +1,16 @@
 #!/usr/bin/env python3
-"""
-Executable tests for security/session_cli.py -- the stdio bridge a
-different-language host (Node, via Prime-Agent's baseToolsFactory) spawns
-once per agent session to drive a persistent NeuraSession.
+"""Real stdio CLI tests, including persistent state and scratch calls.
 
-Regression coverage for a real, serious bug found while building the
-Prime-Agent chassis integration: any `subprocess.run(["julia", ...])`
-call anywhere in this codebase that didn't explicitly set `stdin=` would
-silently corrupt session_cli.py's OWN stdin the moment it ran inside this
-process (confirmed: `julia -e ...` invoked with an inherited, unspecified
-stdin breaks the CALLER's own subsequent reads from that same stdin,
-while e.g. `/bin/true` does not) -- invisible for every one-shot caller
-before this bridge existed, since nothing depended on a live stdin pipe
-surviving past that point. The most dangerous instance: NeuraSession's own
-broker runs in a background thread INSIDE this same process, and its
-spawn_child_worker handler (reached by every ephemeral turn) calls
-launch_worker.run_worker(), which itself calls resolve_real_julia_binary()
--- both previously missing stdin=subprocess.DEVNULL. A single ephemeral
-turn would have silently broken every turn after it.
-
-Run:
-    python3 security/test_session_cli.py
+Julia subprocesses must use stdin=DEVNULL: inheriting this process's stdin
+breaks later CLI requests, even when the first scratch request succeeds.
+Run directly with python3 security/test_session_cli.py.
 """
 from __future__ import annotations
 
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -114,12 +98,13 @@ class TestSessionCli(unittest.TestCase):
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1,
         )
+        self.addCleanup(self._close_session)
         hello_line = self.proc.stdout.readline()
         self.assertTrue(hello_line, "no HELLO line -- process died before startup")
         self.hello = json.loads(hello_line)
-        self.assertEqual(self.hello.get("kind"), "HELLO")
+        self.assertEqual(self.hello.get("kind"), "HELLO", self.hello)
 
-    def tearDown(self):
+    def _close_session(self):
         try:
             self.proc.stdin.close()
         except Exception:
@@ -147,6 +132,46 @@ class TestSessionCli(unittest.TestCase):
     def test_hello_has_a_real_epoch(self):
         self.assertIsInstance(self.hello.get("epoch"), str)
         self.assertTrue(self.hello["epoch"])
+        self.assertTrue(all(self.hello["capabilities"].get(name) for name in
+            ("revival_observation_v1", "reload_observation_v1", "phase_costs_v1")))
+        # A required-field consumer still needs only the established result.
+        result = self._turn("legacy_value=42; (legacy_value, sort!(collect(keys(Neura.Api.costs()))))")
+        self.assertEqual((result["success"], result["data"]), (True, [42, [1]]))
+        self.assertEqual(self._turn("legacy_value+1")["data"], 43)
+        # Run a real worker with the older wire shape, not a simulated reply.
+        with tempfile.TemporaryDirectory(prefix="palette-legacy-wire-") as root:
+            repo = Path(root, "repo")
+            repo.mkdir()
+            for name in ("src", "scripts"):
+                shutil.copytree(Path(REPO_DIR, name), repo / name)
+            for name in ("Project.toml", "Manifest.toml"):
+                shutil.copyfile(Path(REPO_DIR, name), repo / name)
+            loop = repo / "scripts/session_loop.jl"
+            source = loop.read_text()
+            marker = "function respond(resp::Dict{String,Any})\n"
+            self.assertEqual(source.count(marker), 1)
+            loop.write_text(source.replace(marker, marker +
+                '    for key in ("schema_revision", "capabilities", "revival", "reloads", "costs"); pop!(resp, key, nothing); end\n'))
+            process = subprocess.Popen([*session_cmd(), "--repo-dir", str(repo), "--project-dir", str(repo),
+                "--ceiling", "{}", "--workspace-dir", self.task_workspace],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            try:
+                hello = json.loads(process.stdout.readline())
+                self.assertEqual(hello["kind"], "HELLO", hello)
+                self.assertEqual(hello["capabilities"], {})
+                for code, expected in (("v=42", 42), ("v+1", 43)):
+                    process.stdin.write(json.dumps({"request_id": "legacy", "code": code}) + "\n")
+                    process.stdin.flush()
+                    result = json.loads(process.stdout.readline())
+                    self.assertEqual((result["success"], result["data"]), (True, expected), result)
+                    self.assertIsNone(result["costs"])
+                    self.assertIsNone(result["revival"])
+            finally:
+                process.stdin.close()
+                try:process.wait(timeout=10)
+                finally:
+                    if process.poll() is None:process.kill(); process.wait()
+                    process.stdout.close()
 
     def test_state_persists_across_turns(self):
         r1 = self._turn("x = 42")
@@ -285,6 +310,15 @@ class TestSessionCli(unittest.TestCase):
         self.assertEqual(Path(self.task_workspace, "f.py").read_text(), text)
         r = self._turn("PAYLOAD === nothing")
         self.assertIs(r["data"], True, "a payload must not leak into the next call")
+        r = self._turn('write("scratch.py", PAYLOAD); PAYLOAD == read("scratch.py", String)', payload=text, ephemeral=True)
+        self.assertTrue(r["success"], r)
+        self.assertIs(r["data"], True)
+        self.assertGreaterEqual(r["costs"]["child_import_seconds"], 0)
+        self.assertGreaterEqual(r["costs"]["child_broker_roundtrip_seconds"], r["costs"]["child_import_seconds"])
+        self.assertNotIn("[background jobs", r["output"], "precompile jobs must not appear in a fresh scratch process")
+        self.assertIs(self._turn("PAYLOAD === nothing")["data"], True)
+        self.assertEqual(Path(self.task_workspace, "f.py").read_text(), text)
+        self.assertFalse(Path(self.task_workspace, "scratch.py").exists())
 
     def test_a_docstring_that_ends_an_enclosing_string_is_named(self):
         """Code with a docstring, embedded in a triple-quoted string, failed in
@@ -294,8 +328,8 @@ class TestSessionCli(unittest.TestCase):
                 'function move_to_end!(d, key; last::Bool=true)\n    d\nend\n"""\nlength(block)')
         r = self._turn(code)
         self.assertFalse(r["success"], r)
-        self.assertIn("invalid keyword argument", r["error"])
-        self.assertIn("begins on line 1 ends at the docstring", r["error"])
+        self.assertIn("ParseError", r["error"])
+        self.assertFalse(self._turn("isdefined(@__MODULE__, :block)")["data"])
         self.assertIn("write(path, PAYLOAD)", r["error"])
         # A docstring kept whole in its own literal is fine, and an unrelated
         # error in the same shape of code gets no such hint.
@@ -368,21 +402,64 @@ class TestSessionCli(unittest.TestCase):
         """A model that started a server or a long build had no word of it
         again until it thought to look, and a failed task was reported as
         `ans` when the model had named it."""
-        self._turn('job = @async (sleep(3); 42); srv = run(`sleep 300`; wait=false); nothing')
+        self._turn('gate=Channel{Nothing}(0); ready=Channel{Nothing}(1); '
+                   'job = @async (put!(ready,nothing); take!(gate); 42); take!(ready); '
+                   'srv = run(`sleep 300`; wait=false); nothing')
         r = self._turn("1", request_id="2")
         self.assertIn("[background jobs: running: task `job`, `sleep 300` (pid", r["output"])
         r = self._turn("1", request_id="3")
         self.assertNotIn("[background jobs", r["output"], "an unchanged set is not repeated")
-        time.sleep(4)
-        r = self._turn("kill(srv); 1", request_id="4")
+        self.assertEqual(self._turn('put!(gate,nothing); fetch(job)')["data"], 42)
+        r = self._turn("kill(srv); wait(srv); 1", request_id="4")
         self.assertIn("finished: task `job` (fetch(job) returns its value)", r["output"])
         self.assertIn("running: `sleep 300`", r["output"])
-        time.sleep(1)
-        r = self._turn("bad = @async error(\"boom\"); 1", request_id="5")
+        r = self._turn('wait(srv); bad = @async error("boom"); wait(bad;throw=false); 1', request_id="5")
         self.assertIn("nothing is running any more", r["output"])
-        time.sleep(1)
         r = self._turn("1", request_id="6")
         self.assertIn("[background: task `bad` failed: boom]", r["output"])
+        named = {t["name"]: t for t in self._turn('Neura.jobs()')["data"]["tasks"]}
+        self.assertEqual((named["job"]["state"], named["bad"]["state"]), ("finished", "failed"))
+        self.assertEqual(named["bad"]["failure_type"], "ErrorException")
+        self.assertEqual(named["job"]["first_observed_call"], 1)
+        self.assertEqual(named["job"]["observed_epoch"], self.hello["epoch"])
+        self.assertEqual(len(named["job"]["source_digest"]), 64)
+        self.assertIsNone(named["job"]["creation_call"])
+
+    def test_G_task_callback_dispatch_stays_ordinary_unless_explicitly_late_bound(self):
+        self._turn('callback(x)=x+1; ready=Channel{Nothing}(2); gate=Channel{Nothing}(0); newest_gate=Channel{Nothing}(0); '
+                   'old=@async (put!(ready,nothing);take!(gate);callback(1)); '
+                   'newest=@async (put!(ready,nothing);take!(newest_gate);Base.invokelatest(callback,1)); '
+                   'take!(ready);take!(ready);nothing')
+        self.assertEqual(self._turn('callback(x)=x+100;put!(gate,nothing);put!(newest_gate,nothing);(fetch(old),fetch(newest))')["data"], [2, 101])
+        observed = self._turn('Neura.taskinfo(old)')["data"]
+        self.assertEqual(observed["state"], "finished")
+        self.assertEqual(observed["first_observed_call"], 1)
+        self.assertIsInstance(observed["world_at_first_observation"], str)
+
+    def test_J_changes_since_ack_are_bounded_and_cover_existing_observations(self):
+        file = Path(self.task_workspace, "observer.txt")
+        file.write_text("old")
+        self._turn('n=1; f(x)=x+1; input=read("observer.txt",String); ready=Channel{Nothing}(1); gate=Channel{Nothing}(0); '
+                   'job=@async (put!(ready,nothing);take!(gate));take!(ready);nothing')
+        baseline = self._turn('Neura.changes(acknowledge=true)')["data"]
+        self.assertEqual(baseline["baseline"], "not_acknowledged")
+        self.assertEqual(baseline["observed_through_call"], 1)
+        self._turn('n=2; f(x)=x+9;put!(gate,nothing);fetch(job);nothing')
+        file.write_text("new contents")
+        delta = self._turn('Neura.changes()')["data"]
+        self.assertIn("n", delta["bindings"]["changed"])
+        self.assertIn("f", delta["definitions"]["changed"])
+        self.assertIn(str(file), delta["files"]["changed"])
+        self.assertIn("job", delta["jobs"]["changed"])
+        self.assertEqual(delta["acknowledged_through_call"], 1)
+        self._turn('Neura.changes(acknowledge=true)')
+        empty = self._turn('Neura.changes()')["data"]
+        for kind in ("bindings", "definitions", "files", "jobs"):
+            self.assertEqual(empty[kind]["counts"], {"new": 0, "changed": 0, "removed": 0})
+        self._turn('for i in 1:300; Core.eval(@__MODULE__,Expr(:(=),Symbol("Z",i),i));end;nothing')
+        grown = self._turn('Neura.changes()')["data"]["bindings"]
+        self.assertEqual(grown["counts"]["new"], 300)
+        self.assertEqual(len(grown["new"]), 20)
 
     def test_display_does_not_corrupt_the_protocol(self):
         """display() wrote to the stdout captured at startup, which is the
@@ -426,11 +503,11 @@ class TestSessionCli(unittest.TestCase):
         self.assertTrue(r["success"], r)
         self.assertEqual(r["data"], [3, "new"])
 
-        # A syntax error keeps the old code and says so.
+        # The root's redefinitions can land before an included file fails.
         r = self._turn('write("Wp/src/g.jl", "g(x) = (\\n"); 1')
         r = self._turn("Wp.g(1)")
         self.assertEqual(r["data"], 20, r)
-        self.assertIn("reloading Wp failed, so it still runs the code from before the change to Wp/src/g.jl", r["output"])
+        self.assertIn("reload_failed_partial_change", r["output"])
 
     def test_neura_handle_cannot_reset_the_kernel(self):
         """Neura.reset_kernel_state() used to erase every binding silently."""
@@ -467,6 +544,29 @@ class TestSessionCli(unittest.TestCase):
         self.assertFalse(r["success"])
         self.assertIn("no network", r["error"])
         self.assertIn("Loadable: the Julia standard library", r["error"])
+        self.assertIn("not_found_in_inspected_locations", r["error"])
+        self.assertNotIn("Pkg.add", r["error"])
+
+    def test_H_local_package_visibility_is_distinct_from_installation(self):
+        pkg = Path(self.task_workspace, "HiddenLocal")
+        (pkg / "src").mkdir(parents=True)
+        (pkg / "Project.toml").write_text('name="HiddenLocal"\nuuid="cd794494-0a18-4444-9115-b9720d2bed07"\n')
+        (pkg / "src/HiddenLocal.jl").write_text('module HiddenLocal; answer()=42; end\n')
+        self._turn('environment_before=(copy(LOAD_PATH),read(Base.active_project(),String)); nothing')
+        result = self._turn('using HiddenLocal')
+        self.assertFalse(result["success"])
+        self.assertIn("local_not_visible", result["error"])
+        self.assertIn("LOAD_PATH", result["error"])
+        self.assertNotIn("Pkg.add", result["error"])
+        observed = self._turn('Neura.environment("HiddenLocal")')["data"]
+        self.assertEqual(observed["local_paths"], [str(pkg)])
+        self.assertTrue(observed["offline"])
+        self.assertTrue(self._turn('environment_before==(LOAD_PATH,read(Base.active_project(),String))')["data"])
+        self.assertEqual(self._turn('pushfirst!(LOAD_PATH,pwd()); using HiddenLocal; HiddenLocal.answer()')["data"], 42)
+        self.assertEqual(self._turn('Neura.environment("HiddenLocal")')["data"]["status"], "visible")
+        dependency = self._turn('Neura.environment("JSON")')["data"]
+        self.assertTrue(dependency["declared_dependency"])
+        self.assertEqual(dependency["status"], "visible")
 
     def test_pkg_add_read_only_failure_says_there_is_no_network(self):
         """A package install can fail after Julia reaches the read-only
@@ -567,18 +667,28 @@ class TestSessionCli(unittest.TestCase):
         self.assertIn("[background output since the last call]\nlate\n", r["output"])
 
     def test_reported_background_output_does_not_accumulate_in_tmp(self):
-        """The sandbox's /tmp is memory; a chatty background job grew it by
-        4 GB a day because output stayed in the sink after it was reported."""
-        r = self._turn('@async (sleep(0.5); for i in 1:3000; println(repeat("y", 1000)); end); :started')
-        self.assertTrue(r["success"], r)
-        time.sleep(2)
-        r = self._turn('1')
-        self.assertIn("[background output since the last call]", r["output"])
-        r = self._turn('(filesize(joinpath(tempdir(), "palette-background-output.log")), '
-                       'parse(Int, split(read(`du -sb /tmp`, String))[1]))')
-        sink, tmp = r["data"]
-        self.assertLess(sink, 100_000, r)
-        self.assertLess(tmp, 1_500_000, r)
+        """Reported job output must be removed without counting mounted depots."""
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            gate = str(Path(self.task_workspace, "output-gate.sock"))
+            listener.bind(gate)
+            listener.listen()
+            listener.settimeout(20)
+            r = self._turn('using Sockets; tmp_before=parse(Int, split(read(`du -sb /tmp`, String))[1]); '
+                           't=@async begin c=connect(PAYLOAD); read(c, 1); '
+                           'for i in 1:3000; println(repeat("y", 1000)); end; '
+                           'flush(stdout); write(c, "x"); close(c); end; :started', payload=gate)
+            self.assertTrue(r["success"], r)
+            with listener.accept()[0] as connection:
+                connection.settimeout(20)
+                connection.sendall(b"x")
+                self.assertEqual(connection.recv(1), b"x")
+            r = self._turn('1')
+            self.assertIn("[background output since the last call]", r["output"])
+            r = self._turn('(filesize(joinpath(tempdir(), "palette-background-output.log")), '
+                           'parse(Int, split(read(`du -sb /tmp`, String))[1])-tmp_before)')
+            sink, growth = r["data"]
+            self.assertLess(sink, 100_000, r)
+            self.assertLess(growth, 1_500_000, r)
 
     def test_file_changed_since_a_call_used_it_is_reported(self):
         """A binding computed from a workspace file kept the old contents
@@ -611,6 +721,215 @@ class TestSessionCli(unittest.TestCase):
         self.assertEqual(r["display"], "2-element Vector{Float64}:\n NaN\n   1.0")
         r2 = self._turn("x -> x", request_id="2", ephemeral=True)
         self.assertIn("generic function", r2["display"])
+
+    def test_B03_nested_reflection_and_cycles_survive_both_workers(self):
+        cases = [('PAYLOAD', dict),
+                 ('(reflection=methods(Neura.output),)', str),
+                 ('a = Any[]; push!(a, a); a', str),
+                 ('(a=[[1, 2], [3, 4]], label="λ")', dict),
+                 ('Symbol(repeat("q", 2_000_000))', str),
+                 ('using JSON; json_calls=Ref(0); struct EncoderNumber <: Number end; '
+                  'Base.isfinite(::EncoderNumber)=true; JSON.lower(::EncoderNumber)=(json_calls[]+=1;1); EncoderNumber()', str),
+                 ('struct FloodDisplay end; Base.show(io::IO,::MIME"text/plain",::FloodDisplay)='
+                  '(for i in 1:1000000; print(io,"λ"); end); FloodDisplay()', str)]
+        for ephemeral in (False, True):
+            for code, expected in cases:
+                with self.subTest(ephemeral=ephemeral, code=code):
+                    r = self._turn(code, ephemeral=ephemeral, payload={"quoted": '"λ\''})
+                    self.assertTrue(r["success"], r)
+                    self.assertIsInstance(r["data"], expected, r)
+                    self.assertLessEqual(len(json.dumps(r["data"], ensure_ascii=False).encode()), 6 * (256 * 1024 + 64))
+            self.assertEqual(self._turn("40 + 2")["data"], 42)
+        self.assertEqual(self._turn("json_calls[]")["data"], 0)
+
+    def test_F_projection_deadline_reports_the_phase_and_preserves_world(self):
+        result = self._turn('struct WaitingDisplay end; Base.show(io::IO,::MIME"text/plain",::WaitingDisplay)='
+                            'wait(Channel{Nothing}(0)); retained=WaitingDisplay(); retained', request_id="projection")
+        self.assertFalse(result["success"])
+        self.assertTrue(result["interrupted"])
+        self.assertEqual(result["costs"]["failed_phase"], "projection")
+        self.assertIn("projection", result["error"])
+        self.assertTrue(self._turn("isdefined(@__MODULE__,:retained)")["data"])
+        observed = self._turn('Neura.costs(1)')["data"]
+        self.assertGreaterEqual(observed["execution_seconds"], 0)
+        self.assertIsNone(observed["projection_seconds"])
+        self.assertGreaterEqual(observed["serialization_seconds"], 0)
+        self.assertGreaterEqual(observed["worker_pipe_seconds"], 0)
+        self.assertGreater(observed["worker_response_bytes"], 0)
+
+    def test_B02_reload_reports_observed_changes_and_identity_risk(self):
+        pkg = Path(self.task_workspace, "DeskKit")
+        (pkg / "src").mkdir(parents=True)
+        (pkg / "Project.toml").write_text('name = "DeskKit"\nuuid = "d6481d07-6a73-43c7-921b-e9e4d583ae53"\n')
+        source = pkg / "src/DeskKit.jl"
+        prefix = 'module DeskKit\nstruct Rule; weight::Int; end\n'
+        source.write_text(prefix + 'apply(r::Rule,x)=r.weight*x\nobsolete()=:live\nend\n')
+        self.assertEqual(self._turn('pushfirst!(LOAD_PATH,pwd()); using DeskKit; retained=DeskKit.Rule(3); DeskKit.apply(retained,7)')["data"], 21)
+        source.write_text(prefix + 'apply(r::Rule,x)=r.weight*x+3\nobsolete()=:live\nend\n')
+        r = self._turn('(value=DeskKit.apply(retained,7),reload=last(Neura.reloads()))')["data"]
+        self.assertEqual((r["value"], r["reload"]["status"]), (24, "reload_succeeded"))
+        source.write_text(prefix + 'apply(r::Rule,x)=r.weight*x+100\nobsolete()=:live\nerror("partial")\nend\n')
+        r = self._turn('(value=DeskKit.apply(retained,7),reload=last(Neura.reloads()))')["data"]
+        self.assertEqual((r["value"], r["reload"]["status"]), (121, "reload_failed_partial_change"))
+        self.assertTrue(r["reload"]["methods_observed_changed"])
+        self.assertNotEqual(r["reload"]["source_digest_before"], r["reload"]["source_digest_after"])
+        source.write_text('module DeskKit\napply(r,x)=999\nfunction broken(\nend\n')
+        r = self._turn('(value=DeskKit.apply(retained,7),reload=last(Neura.reloads()))')["data"]
+        self.assertEqual((r["value"], r["reload"]["status"]), (121, "reload_failed_no_observed_change"))
+        source.write_text(prefix + 'apply(r::Rule,x)=r.weight*x+3\nend\n')
+        r = self._turn('last(Neura.reloads())')["data"]
+        self.assertIn("obsolete", r["surviving_deleted_definitions"])
+        self.assertEqual(self._turn('DeskKit.obsolete()')["data"], "live")
+        origin = self._turn('Neura.provenance(:retained)')["data"]
+        self.assertEqual(origin["origin_epoch"], self.hello["epoch"])
+        self.assertEqual(len(origin["source_digest"]), 64)
+        self.assertEqual(origin["freshness"], "definition_sources_changed")
+        self.assertNotEqual(origin["definition_at_observation"]["source_digest"], origin["definition_current"]["source_digest"])
+        source.write_text('module DeskKit\nstruct Rule; weight::Float64; end\napply(r::Rule,x)=r.weight*x\nend\n')
+        r = self._turn('(compatible=retained isa DeskKit.Rule,reload=last(Neura.reloads()))')["data"]
+        self.assertFalse(r["compatible"])
+        self.assertEqual(r["reload"]["status"], "reload_requires_clean_process")
+        self.assertIn("Rule", r["reload"]["identity_risks"])
+        self.assertEqual(self._turn('Neura.provenance(:retained)')["data"]["freshness"], "earlier_type_definition")
+        self._turn('module Replaced; struct R end; f(x::R)=1; end; old_object=Replaced.R()')
+        r = self._turn('module Replaced; struct R end; f(x::R)=2; end; Replaced.f(old_object)')
+        self.assertFalse(r["success"])
+        self.assertIn("MethodError", r["error"])
+        self.assertEqual(self._turn('Neura.provenance(:old_object)')["data"]["freshness"], "earlier_type_definition")
+        previous = 0
+        for generation in range(65):
+            source.write_text('module DeskKit\nstruct Rule; weight::Float64; end\n'
+                              f'apply(r::Rule,x)=r.weight*x+{generation}\nend\n')
+            event = self._turn("nothing")
+            sequence = event["reloads"][-1]["sequence"]
+            self.assertGreater(sequence, previous)
+            previous = sequence
+        history = self._turn('let r=Neura.reloads(); (length(r),last(r)["sequence"]); end')["data"]
+        self.assertEqual(history, [64, previous])
+
+    def test_C_preparation_is_keyed_visible_and_offline(self):
+        with tempfile.TemporaryDirectory(prefix="palette-preparation-test-") as root:
+            repo = Path(root, "repo")
+            repo.mkdir()
+            for name in ("src", "scripts"):
+                shutil.copytree(Path(REPO_DIR, name), repo / name)
+            shutil.copyfile(Path(REPO_DIR, "Project.toml"), repo / "Project.toml")
+            shutil.copyfile(Path(PROJECT_DIR, "Manifest.toml"), repo / "Manifest.toml")
+            command = [sys.executable, str(Path(REPO_DIR, "security/prewarm_depot.py")),
+                       "--project-dir", str(repo), "--repo-dir", str(repo), "--state-dir", str(Path(root, "state"))]
+            def invoke(*flags):
+                result = subprocess.run([*command, *flags], stdin=subprocess.DEVNULL, capture_output=True, text=True)
+                return result.returncode, json.loads(result.stdout)
+            self.assertEqual(invoke("--status")[1]["state"], "cold")
+            code, record = invoke()
+            self.assertEqual((code, record["state"]), (0, "prepared"), record)
+            self.assertIsNone(record.get("error"), record)
+            self.assertGreater(record["seconds"], 0)
+            marker = next(Path(root, "state").glob("*.json"))
+            marker.write_text(json.dumps({**record, "cache_files": []}))
+            self.assertEqual(invoke("--status")[1]["state"], "failed")
+            marker.write_text(json.dumps({**record, "state": "invented"}))
+            self.assertEqual(invoke("--status")[1]["state"], "failed")
+            marker.write_text(json.dumps(record))
+            self.assertTrue(invoke()[1]["reused"])
+            source = repo / "src/Neura.jl"
+            source.write_text(source.read_text() + "\n# Preparation identity control\n")
+            self.assertEqual(invoke("--status")[1]["state"], "stale")
+            self.assertEqual(invoke()[1]["state"], "prepared")
+            (repo / "Project.toml").write_text("this is invalid TOML!")
+            code, record = invoke()
+            self.assertEqual((code, record["state"]), (1, "failed"), record)
+            self.assertEqual(invoke("--status")[1]["state"], "failed")
+            marker = next(Path(root, "state").glob("*.json"))
+            marker.write_text("[]")
+            self.assertEqual(invoke("--status")[1]["state"], "failed")
+            marker.write_text(json.dumps({**record, "state": "preparing", "pid": os.getpid(), "process_start": "wrong identity"}))
+            self.assertEqual(invoke("--status")[1]["state"], "failed")
+
+    def test_D_mcp_restarts_revive_existing_state_and_clean_restart_loses_it(self):
+        with tempfile.TemporaryDirectory(prefix="palette-mcp-state-") as state_root:
+            state = str(Path(state_root, "state"))
+            plugin = Path(state_root, "plugin")
+            subprocess.run([sys.executable, str(Path(REPO_DIR, "security/install_operator_plugin.py")),
+                "--plugin-dir", str(plugin), "--workspace-dir", self.task_workspace], stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, check=True)
+            connection = json.loads((plugin / ".mcp.json").read_text())["mcpServers"]["palette"]
+            env = {**os.environ, **connection["env"], "PALETTE_STATE_DIR": state,
+                   "PALETTE_SCRATCH_ROOT": str(Path(state_root, "scratch"))}
+            adapter = subprocess.Popen([connection["command"], *connection["args"]],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
+            def call(name, arguments, *, success=True):
+                request = {"jsonrpc": "2.0", "id": "test", "method": "tools/call",
+                           "params": {"name": name, "arguments": arguments}}
+                adapter.stdin.write(json.dumps(request) + "\n"); adapter.stdin.flush()
+                reply = json.loads(adapter.stdout.readline())["result"]
+                self.assertEqual(reply["isError"], not success, reply)
+                return json.loads(reply["content"][0]["text"])
+            try:
+                first = call("palette", {"code": 'n=42; matrix=reshape(collect(1.0:9.0),3,3); f(x)=x+1; '
+                    'pending=@async wait(Channel{Nothing}(0)); write("durable.txt","durable"); nothing'})
+                self.assertEqual(first["session"]["preparation"]["state"], "prepared")
+                self.assertEqual(first["revival"]["state"], "fresh_empty_world")
+                revived = call("palette_control", {"action": "restart"})
+                self.assertNotEqual(revived["epoch"], first["epoch"])
+                self.assertIn("restored exactly", revived["output"])
+                self.assertIn("pending (Task", revived["output"])
+                self.assertEqual(revived["revival"]["state"], "partially_restored")
+                self.assertEqual(revived["session"]["restoration"], "partially_restored")
+                self.assertIn("lost", revived["revival"]["states"])
+                self.assertGreaterEqual(revived["revival"]["counts"]["restored"], 2)
+                witness = call("palette", {"code": '(n,f(1),sum(matrix),!isdefined(@__MODULE__,:pending),read("durable.txt",String))'})
+                self.assertEqual(witness["data"], [42, 2, 45.0, True, "durable"])
+                self.assertNotIn("bindings", witness)
+                self.assertNotIn("display", witness)
+                self.assertNotIn("binding_changes", witness)
+                inventory = call("palette", {"code": "nothing", "view": "full"})
+                self.assertTrue(any(row.startswith("matrix (") for row in inventory["bindings"]))
+                changed = call("palette", {"code": "n=43"})
+                self.assertTrue(any(row.startswith("n (") for row in changed["binding_changes"]["new_or_changed"]))
+                saved = call("palette_control", {"action": "restart"})
+                death = call("palette", {"code": 'n=999;write("after-death.txt","file survived");exit(19)'}, success=False)
+                self.assertTrue(death["session_dead"])
+                recovered = call("palette", {"code": '(n,read("after-death.txt",String))'})
+                self.assertEqual(recovered["data"], [43, "file survived"])
+                self.assertNotEqual(recovered["epoch"], saved["epoch"])
+                self.assertEqual(recovered["session"]["restoration"], "restored")
+                self.assertIn("previous_connection_failure", recovered["session"])
+                self.assertIn("unknown", recovered["session"]["recovery_warning"])
+                clean = call("palette_control", {"action": "restart", "restore": False})
+                self.assertNotEqual(clean["epoch"], revived["epoch"])
+                self.assertEqual(clean["revival"]["state"], "fresh_empty_world")
+                self.assertTrue(Path(clean["retired_snapshot"], "manifest.json").is_file())
+                witness = call("palette", {"code": '(isdefined(@__MODULE__,:n),isdefined(@__MODULE__,:f),read("durable.txt",String))'})
+                self.assertEqual(witness["data"], [False, False, "durable"])
+                call("palette", {"code": "guard()=1"})
+                call("palette", {"code": "guard()=2\nfunction incomplete("}, success=False)
+                failed = call("palette", {"code": 'partial=123; error("after effect")'}, success=False)
+                self.assertFalse(failed["success"])
+                after_failure = call("palette_control", {"action": "restart"})
+                self.assertEqual(after_failure["revival"]["state"], "restored")
+                self.assertEqual(call("palette", {"code": "partial"})["data"], 123)
+                self.assertEqual(call("palette", {"code": "guard()"})["data"], 1)
+                for damage in ("corrupt", "incompatible"):
+                    call("palette", {"code": "partial=123"})
+                    adapter.stdin.close(); adapter.wait(timeout=40); adapter.stdout.close()
+                    manifest = Path(state, "manifest.json")
+                    snapshot = json.loads(manifest.read_text())
+                    manifest.write_text("{" if damage == "corrupt" else json.dumps({**snapshot, "format": -1}))
+                    adapter = subprocess.Popen([connection["command"], *connection["args"]],
+                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
+                    damaged = call("palette", {"code": '(isdefined(@__MODULE__,:partial),read("durable.txt",String))'})
+                    self.assertEqual(damaged["data"], [False, "durable"])
+                    self.assertIn("lost", damaged["revival"]["states"])
+                    self.assertEqual(damaged["session"]["restoration"], "uncertain" if damage == "corrupt" else "lost")
+            finally:
+                adapter.stdin.close()
+                try:
+                    adapter.wait(timeout=40)
+                finally:
+                    if adapter.poll() is None:
+                        adapter.kill(); adapter.wait()
+                    adapter.stdout.close()
 
     def test_top_level_loops_use_soft_scope_like_the_repl(self):
         """Turn code ran with script scope: assigning a global inside a

@@ -205,6 +205,8 @@ mutable struct KernelState
         # single turn just to reach the one function that's the entire
         # point of the authority fence.
         Core.eval(state.eval_module, :(const Neura = $(Api)))
+        Core.eval(state.eval_module, :(const Palette = $(Api)))
+        Core.eval(state.eval_module, :(const Main = $(state.eval_module)))
         # A bare `Module(...)` never gets `include` for free (confirmed by
         # direct testing across all constructor flag combinations -- this
         # is not a Julia version regression, it never worked the way an
@@ -216,7 +218,7 @@ mutable struct KernelState
         # package and then includes its tests runs the edited code.
         # Every ordinary module has `eval`; this one did not, and turn code calling it failed.
         Core.eval(state.eval_module, :(eval(x) = Core.eval(@__MODULE__, x)))
-        Core.eval(state.eval_module, :(include(path) = ($(refresh_workspace_packages!)(); $(note_file!)(path, length($(get_kernel_state)().execution_history) + 1); Base.include(@__MODULE__, path))))
+        Core.eval(state.eval_module, :(include(path) = $(include_observed)(@__MODULE__, path)))
         # Backtick commands start one program with no shell, so a pipe, glob
         # or `2>&1` inside them is a parse error; this is the explicit way
         # to reach a shell from turn code.
@@ -485,16 +487,19 @@ workspace package the kernel kept running the old code and in-kernel tests
 passed or failed against it. Every model we watched then moved its tests to a
 `julia` subprocess that recompiles the whole suite on each run.
 """
-const WORKSPACE_PACKAGES = Dict{Module, Dict{String, Tuple{Float64, Int}}}()
+const WORKSPACE_PACKAGES = Dict{Module, Dict{String, Tuple{Float64, Int, String}}}()
 const WORKSPACE_ROOT = Ref{String}("")
+const WORKSPACE_DECLARATIONS = Dict{Module, Set{String}}()
+const RELOAD_REPORTS = Dict{String, Any}[]
+const RELOAD_SEQUENCE = Ref(0)
 
 function source_snapshot(dir::AbstractString)
-    snap = Dict{String, Tuple{Float64, Int}}()
+    snap = Dict{String, Tuple{Float64, Int, String}}()
     for (d, _, files) in walkdir(dir), f in files
         endswith(f, ".jl") || continue
         path = joinpath(d, f)
         st = stat(path)
-        snap[path] = (st.mtime, Int(st.size))
+        snap[path] = (st.mtime, Int(st.size), bytes2hex(sha256(read(path))))
     end
     return snap
 end
@@ -514,7 +519,7 @@ end
 # every file it includes is re-read and each method is redefined in place.
 # Definitions deleted from the source stay defined, and `__init__` does not run.
 function reload_package!(mod::Module, rootfile::String)
-    ex = Meta.parseall(read(rootfile, String); filename=rootfile)
+    ex = parse_complete(read(rootfile, String); filename=rootfile)
     i = findfirst(a -> a isa Expr && a.head === :module, ex.args)
     i === nothing && error("$rootfile has no module block")
     body = ex.args[i].args[3]
@@ -524,6 +529,85 @@ function reload_package!(mod::Module, rootfile::String)
         end
     end
     return nothing
+end
+
+# These are observations, not an effect log: mutable values and foreign
+# modules can change without replacing a named binding or a Method object.
+function reload_observation(mod::Module)
+    bindings = Dict{String, Any}()
+    observed_methods = Dict{Any, Method}()
+    for sym in Base.invokelatest(names, mod; all=true)
+        Base.invokelatest(isdefined, mod, sym) || continue
+        value = Base.invokelatest(getglobal, mod, sym)
+        bindings[string(sym)] = (id=objectid(value), kind=value isa Type ? "type" : value isa Module ? "module" : "value",
+                                identity=value isa Union{Type, Module} ? value : nothing)
+        value isa Union{Function, Type} || continue
+        for method in Base.invokelatest(methods, value)
+            method.module === mod || continue
+            observed_methods[method.sig] = method
+        end
+    end
+    return (bindings=bindings, methods=observed_methods)
+end
+
+function source_declarations(snap)
+    declared = Set{String}()
+    function visit(ex)
+        ex isa Expr || return
+        union!(declared, defined_names(ex))
+        ex.head in (:toplevel, :block, :module) || return
+        foreach(visit, ex.args)
+    end
+    for path in keys(snap)
+        visit(parse_complete(read(path, String); filename=path))
+    end
+    return declared
+end
+
+source_digest(snap) = bytes2hex(sha256(join((path * ":" * snap[path][3] for path in sort!(collect(keys(snap)))), "\n")))
+
+function observed_reload!(mod::Module, rootfile::String, old, snap, prior_declarations)
+    before = try reload_observation(mod) catch; nothing end
+    parse_checked = false
+    completed = false
+    failure = nothing
+    try
+        parse_complete(read(rootfile, String); filename=rootfile)
+        parse_checked = true
+        Base.invokelatest(reload_package!, mod, rootfile)
+        completed = true
+    catch e
+        failure = first(sprint(showerror, e isa LoadError ? e.error : e), 2000)
+    end
+    after = try Base.invokelatest(reload_observation, mod) catch; nothing end
+    observed = before !== nothing && after !== nothing
+    methods_changed = observed ? sort!(unique([string(sig) for sig in union(keys(before.methods), keys(after.methods))
+        if get(before.methods, sig, nothing) !== get(after.methods, sig, nothing)])) : String[]
+    bindings_changed = observed ? sort!([name for name in union(keys(before.bindings), keys(after.bindings))
+        if !haskey(before.bindings, name) || !haskey(after.bindings, name) ||
+           before.bindings[name].id != after.bindings[name].id ||
+           before.bindings[name].identity !== after.bindings[name].identity]) : String[]
+    identity_risks = observed ? [name for name in bindings_changed
+        if haskey(before.bindings, name) && before.bindings[name].kind in ("type", "module")] : String[]
+    declarations = try source_declarations(snap) catch; nothing end
+    surviving = declarations === nothing || after === nothing ? String[] :
+        sort!([name for name in setdiff(prior_declarations, declarations) if haskey(after.bindings, name)])
+    status = !isempty(identity_risks) ? "reload_requires_clean_process" :
+        completed ? "reload_succeeded" : !parse_checked ? "reload_failed_no_observed_change" :
+        observed && (!isempty(methods_changed) || !isempty(bindings_changed)) ? "reload_failed_partial_change" : "state_unknown"
+    report = Dict{String, Any}("status" => status, "module" => string(mod), "reload_completed" => completed,
+        "source_digest_before" => source_digest(old), "source_digest_after" => source_digest(snap),
+        "methods_observed_changed" => methods_changed, "bindings_observed_changed" => bindings_changed,
+        "surviving_deleted_definitions" => surviving, "identity_risks" => identity_risks, "error" => failure,
+        "recovery" => isempty(identity_risks) ? "Repair sources and recheck live behavior; deleted definitions require a clean process." :
+            "Start a clean process without reviving incompatible objects; files remain available.",
+        "observer_limits" => "Named binding and local Method identity only; in-place mutation, foreign effects, and deleted overloads of still-declared names are not fully observed. No rollback.")
+    RELOAD_SEQUENCE[] += 1
+    report["sequence"] = RELOAD_SEQUENCE[]
+    push!(RELOAD_REPORTS, report)
+    length(RELOAD_REPORTS) > KEEP_OUTPUTS && popfirst!(RELOAD_REPORTS)
+    declarations === nothing || (WORKSPACE_DECLARATIONS[mod] = declarations)
+    return report
 end
 
 # A reload defines every docstring a second time, and Base.Docs warns once per
@@ -549,16 +633,21 @@ function refresh_workspace_packages!(; reload::Bool=true)
         old === nothing || reload || continue
         snap = source_snapshot(dirname(rootfile))
         WORKSPACE_PACKAGES[mod] = snap
-        (old === nothing || old == snap) && continue
+        if old === nothing
+            WORKSPACE_DECLARATIONS[mod] = try source_declarations(snap) catch; Set{String}() end
+            continue
+        end
+        old == snap && continue
         changed = sort!([relpath(f, WORKSPACE_ROOT[]) for f in union(keys(old), keys(snap))
                          if get(old, f, nothing) != get(snap, f, nothing)])
-        try
-            Base.invokelatest(reload_package!, mod, rootfile)
+        report = observed_reload!(mod, rootfile, old, snap, get(WORKSPACE_DECLARATIONS, mod, Set{String}()))
+        if report["status"] == "reload_succeeded"
             println("[reloaded $(nameof(mod)) from the workspace: $(join(changed, ", ")) changed]")
-        catch e
-            println("[reloading $(nameof(mod)) failed, so it still runs the code from before the change to ",
-                    join(changed, ", "), ":\n", sprint(showerror, e isa LoadError ? e.error : e), "]")
+        else
+            println("[reload $(nameof(mod)): $(report["status"]). No rollback; verify live state. ",
+                    something(report["error"], "Type/module identity changed."), "]")
         end
+        isempty(report["surviving_deleted_definitions"]) || println("[reload: deleted definitions still live: ", join(report["surviving_deleted_definitions"], ", "), "]")
     end
     return nothing
 end
@@ -582,6 +671,37 @@ end
 
 include("rlm.jl")
 
+function package_environment(name::AbstractString)
+    occursin(r"^[A-Za-z][A-Za-z0-9_]*$", name) || throw(ArgumentError("expected a package name"))
+    project = Base.active_project()
+    deps = project === nothing ? Dict() : get(Base.parsed_toml(project), "deps", Dict())
+    visible = try Base.find_package(String(name)) catch; nothing end
+    root = isempty(WORKSPACE_ROOT[]) ? pwd() : WORKSPACE_ROOT[]
+    candidates = [root, joinpath(root, name), joinpath(root, "packages", name)]
+    for entry in first(sort!(readdir(root)), 64)
+        isdir(joinpath(root, entry)) && push!(candidates, joinpath(root, entry))
+    end
+    local_paths = String[]
+    for path in unique(candidates)
+        file = joinpath(path, "Project.toml")
+        isfile(file) || continue
+        toml = try Base.parsed_toml(file) catch; continue end
+        get(toml, "name", nothing) == name && push!(local_paths, path)
+    end
+    cached = any(depot -> isdir(joinpath(depot, "packages", name)), Base.DEPOT_PATH)
+    status = visible !== nothing ? "visible" : !isempty(local_paths) ? "local_not_visible" :
+             haskey(deps, name) ? "declared_dependency_not_visible" : cached ? "cached_not_in_project" : "not_found_in_inspected_locations"
+    action = status == "local_not_visible" ? "Expose the local package with an explicit project or LOAD_PATH path; do not fetch a duplicate from the network." :
+             status == "declared_dependency_not_visible" ? "Check the active manifest, development path and local installation; a declared dependency does not prove its files are accessible." :
+             status == "cached_not_in_project" ? "Package files exist in the depot but are not visible from this project. Select the intended prepared environment or explicitly configure it." :
+             status == "visible" ? "Package source is visible; an import failure needs its original diagnostic." :
+             "Select an environment containing the package or provision it separately. Ecosystem availability and whether installation is needed have not been established."
+    return Dict{String, Any}("name" => String(name), "status" => status, "project" => project,
+        "visible_source" => visible, "local_paths" => local_paths, "declared_dependency" => haskey(deps, name),
+        "cached_files" => cached, "offline" => get(ENV, "JULIA_PKG_OFFLINE", "") == "true",
+        "action" => action, "limits" => "Checks active project visibility, named workspace paths, first 64 top-level workspace entries and depot package directories. No network lookup or environment mutation.")
+end
+
 """
     Api
 
@@ -596,6 +716,21 @@ host_request(rtype::AbstractString, payload::AbstractDict=Dict{String,Any}()) = 
 const rlm = Neura.rlm
 request_capability(category::String, params::Dict=Dict{String,Any}(); kwargs...) =
     Neura.request_capability(category, params; kwargs...)
+reloads() = deepcopy(Neura.RELOAD_REPORTS)
+revival() = deepcopy(Neura.REVIVAL_OBSERVATION[])
+jobs() = Neura.task_observations()
+taskinfo(t::Task) = Neura.task_observation(t)
+environment(name::AbstractString) = Neura.package_environment(name)
+provenance(name::Symbol; strong::Bool=false) = Neura.binding_provenance(name; strong)
+world() = Neura.get_kernel_state().eval_module
+worldinfo() = Dict("module" => string(nameof(world())), "epoch" => Neura.TASK_EPOCH[], "main_is_world" => getglobal(world(), :Main) === world(), "host_main_is_world" => world() === Main)
+read_artifact(path::AbstractString; kwargs...) = Neura.read_artifact(path; kwargs...)
+changes(; acknowledge::Bool=false) = Neura.changes_since_ack(; acknowledge)
+costs() = deepcopy(Neura.TURN_COSTS)
+function costs(n::Integer)
+    haskey(Neura.TURN_COSTS, n) || error("no phase observations retained for call $n")
+    return deepcopy(Neura.TURN_COSTS[n])
+end
 
 """
     Neura.output(n) -> String
@@ -619,7 +754,7 @@ end
 # Bindings the kernel creates in every session module. They are not the
 # model's own variables, so GetState and varinfo() leave them out.
 const KERNEL_BINDINGS = (:eval, :include, :bash, Symbol("@sh_str"), :Neura, :ShellResult,
-                         :varinfo, :kernelinfo, :ans, :PAYLOAD)
+                         :varinfo, :kernelinfo, :ans, :PAYLOAD, :Main, :Palette)
 
 """
     VarInfo
@@ -721,6 +856,24 @@ function register_operator!(state::KernelState, name::String, f::Function)
 end
 
 const MAX_ERROR_FRAMES = 12
+
+function check_parse_errors(@nospecialize ex)
+    ex isa Expr || return nothing
+    if ex.head in (:error, :incomplete)
+        # parseall can return an error node after otherwise valid statements.
+        # Eval would run those statements before encountering the error.
+        problem = first(ex.args)
+        throw(problem isa Exception ? problem : ErrorException(string(problem)))
+    end
+    foreach(check_parse_errors, ex.args)
+    return nothing
+end
+
+function parse_complete(code::AbstractString; filename="none")
+    parsed = Meta.parseall(code; filename)
+    check_parse_errors(parsed)
+    return parsed
+end
 
 """
     softscope(ex)
@@ -827,8 +980,8 @@ function execute(op::ExecuteCode)::OperationReceipt
         # this needs parseall (a :toplevel Expr, evaluated statement-by-
         # statement, yielding the last statement's value -- REPL semantics).
         # A per-call file name gives every error a location the model can use.
-        parsed = softscope(Meta.parseall(op.code; filename=call_file))
-        value = Core.eval(state.eval_module, parsed)
+        parsed = parse_complete(op.code; filename=call_file)
+        value = eval_observed(state.eval_module, parsed)
         result = OperationResult(value, true, nothing)
         # REPL semantics: the last call's value stays reachable without having
         # been assigned.
@@ -1076,7 +1229,7 @@ function execute(op::EphemeralTool)::OperationReceipt
     # deliberately, not into disposable ephemeral tool code.
 
     try
-        parsed = Meta.parseall(op.code)
+        parsed = parse_complete(op.code)
         check_ephemeral_source!(parsed)
         value = Core.eval(tool_module, parsed)
         result = OperationResult(value, true, nothing)
@@ -1257,22 +1410,47 @@ function execute(op::ShellEscape)::OperationReceipt
         close(timer)
 
         if timed_out[]
+            out = String(take!(out_buf)); err = String(take!(err_buf))
             result = OperationResult(
-                Dict("stdout" => String(take!(out_buf)), "stderr" => String(take!(err_buf))),
+                Dict("stdout" => out, "stderr" => err,
+                     "stdout_sha256" => bytes2hex(sha256(out)),
+                     "stderr_sha256" => bytes2hex(sha256(err)),
+                     "error_class" => "timeout"),
                 false,
                 "timed out after $(op.timeout_ms)ms",
             )
         else
-            exit_code = proc.exitcode
-            data = op.capture_output ? Dict(
-                "stdout" => String(take!(out_buf)),
-                "stderr" => String(take!(err_buf)),
-                "exit_code" => exit_code,
-            ) : Dict("exit_code" => exit_code)
+            # A process killed by a signal reports 128 + signal, as a shell
+            # does. Julia's Process.exitcode is 0 alongside a nonzero
+            # termsignal, so reading it raw reported success for a
+            # signal-killed command (found by FM-RQ-A1 probe P13; run_bash
+            # already mapped this correctly).
+            exit_code = proc.termsignal > 0 ? 128 + proc.termsignal : proc.exitcode
+            error_class = exit_code == 0 ? nothing :
+                          proc.termsignal > 0 ? "signal_death" : "clean_failure"
+            data = op.capture_output ? begin
+                out = String(take!(out_buf)); err = String(take!(err_buf))
+                # Output digests (FM-SLICE-A1): observer is the kernel itself
+                # (self-attested — the host-side independent eye is A2). They
+                # make captured output recomputable and detect tunnel corruption.
+                # Contract: error_class is ABSENT on success, not null.
+                d = Dict{String,Any}("stdout" => out, "stderr" => err,
+                                     "exit_code" => exit_code,
+                                     "stdout_sha256" => bytes2hex(sha256(out)),
+                                     "stderr_sha256" => bytes2hex(sha256(err)))
+                error_class === nothing || (d["error_class"] = error_class)
+                d
+            end : begin
+                d = Dict{String,Any}("exit_code" => exit_code)
+                error_class === nothing || (d["error_class"] = error_class)
+                d
+            end
             result = OperationResult(data, exit_code == 0, exit_code == 0 ? nothing : "exit code $(exit_code)")
         end
     catch e
-        result = OperationResult(nothing, false, sprint(showerror, e))
+        # Spawn-stage failures (vanished working_dir, ENOENT, …) get a typed
+        # class instead of prose-only errors (FM-SLICE-A1).
+        result = OperationResult(Dict("error_class" => "spawn_error"), false, sprint(showerror, e))
     end
 
     duration_ms = (time_ns() - start_time) / 1_000_000.0
@@ -1284,7 +1462,8 @@ function execute(op::ShellEscape)::OperationReceipt
         result,
         duration_ms,
         state.id,
-        Dict{String,Any}("command" => op.command, "working_dir" => op.working_dir)
+        Dict{String,Any}("command" => op.command, "working_dir" => op.working_dir,
+                         "error_class" => result.data isa AbstractDict ? get(result.data, "error_class", nothing) : nothing)
     )
     push!(state.receipt_log, receipt)
 
@@ -1538,7 +1717,7 @@ function request_capability(category::String, params::Dict=Dict{String,Any}(); t
         line = readline(conn)
         timed_out[] && error("broker did not respond within timeout_s=$(timeout_s)s")
         isempty(line) && error("broker closed the connection without a response")
-        return JSON.parse(line)
+        return JSON.parse(line; dicttype=Dict{String, Any})
     catch e
         timed_out[] && error("broker did not respond within timeout_s=$(timeout_s)s")
         rethrow()
@@ -1546,6 +1725,28 @@ function request_capability(category::String, params::Dict=Dict{String,Any}(); t
         close(timer)
         close(conn)
     end
+end
+
+"""
+    Neura.fs_digest(paths::Vector{String}) -> Dict
+
+Digest files with host privilege — the independent eye (FM-SLICE-A2). The
+request goes through the capability broker like any other: the broker reads
+the paths OUTSIDE this sandbox, computes sha256 itself, and writes a receipt
+on the host regardless of outcome. A digest returned here is therefore not
+the kernel grading its own writes (probe P15: kernel receipts die with the
+kernel; host receipts do not). Broker-side ceiling shape:
+`{"fs_digest": {"allowed_paths": ["/abs/dir", ...]}}`; a path outside every
+allowed path denies the whole request (policy), while per-path filesystem
+conditions (missing, directory, unreadable) come back as per-path
+`error_class` entries.
+"""
+function fs_digest(paths::Vector{String})
+    isempty(paths) && throw(ArgumentError("fs_digest requires a non-empty path list"))
+    resp = request_capability("fs_digest", Dict{String,Any}("paths" => paths))
+    get(resp, "approved", false) === true ||
+        error("fs_digest was not allowed: $(get(resp, "reason", "no reason given"))")
+    return resp["result"]
 end
 
 #==============================================================================
@@ -1616,6 +1817,7 @@ Exports
 
 include("turn.jl")
 include("revival.jl")
+include("provenance.jl")
 include("digest.jl")
 include("workspace_map.jl")
 include("stress.jl")
@@ -1625,7 +1827,7 @@ export KernelState, ExecutionRecord
 export get_kernel_state, reset_kernel_state
 export OperatorType, OperatorVocabulary
 export CODE_EXECUTION_VOCAB, OPERATOR_INVOCATION_VOCAB, STATE_QUERY_VOCAB
-export ExecuteCode, InvokeOperator, GetState, ShellEscape
+export ExecuteCode, InvokeOperator, GetState, ShellEscape, fs_digest
 export EphemeralTool, EphemeralToolViolation, check_ephemeral_source!, record_tool_capsule
 export register_operator!
 export OperationResult, StructuredResponse
@@ -1645,27 +1847,34 @@ display is the same `text/plain` rendering a persistent turn returns, and
 `data` falls back to it when the value has no JSON form (NaN, a function),
 which used to crash the child after the code had already succeeded.
 """
-function ephemeral_main(code::AbstractString)
+function ephemeral_main(code::AbstractString; payload=nothing, timeout_s=nothing, startup_seconds=nothing)
     redirect_stderr(stdout)
-    r = execute(ExecuteCode(String(code)))
-    value = r.result.data
-    display = nothing
-    if r.result.success && value !== nothing
-        display = try
-            # invokelatest: `show` methods for types the code just loaded are
-            # newer than this function's world.
-            Base.invokelatest(sprint, show, MIME"text/plain"(), value; context=:limit => true)
-        catch e
-            "<display failed: $(sprint(showerror, e))>"
-        end
-    end
-    data = try
-        length(Base.invokelatest(JSON.json, value)) <= 256 * 1024 ? value : display
-    catch
-        display
+    mod = get_kernel_state().eval_module
+    Core.eval(mod, Expr(:global, Expr(:(=), :PAYLOAD, QuoteNode(payload))))
+    (receipt, interrupted, stuck), output = execute_turn(String(code), timeout_s === nothing ? nothing : Float64(timeout_s))
+    print(task_notice_hint(output))
+    projection = receipt isa OperationReceipt ? get(receipt.metadata, "transport", Dict()) : Dict()
+    success = receipt isa OperationReceipt && receipt.result.success && !interrupted && !stuck
+    error = receipt isa OperationReceipt ? receipt.result.error : "child interrupted during $(get(TURN_COSTS[1], "phase", "unknown"))"
+    result = Dict{String, Any}("success" => success, "data" => get(projection, "data", nothing),
+        "display" => get(projection, "display", nothing), "error" => error, "costs" => deepcopy(TURN_COSTS[1]))
+    result["costs"]["child_import_seconds"] = startup_seconds
+    # The existing capability broker retains only the final 4000 characters.
+    # Keep the final frame within that contract instead of losing its JSON start.
+    writer = DisplayWriter(UInt8[], 3500)
+    line = try
+        JSON.print(writer, result)
+        valid_utf8(String(writer.bytes))
+    catch e
+        e isa DisplayLimit || rethrow()
+        display = get(projection, "display", nothing)
+        text = display === nothing ? "<scratch result exceeds the existing broker transport limit>" :
+            first(display, 200) * "\n[scratch response shortened to the existing broker transport limit]"
+        JSON.json(Dict("success" => success, "data" => text, "display" => nothing,
+            "error" => error === nothing ? nothing : first(error, 150), "transport_shortened" => true))
     end
     println()
-    println(JSON.json(Dict("success" => r.result.success, "data" => data, "display" => display, "error" => r.result.error)))
+    println(line)
 end
 
 end # module

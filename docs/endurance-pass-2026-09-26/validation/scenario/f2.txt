@@ -1,1 +1,0 @@
-New issues (15–21) were added to ISSUES.md. Work through them in order, keeping the full test suite passing, and say when they are complete.

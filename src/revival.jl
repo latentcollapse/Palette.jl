@@ -1,6 +1,6 @@
 # Revival: what a new kernel can truthfully bring back of the one before it.
 #
-# After each call that succeeds, while the model reads the reply, the kernel
+# After each completed call, while the model reads the reply, the kernel
 # writes a snapshot of its state to the host's state directory. When a kernel
 # stops (a call that never yields, a crash, a harness restart) the next kernel
 # revives from the last snapshot, which is the state at the end of the last
@@ -24,7 +24,7 @@
 using Serialization
 
 const STATE_DIR = Ref("")
-const REVIVAL_FORMAT = 1
+const REVIVAL_FORMAT = 2
 # Per binding (or group of bindings sharing data) and per snapshot; the
 # environment can lower them, as the tests do.
 max_binding_bytes() = parse(Int, get(ENV, "PALETTE_STATE_MAX_BINDING_BYTES", string(16 * 1024 * 1024)))
@@ -41,6 +41,32 @@ const CALL_FILES = Dict{Int, Vector{Tuple{String, Tuple{Float64, Int}}}}()
 const INITIAL_ENV = Ref{Dict{String, String}}(Dict{String, String}())
 # What the first call after a revival is told.
 const REVIVAL_REPORT = Ref("")
+const REVIVAL_OBSERVATION = Ref{Dict{String, Any}}(Dict("state" => "fresh_empty_world", "states" => ["fresh_empty_world"]))
+
+function revival_observation!(; restored=String[], rebuilt=String[], stale=String[], lost=String[],
+                               uncertain=String[], saved_call=nothing, text="")
+    positive = !isempty(restored) || !isempty(rebuilt)
+    attention = !isempty(stale) || !isempty(lost) || !isempty(uncertain)
+    state = positive && attention ? "partially_restored" : !isempty(uncertain) ? "uncertain" :
+            !isempty(lost) ? "lost" : !isempty(stale) ? "stale" : positive ? "restored" : "fresh_empty_world"
+    states = unique([state; positive ? ["restored"] : String[]; isempty(stale) ? String[] : ["stale"];
+                     isempty(lost) ? String[] : ["lost"]; isempty(uncertain) ? String[] : ["uncertain"]])
+    REVIVAL_OBSERVATION[] = Dict{String, Any}("state" => state, "states" => states, "saved_call" => saved_call,
+        "restored" => restored, "rebuilt" => rebuilt, "stale" => stale, "lost" => lost,
+        "uncertain" => uncertain, "text" => text)
+    return text
+end
+
+function revival_summary()
+    report = REVIVAL_OBSERVATION[]
+    summary = Dict{String, Any}(k => get(report, k, nothing) for k in ("state", "states", "saved_call"))
+    summary["counts"] = Dict(k => length(get(report, k, String[])) for k in ("restored", "rebuilt", "stale", "lost", "uncertain"))
+    for key in ("stale", "lost", "uncertain")
+        summary[key] = [first(s, 240) for s in first(get(report, key, String[]), 6)]
+    end
+    summary["details"] = "Neura.revival()"
+    return summary
+end
 
 # --- definitions ---------------------------------------------------------
 
@@ -171,9 +197,65 @@ function imported_names(ex)
     return out
 end
 
+# Dependencies needed while evaluating a definition, excluding lazy function bodies.
+function reconstruction_dependencies(ex)
+    ex isa Expr || return String[]
+    refs = Set{Symbol}()
+    function signature(sig)
+        sig isa Expr || return
+        if sig.head === :call
+            target = sig.args[1]
+            target isa Expr && target.head === :. && symbol_references(target.args[1], refs)
+            for arg in sig.args[2:end]
+                if arg isa Expr && arg.head === :(::)
+                    symbol_references(arg.args[end], refs)
+                elseif arg isa Expr && arg.head === :(=)
+                    signature(Expr(:call, :_, arg.args[1]))
+                    symbol_references(arg.args[2], refs)
+                elseif arg isa Expr && arg.head === :parameters
+                    foreach(a -> signature(Expr(:call, :_, a)), arg.args)
+                end
+            end
+        elseif sig.head === :where
+            signature(sig.args[1])
+            for arg in sig.args[2:end]
+                name = arg isa Symbol ? arg : arg isa Expr ? type_head(arg) : nothing
+                name isa Symbol && delete!(refs, name)
+            end
+        elseif sig.head === :(::)
+            signature(sig.args[1]); symbol_references(sig.args[2], refs)
+        end
+    end
+    if ex.head in (:function, :macro) || (ex.head === :(=) && is_signature(ex.args[1]))
+        signature(ex.args[1])
+    elseif ex.head === :module
+        local_names = Set{Symbol}()
+        for st in top_statements(ex.args[3])
+            union!(refs, Symbol.(reconstruction_dependencies(st)))
+            union!(local_names, Symbol.(defined_names(st)), assigned_symbols(st))
+            st isa Expr && st.head in (:using, :import) && union!(local_names, Symbol.(imported_names(st)))
+        end
+        setdiff!(refs, local_names)
+    elseif ex.head === :struct
+        header = ex.args[2]
+        header isa Expr && header.head === :<: && symbol_references(header.args[2], refs)
+        for st in top_statements(ex.args[3])
+            st isa Expr && st.head === :(::) && symbol_references(st.args[end], refs)
+        end
+        header isa Expr && header.head === :curly && foreach(a -> a isa Symbol && delete!(refs, a), header.args[2:end])
+    elseif ex.head === :macrocall
+        union!(refs, Symbol.(reconstruction_dependencies(ex.args[end])))
+        ex.args[1] isa Symbol && push!(refs, ex.args[1])
+    else
+        union!(refs, symbol_references(ex))
+        setdiff!(refs, assigned_symbols(ex))
+    end
+    return sort!(string.(setdiff(refs, Set(KERNEL_BINDINGS))))
+end
+
 function log_definitions!(code::String, call::Int; failed_in::Union{Nothing, Module}=nothing)
     ex = try
-        Meta.parseall(code; filename="call $call")
+        parse_complete(code; filename="call $call")
     catch
         return
     end
@@ -181,9 +263,10 @@ function log_definitions!(code::String, call::Int; failed_in::Union{Nothing, Mod
         kind = definition_kind(st)
         kind === nothing && continue
         entry = Dict{String, Any}("call" => call, "kind" => kind, "code" => string(st),
-                                  "names" => defined_names(st))
+                                  "names" => kind == "using" ? imported_names(st) : defined_names(st), "requires" => reconstruction_dependencies(st))
         if kind == "include"
             path = abspath(WORKSPACE_ROOT[], st.args[2])
+            any(e -> e["kind"] == "include" && e["call"] == call && e["path"] == path, DEFINITION_LOG) && continue
             entry["path"] = path
             entry["stamp"] = isfile(path) ? collect(file_stamp(path)) : nothing
             entry["names"] = isfile(path) ? unique(reduce(vcat, (defined_names(d) for (_, d) in file_definitions(path)); init=String[])) : String[]
@@ -248,9 +331,37 @@ end
 
 function current_definition(T::DataType)
     m = parentmodule(T)
+    ancestor = m
+    while true
+        parent = parentmodule(ancestor)
+        (parent === ancestor || parent === Main || parent === Core || parent === Base) && break
+        Base.invokelatest(isdefined, parent, nameof(ancestor)) || return false
+        Base.invokelatest(getglobal, parent, nameof(ancestor)) === ancestor || return false
+        ancestor = parent
+    end
     isdefined(m, nameof(T)) || return false
     b = Base.invokelatest(getglobal, m, nameof(T))
+    b isa Type || return false
     return Base.unwrap_unionall(b) isa DataType && Base.unwrap_unionall(b).name === T.name
+end
+
+function workspace_type_key(T::DataType)
+    mod = parentmodule(T)
+    root = Base.moduleroot(mod)
+    any(pair -> first(pair) === root, workspace_packages()) || return nothing
+    return "@workspace:" * string(mod) * "." * string(nameof(T))
+end
+
+function session_type_key(T::DataType, scope::Module)
+    owner = parentmodule(T)
+    parts = [string(nameof(T))]
+    while owner !== scope
+        parent = parentmodule(owner)
+        (parent === owner || owner in (Main, Core, Base)) && return nothing
+        pushfirst!(parts, string(nameof(owner)))
+        owner = parent
+    end
+    return join(parts, '.')
 end
 
 # A function type the kernel created for an anonymous function or closure.
@@ -306,18 +417,20 @@ function check_type(w::Walk, @nospecialize(T))
     # Every value of one closure type is saved in one group: a group read on its
     # own would make its own copy of the type, and `===` would fail between them.
     anonymous_function_type(T) && (push!(w.ids, objectid(T)); return nothing)
-    m = parentmodule(T)
-    if m === w.mod
+    key = workspace_type_key(T)
+    key === nothing && (key = session_type_key(T, w.mod))
+    if key !== nothing
         current_definition(T) ||
             return "its type $(nameof(T)) is an earlier definition, since replaced by a new `struct $(nameof(T))`"
-        push!(w.user, string(nameof(T)))
+        push!(w.user, key)
     end
     return nothing
 end
 
 function refusal(w::Walk, @nospecialize(x))::Union{Nothing, String}
-    x isa Union{Nothing, Missing, Bool, Number, Char, String, Symbol} && return nothing
+    x isa Union{Nothing, Missing, Bool, Char, String, Symbol, BigInt, BigFloat} && return nothing
     T = typeof(x)
+    x isa Number && isprimitivetype(T) && Base.moduleroot(parentmodule(T)) in (Base, Core) && return nothing
     for R in REFUSED_TYPES
         x isa R && return "a $(nameof(R)) cannot be revived"
     end
@@ -330,6 +443,8 @@ function refusal(w::Walk, @nospecialize(x))::Union{Nothing, String}
     if x isa Function && isdefined(T, :instance) && !startswith(string(nameof(x)), '#')
         m = parentmodule(x)
         m === w.mod && (push!(w.user, string(nameof(x))); return nothing)
+        any(pair -> first(pair) === Base.moduleroot(m), workspace_packages()) &&
+            push!(w.user, "@workspace:" * string(m) * "." * string(nameof(x)))
         return Base.moduleroot(m) in (Base, Core) || haskey(Base.loaded_modules, Base.PkgId(Base.moduleroot(m))) ?
                nothing : "it refers to function $(nameof(x)) of an unloaded module"
     end
@@ -337,9 +452,11 @@ function refusal(w::Walk, @nospecialize(x))::Union{Nothing, String}
     # below like a struct whose fields are the values it captured.
     if x isa Type
         u = Base.unwrap_unionall(x)
-        u isa DataType && parentmodule(u) === w.mod && !current_definition(u) &&
+        key = u isa DataType ? workspace_type_key(u) : nothing
+        key === nothing && u isa DataType && (key = session_type_key(u, w.mod))
+        u isa DataType && key !== nothing && !current_definition(u) &&
             return "type $(nameof(u)) was replaced by a later definition"
-        u isa DataType && parentmodule(u) === w.mod && push!(w.user, string(nameof(u)))
+        key === nothing || push!(w.user, key)
         return nothing
     end
     haskey(w.seen, x) && return nothing
@@ -372,6 +489,26 @@ end
 # Fields and field types of a kernel-defined type, as text: a type redefined
 # with a different layout, even one Serialization would accept, is caught.
 function type_fingerprint(mod::Module, name::String)
+    if startswith(name, "@workspace:")
+        parts = split(name[length("@workspace:") + 1:end], '.')
+        loaded = [m for (m, _) in workspace_packages() if string(nameof(m)) == parts[1]]
+        length(loaded) == 1 || return nothing
+        owner = only(loaded)
+        for part in parts[2:end-1]
+            isdefined(owner, Symbol(part)) || return nothing
+            owner = Base.invokelatest(getglobal, owner, Symbol(part))
+            owner isa Module || return nothing
+        end
+        return type_fingerprint(owner, String(parts[end]))
+    end
+    parts = split(name, '.')
+    for part in parts[1:end-1]
+        isdefined(mod, Symbol(part)) || return nothing
+        owner = Base.invokelatest(getglobal, mod, Symbol(part))
+        owner isa Module || return nothing
+        mod = owner
+    end
+    name = String(parts[end])
     isdefined(mod, Symbol(name)) || return nothing
     t = Base.invokelatest(getglobal, mod, Symbol(name))
     t isa Function && return "function"
@@ -486,6 +623,7 @@ function snapshot_state!(call::Int; waiting::Function = () -> false)
         setcall = get(BINDING_SEEN, sym, (UInt(0), call))[2]
         b = Dict{String, Any}("name" => name, "type" => short_type(v), "call" => setcall,
                               "const" => name in consts)
+        b["origin"] = get(BINDING_ORIGINS, sym, Dict{String, Any}())
         own = v isa Function ? isdefined(typeof(v), :instance) && parentmodule(v) === mod && nameof(v) === sym :
               v isa Type && Base.unwrap_unionall(v) isa DataType && parentmodule(Base.unwrap_unionall(v)) === mod &&
               nameof(Base.unwrap_unionall(v)) === sym
@@ -524,7 +662,7 @@ function snapshot_state!(call::Int; waiting::Function = () -> false)
             end
         end
         b["class"] == "runtime" && (b["recipe"] = recipe(name, setcall))
-        b["files"] = [[p, collect(s)] for (p, s) in get(CALL_FILES, setcall, Tuple{String, Tuple{Float64, Int}}[])]
+        b["files"] = [[p, evidence["stamp"]] for (p, evidence) in binding_sources(b["origin"], setcall)]
         push!(bindings, b)
     end
     byname = Dict(b["name"] => b for b in bindings)
@@ -608,7 +746,7 @@ of kernel-defined types deserialize only into a module of the same name.
 function revival_module_name()
     path = joinpath(STATE_DIR[], "manifest.json")
     isempty(STATE_DIR[]) || !isfile(path) ? nothing : try
-        m = JSON.parse(read(path, String))
+        m = JSON.parse(read(path, String); dicttype=Dict{String, Any})
         get(m, "workspace", nothing) == WORKSPACE_ROOT[] ? String(m["module"]) : nothing
     catch
         nothing
@@ -645,16 +783,23 @@ read_or_empty(path) = isfile(path) ? read(path, String) : ""
 function revive_state!()
     dir = STATE_DIR[]
     path = joinpath(dir, "manifest.json")
-    (isempty(dir) || !isfile(path)) && return ""
-    m = try
-        JSON.parse(read(path, String))
-    catch e
-        return "[revival] The previous kernel stopped, and its snapshot could not be read " *
-               "($(first(sprint(showerror, e), 160))). Nothing was revived; files in the workspace remain."
+    if isempty(dir) || !isfile(path)
+        previous = !isempty(dir) && isfile(joinpath(dir, "last_call"))
+        return revival_observation!(; lost=previous ? ["previous live state: no complete snapshot remains"] : String[],
+            text=previous ? "[revival] No complete snapshot remains. Prior live state is lost; workspace files remain." : "")
     end
-    get(m, "format", 0) == REVIVAL_FORMAT || return "[revival] The previous kernel's snapshot is in an unknown format. Nothing was revived."
+    m = try
+        JSON.parse(read(path, String); dicttype=Dict{String, Any})
+    catch e
+        return revival_observation!(; lost=["previous bindings (snapshot inventory unreadable)"],
+            uncertain=["previous binding inventory could not be established"],
+            text="[revival] The previous kernel stopped, and its snapshot could not be read " *
+                 "($(first(sprint(showerror, e), 160))). Nothing was revived; files in the workspace remain.")
+    end
+    get(m, "format", 0) == REVIVAL_FORMAT || return revival_observation!(; lost=["previous snapshot: incompatible format"],
+        text="[revival] The previous kernel's snapshot is in an unknown format ($(get(m, "format", 0)); current $REVIVAL_FORMAT). Nothing was revived.")
     # A state saved for another workspace belongs to another task.
-    get(m, "workspace", nothing) == WORKSPACE_ROOT[] || return ""
+    get(m, "workspace", nothing) == WORKSPACE_ROOT[] || return revival_observation!()
     state = get_kernel_state()
     mod = state.eval_module
     call = Int(m["call"])
@@ -678,7 +823,7 @@ function revive_state!()
                 foreach(n -> errors[n] = "$(relpath(p, WORKSPACE_ROOT[])) is gone", e["names"])
                 continue
             end
-            e["stamp"] !== nothing && Tuple(e["stamp"]) != file_stamp(p) && push!(changed_files, p)
+            ((e["stamp"] !== nothing && Tuple(e["stamp"]) != file_stamp(p)) || (get(e, "sha256", nothing) !== nothing && bytes2hex(sha256(read(p))) != e["sha256"])) && push!(changed_files, p)
             for (file, st) in file_definitions(p)
                 push!(pending, (file, st, e))
             end
@@ -686,23 +831,57 @@ function revive_state!()
             push!(pending, (nothing, Meta.parse(e["code"]), e))
         end
     end
-    function replay(items)
-        failed = Any[]
-        for item in items
-            (file, st, e) = item
-            try
-                if file === nothing
-                    Core.eval(mod, st)
-                else
-                    task_local_storage(:SOURCE_PATH, file) do
-                        Core.eval(mod, st)
-                    end
-                end
-            catch err
-                push!(failed, (item, first(sprint(showerror, err isa LoadError ? err.error : err), 160)))
+    # Keep original order among replacements of the same binding, but build
+    # foundational providers before eager consumers. Only deferred nodes run later.
+    providers = Dict{String, Vector{Int}}()
+    names_by_item = [definition_kind(st) == "using" ? imported_names(st) : defined_names(st) for (_, st, _) in pending]
+    for (i, names_) in enumerate(names_by_item), name in names_
+        push!(get!(providers, name, Int[]), i)
+    end
+    dependencies = [Set{Int}() for _ in pending]
+    value_dependencies = [String[] for _ in pending]
+    for (i, (_, st, e)) in enumerate(pending)
+        e["requires"] = reconstruction_dependencies(st)
+        for name in e["requires"]
+            options = [j for j in get(providers, name, Int[]) if j != i && definition_kind(pending[j][2]) != "using"]
+            if !isempty(options)
+                earlier = filter(j -> j < i, options)
+                push!(dependencies[i], isempty(earlier) ? first(options) : last(earlier))
+            elseif !(name in names_by_item[i]) && any(b -> b["name"] == name, m["bindings"])
+                push!(value_dependencies[i], name)
             end
         end
-        return failed
+        for name in names_by_item[i]
+            earlier = filter(j -> j < i, get(providers, name, Int[]))
+            isempty(earlier) || push!(dependencies[i], last(earlier))
+        end
+    end
+    done = Set{Int}(); attempted = Set{Int}()
+    function replay(items)
+        waiting = Set(findfirst(p -> p === item, pending) for item in items)
+        failures = Any[]
+        while !isempty(waiting)
+            ready = sort!([i for i in waiting if issubset(dependencies[i], done) && all(n -> Base.invokelatest(isdefined, mod, Symbol(n)), value_dependencies[i])])
+            isempty(ready) && break
+            for i in ready
+                delete!(waiting, i); push!(attempted, i)
+                file, st, e = pending[i]
+                try
+                    file === nothing ? Core.eval(mod, st) : task_local_storage(:SOURCE_PATH, file) do
+                        Core.eval(mod, st)
+                    end
+                    push!(done, i)
+                catch err
+                    push!(failures, (pending[i], first(sprint(showerror, err isa LoadError ? err.error : err), 160)))
+                end
+            end
+        end
+        for i in sort!(collect(waiting))
+            roots = [join(names_by_item[j], ",") for j in sort!(collect(setdiff(dependencies[i], done)))]
+            append!(roots, [n for n in value_dependencies[i] if !Base.invokelatest(isdefined, mod, Symbol(n))])
+            push!(failures, (pending[i], "unavailable reconstruction prerequisites: " * join(roots, "; ")))
+        end
+        return failures
     end
     failed = with_logger(DocReplacementFilter(current_logger())) do
         replay(pending)
@@ -710,10 +889,10 @@ function revive_state!()
 
     # Everything after the replay runs in the world the replay made: checks
     # call methods it defined (an @enum's names, a type's `show`).
-    return Base.invokelatest(finish_revival, m, mod, state, call, pending, failed, errors, changed_files, replay)
+    return Base.invokelatest(finish_revival, m, mod, state, call, pending, failed, errors, changed_files, replay, attempted)
 end
 
-function finish_revival(m, mod, state, call, pending, failed, errors, changed_files, replay)
+function finish_revival(m, mod, state, call, pending, failed, errors, changed_files, replay, attempted)
     dir = STATE_DIR[]
     lines = String[]
     exact = String[]; rebuilt = String[]; approx = String[]; stale = String[]; lost = String[]
@@ -729,37 +908,48 @@ function finish_revival(m, mod, state, call, pending, failed, errors, changed_fi
         nothing
     end
     values = Dict{String, Any}()
-    for g in m["data"]
-        names = String.(g["names"])
-        why = data_block
-        if why === nothing
-            bad = [t for t in g["user_types"] if get(m["type_fingerprints"], t, nothing) != type_fingerprint(mod, t)]
-            isempty(bad) || (why = "type $(join(bad, ", ")) is defined differently now")
-        end
-        file = joinpath(dir, g["file"])
-        if why === nothing
-            bytes = isfile(file) ? read(file) : nothing
-            why = bytes === nothing ? "its data file is missing" :
-                  bytes2hex(sha256(bytes)) != g["sha256"] ? "its data file is damaged" : nothing
+    bound = Set{String}()
+    groups = collect(m["data"])
+    while true
+        progress_before = (length(groups), length(attempted), length(bound))
+        remaining = Any[]
+        for g in groups
+            if data_block === nothing && any(t -> type_fingerprint(mod, t) === nothing, g["user_types"])
+                push!(remaining, g)
+                continue
+            end
+            names = String.(g["names"])
+            why = data_block
             if why === nothing
-                try
-                    d = Base.invokelatest(deserialize, IOBuffer(bytes))
-                    for n in names
-                        values[n] = d[n]
+                bad = [t for t in g["user_types"] if get(m["type_fingerprints"], t, nothing) != type_fingerprint(mod, t)]
+                isempty(bad) || (why = "type $(join(bad, ", ")) is defined differently now")
+            end
+            file = joinpath(dir, g["file"])
+            if why === nothing
+                bytes = isfile(file) ? read(file) : nothing
+                why = bytes === nothing ? "its data file is missing" :
+                      bytes2hex(sha256(bytes)) != g["sha256"] ? "its data file is damaged" : nothing
+                if why === nothing
+                    try
+                        d = Base.invokelatest(deserialize, IOBuffer(bytes))
+                        for n in names
+                            values[n] = d[n]
+                        end
+                    catch err
+                        why = "reading it failed: $(first(sprint(showerror, err), 160))"
                     end
-                catch err
-                    why = "reading it failed: $(first(sprint(showerror, err), 160))"
+                end
+            end
+            if why !== nothing
+                for n in names
+                    bindings[n]["class"] = "runtime"
+                    bindings[n]["reason"] = why
                 end
             end
         end
-        if why !== nothing
-            for n in names
-                bindings[n]["class"] = "runtime"
-                bindings[n]["reason"] = why
-            end
-        end
-    end
-    for (n, v) in collect(values)
+        groups = remaining
+        for (n, v) in collect(values)
+            n in bound && continue
         b = bindings[n]
         try
             Core.eval(mod, Expr(b["const"] ? :const : :global, Expr(:(=), Symbol(n), QuoteNode(v))))
@@ -768,10 +958,17 @@ function finish_revival(m, mod, state, call, pending, failed, errors, changed_fi
             b["class"] = "runtime"
             b["reason"] = "binding it again failed: $(first(sprint(showerror, err), 160))"
         end
+            push!(bound, n)
+        end
+        blocked = [item for (item, _) in failed if !(findfirst(p -> p === item, pending) in attempted)]
+        failed = with_logger(DocReplacementFilter(current_logger())) do
+            [filter(pair -> findfirst(p -> p === pair[1], pending) in attempted, failed); replay(blocked)]
+        end
+        (length(groups), length(attempted), length(bound)) == progress_before && break
     end
-    # Definitions that needed a constant or a value restored just now.
-    failed = isempty(failed) ? failed : with_logger(DocReplacementFilter(current_logger())) do
-        replay(first.(failed))
+    for g in groups, n in g["names"]
+        bindings[n]["class"] = "runtime"
+        bindings[n]["reason"] = "unavailable type reconstruction prerequisites: " * join([t for t in g["user_types"] if type_fingerprint(mod, t) === nothing], ", ")
     end
     for (item, err) in failed
         for n in item[3]["names"]
@@ -785,12 +982,15 @@ function finish_revival(m, mod, state, call, pending, failed, errors, changed_fi
 
     # Workspace packages (`using` makes no binding for them): loaded again from
     # the workspace, and said to differ when their sources changed.
+    changed_packages = Set{String}()
     for (name, saved) in sort!(collect(get(m, "workspace_packages", Dict())); by=first)
         loaded = [mm for (k, mm) in Base.loaded_modules if k.name == name && pathof(mm) !== nothing &&
                   startswith(pathof(mm), WORKSPACE_ROOT[] * "/")]
         if isempty(loaded)
+            push!(changed_packages, name)
             push!(lost, "$name (workspace package): it did not load again")
         elseif Dict(k => Tuple(v) for (k, v) in saved) != source_snapshot(dirname(pathof(loaded[1])))
+            push!(changed_packages, name)
             push!(approx, "$name (workspace package): loaded again from sources that changed since")
         else
             push!(rebuilt, "$name (workspace package)")
@@ -798,7 +998,7 @@ function finish_revival(m, mod, state, call, pending, failed, errors, changed_fi
     end
     # Check each binding against what the old kernel had: definitions first,
     # because data that refers to a definition is only as exact as it is.
-    inexact = Set{String}()
+    inexact = changed_packages
     ordered = sort!(collect(bindings); by=nb -> (nb[2]["class"] in ("definition", "import") ? 0 : 1, nb[1]))
     for (n, b) in ordered
         cls = b["class"]
@@ -828,8 +1028,16 @@ function finish_revival(m, mod, state, call, pending, failed, errors, changed_fi
                 push!(rebuilt, "$n (module)")
             end
         elseif cls == "data" && haskey(values, n)
-            changed = [relpath(p, WORKSPACE_ROOT[]) for (p, s) in b["files"] if !isfile(p) || file_stamp(p) != Tuple(s)]
-            refers = sort!(intersect(Set(String.(get(b, "user_types", String[]))), inexact) |> collect)
+            origin = get(b, "origin", Dict{String, Any}())
+            sources = binding_sources(origin, b["call"])
+            changed_paths = [p for (p, evidence) in sources if source_changed(evidence; strong=true)]
+            origin["strong_stale_sources"] = changed_paths
+            changed = [relpath(p, WORKSPACE_ROOT[]) for p in changed_paths]
+            superseded = any(artifact_changed, get(origin, "artifacts", Dict{String, Any}[]))
+            superseded && append!(changed, ["tracked artifact authority/content superseded"])
+            types = String.(get(b, "user_types", String[]))
+            owners = Set(startswith(t, "@workspace:") ? first(split(t[length("@workspace:") + 1:end], '.')) : t for t in types)
+            refers = sort!(collect(intersect(owners, inexact)))
             if !isempty(refers)
                 push!(approx, "$(fmt_binding(b)): restored, but it refers to $(join(refers, ", ")), which is not the same as before")
             elseif isempty(changed)
@@ -854,7 +1062,17 @@ function finish_revival(m, mod, state, call, pending, failed, errors, changed_fi
         USED_FILES[p] = (Tuple(s), c)
     end
     for (n, b) in bindings
-        (haskey(values, n) || b["class"] == "definition") && (BINDING_SEEN[Symbol(n)] = (objectid(Base.invokelatest(getglobal, mod, Symbol(n))), b["call"]))
+        sym = Symbol(n)
+        if (haskey(values, n) || b["class"] == "definition") && Base.invokelatest(isdefined, mod, sym)
+            value = Base.invokelatest(getglobal, mod, sym)
+            BINDING_SEEN[sym] = (objectid(value), b["call"])
+            BINDING_ORIGINS[sym] = Dict{String, Any}(get(b, "origin", Dict()))
+            origin = BINDING_ORIGINS[sym]
+            get(origin, "definition", nothing) isa AbstractDict &&
+                (origin["definition"] = Dict{String, Any}(origin["definition"]))
+            value isa Union{Type, Module} && (BINDING_IDENTITIES[sym] = value)
+            CALL_FILES[b["call"]] = [(String(p), (Float64(s[1]), Int(s[2]))) for (p, s) in b["files"]]
+        end
     end
 
     push!(lines, "[revival] The previous kernel stopped. This kernel revived the state saved at the end of call $call" *
@@ -878,6 +1096,7 @@ function finish_revival(m, mod, state, call, pending, failed, errors, changed_fi
     push!(lines, "  Packages were loaded again, and LOAD_PATH, the active project, ENV and the working directory were restored. " *
                  "Other runtime state starts fresh: random number streams, settings changed inside packages, open handles. " *
                  "Files in the workspace are unchanged.")
-    return join(lines, "\n")
+    uncertain = copy(approx)
+    last !== nothing && last > call && push!(uncertain, "calls $(call + 1)–$last completed after the saved snapshot")
+    return revival_observation!(; restored=exact, rebuilt, stale, lost, uncertain, saved_call=call, text=join(lines, "\n"))
 end
-

@@ -9,9 +9,10 @@
 use crate::sandbox::{self, RunWorker};
 use crate::util;
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -57,6 +58,15 @@ pub fn ceiling_is_subset(requested: &Value, parent: &Value) -> (bool, String) {
                 for d in &rd {
                     if !pd.iter().any(|p| util::within(d, p)) {
                         return (false, format!("requested external_fs_write dir {} is not within any parent allowed_dir {}", d.display(), qpaths(&pd)));
+                    }
+                }
+            }
+            "fs_digest" => {
+                let rp: Vec<PathBuf> = str_list(rc.get("allowed_paths")).unwrap_or_default().iter().map(|d| util::resolve(Path::new(d))).collect();
+                let pp: Vec<PathBuf> = str_list(pc.get("allowed_paths")).unwrap_or_default().iter().map(|d| util::resolve(Path::new(d))).collect();
+                for d in &rp {
+                    if !pp.iter().any(|p| util::within(d, p)) {
+                        return (false, format!("requested fs_digest allowed_path {} is not within any parent allowed_path {}", d.display(), qpaths(&pp)));
                     }
                 }
             }
@@ -355,6 +365,64 @@ impl Broker {
         }
     }
 
+    /// Digest files with host privilege -- the independent eye (FM-SLICE-A2b),
+    /// mirroring security/broker.py's _handle_fs_digest: a digest computed
+    /// inside the sandbox is the kernel grading its own writes, so this reads
+    /// the requested paths OUTSIDE the sandbox, on the host, and the request
+    /// is receipted regardless of outcome -- a mutation claim can be
+    /// independently recomputed, and the receipt survives the kernel (probe
+    /// P15). Out-of-scope paths deny the WHOLE request (policy); per-path
+    /// filesystem conditions come back as per-path error_class entries.
+    fn fs_digest(&self, p: &Map<String, Value>) -> Result<Value, Fail> {
+        let cap = self.cap("fs_digest").ok_or_else(|| Denied("fs_digest not in this session's ceiling".into()))?;
+        let paths_v = p.get("paths").and_then(Value::as_array).ok_or_else(|| Denied("fs_digest requires a non-empty 'paths' list".into()))?;
+        if paths_v.is_empty() {
+            return Err(Denied("fs_digest requires a non-empty 'paths' list".into()));
+        }
+        if paths_v.len() > 64 {
+            return Err(Denied("fs_digest accepts at most 64 paths per request".into()));
+        }
+        let mut paths: Vec<&str> = Vec::with_capacity(paths_v.len());
+        for v in paths_v {
+            let Some(s) = v.as_str().filter(|s| !s.is_empty()) else {
+                return Err(Denied("fs_digest 'paths' entries must be non-empty strings".into()));
+            };
+            paths.push(s);
+        }
+        let allowed: Vec<PathBuf> = str_list(cap.get("allowed_paths")).unwrap_or_default().iter().map(|d| util::resolve(Path::new(d))).collect();
+        for p in &paths {
+            let rp = util::resolve(Path::new(p));
+            if !allowed.iter().any(|a| util::within(&rp, a)) {
+                return Err(Denied(format!("path {} is not under this session's fs_digest allowed_paths", q(p))));
+            }
+        }
+        // Keys are the paths as the requester wrote them, not as resolved.
+        let mut digests = Map::new();
+        for p in &paths {
+            let rp = util::resolve(Path::new(p));
+            let entry = match fs::metadata(&rp) {
+                Err(e) => match e.kind() {
+                    // Python's Path.exists() swallows OSError and returns
+                    // False, so even a stat permission failure (parent dir
+                    // not traversable) reads as not_found there; replicated
+                    // here for cross-host parity (verified standalone).
+                    ErrorKind::NotFound | ErrorKind::PermissionDenied => json!({"error_class": "not_found"}),
+                    _ => json!({"error_class": "os_error", "detail": e.to_string()}),
+                },
+                Ok(m) if m.is_dir() => json!({"error_class": "is_directory"}),
+                Ok(_) => match sha256_file(&rp) {
+                    Ok((hex, bytes, mtime)) => json!({"sha256": hex, "bytes": bytes, "mtime": mtime}),
+                    Err(e) => match e.kind() {
+                        ErrorKind::PermissionDenied => json!({"error_class": "permission_denied"}),
+                        _ => json!({"error_class": "os_error", "detail": e.to_string()}),
+                    },
+                },
+            };
+            digests.insert((*p).to_string(), entry);
+        }
+        Ok(json!({"digests": digests, "observer": "host", "algorithm": "sha256"}))
+    }
+
     pub fn handle_request(&self, req: &Value) -> Value {
         let req_id = req.get("id").cloned().unwrap_or_else(|| json!(util::uuid4()));
         let category = req.get("category").cloned().unwrap_or(Value::Null);
@@ -366,6 +434,7 @@ impl Broker {
             Some("package_management") => self.package_management(&p),
             Some("spawn_child_worker") => self.spawn_child_worker(&p),
             Some("host_request") => self.host_request(&p),
+            Some("fs_digest") => self.fs_digest(&p),
             _ => Err(Denied(format!("unknown capability category: {}", py_repr(&category)))),
         };
         let (approved, result, reason) = match outcome {
@@ -397,6 +466,32 @@ impl Broker {
             let _ = writeln!(f, "{receipt}");
         }
     }
+}
+
+/// Stream a file through SHA-256 in 1 MiB chunks, as the Python broker does,
+/// and report (hex, bytes, mtime in seconds since the epoch).
+fn sha256_file(path: &Path) -> std::io::Result<(String, u64, f64)> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    let mut size: u64 = 0;
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        size += n as u64;
+    }
+    let hex: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    let mtime = file
+        .metadata()?
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    Ok((hex, size, mtime))
 }
 
 fn valid_version(v: &str) -> bool {
@@ -498,4 +593,183 @@ fn handle_conn(conn: UnixStream, broker: &Broker) {
     };
     let _ = writeln!(writer, "{reply}");
     let _ = writer.flush();
+}
+
+// The host's first Rust test module: the fs_digest parity suite, mirroring
+// security/test_fs_digest.py check-for-check (FM-SLICE-A2b), plus the 64-path
+// cap. Direct Broker construction -- no sockets.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TmpDir(PathBuf);
+    impl Drop for TmpDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn tmpdir(tag: &str) -> TmpDir {
+        let d = std::env::temp_dir().join(format!("fs-digest-host-test-{tag}-{}", util::hex(8)));
+        fs::create_dir_all(&d).unwrap();
+        TmpDir(d)
+    }
+
+    fn broker(ceiling: Value, receipts: &Path) -> Broker {
+        Broker::new(BrokerConfig {
+            ceiling,
+            receipt_log_path: receipts.to_path_buf(),
+            session_id: "test".into(),
+            depot_dir: None,
+            project_dir: None,
+            repo_dir: None,
+            child_timeout: Duration::from_secs(90),
+        })
+        .unwrap()
+    }
+
+    fn digest_req(paths: &[&str]) -> Value {
+        json!({"category": "fs_digest", "params": {"paths": paths}})
+    }
+
+    fn expected_sha256(path: &Path) -> String {
+        let mut h = Sha256::new();
+        h.update(fs::read(path).unwrap());
+        h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    #[test]
+    fn digest_correct_for_files() {
+        let t = tmpdir("ok");
+        let dir = t.0.join("scoped");
+        fs::create_dir_all(&dir).unwrap();
+        let f1 = dir.join("a.txt");
+        fs::write(&f1, b"hello fm-slice-a2b\n").unwrap();
+        let f2 = dir.join("b.bin");
+        let big: Vec<u8> = (0..=255u8).cycle().take(256 * 100).collect();
+        fs::write(&f2, &big).unwrap();
+        let b = broker(json!({"fs_digest": {"allowed_paths": [dir.to_str().unwrap()]}}), &t.0.join("receipts.jsonl"));
+        let resp = b.handle_request(&digest_req(&[f1.to_str().unwrap(), f2.to_str().unwrap()]));
+        assert_eq!(resp["approved"], json!(true), "{}", resp["reason"]);
+        let d = &resp["result"]["digests"];
+        assert_eq!(d[f1.to_str().unwrap()]["sha256"], json!(expected_sha256(&f1)));
+        assert_eq!(d[f2.to_str().unwrap()]["sha256"], json!(expected_sha256(&f2)));
+        assert_eq!(d[f1.to_str().unwrap()]["bytes"], json!(fs::metadata(&f1).unwrap().len()));
+        assert!(d[f1.to_str().unwrap()]["mtime"].as_f64().unwrap() > 0.0);
+        assert_eq!(resp["result"]["observer"], json!("host"));
+        assert_eq!(resp["result"]["algorithm"], json!("sha256"));
+    }
+
+    #[test]
+    fn per_path_conditions_not_request_failures() {
+        let t = tmpdir("cond");
+        let dir = t.0.join("scoped");
+        fs::create_dir_all(&dir).unwrap();
+        let missing = dir.join("missing.txt");
+        let b = broker(json!({"fs_digest": {"allowed_paths": [dir.to_str().unwrap()]}}), &t.0.join("receipts.jsonl"));
+        let resp = b.handle_request(&digest_req(&[missing.to_str().unwrap(), dir.to_str().unwrap()]));
+        assert_eq!(resp["approved"], json!(true), "{}", resp["reason"]);
+        let d = &resp["result"]["digests"];
+        assert_eq!(d[missing.to_str().unwrap()]["error_class"], json!("not_found"));
+        assert_eq!(d[dir.to_str().unwrap()]["error_class"], json!("is_directory"));
+    }
+
+    #[test]
+    fn out_of_scope_path_denies_whole_request() {
+        let t = tmpdir("scope");
+        let dir = t.0.join("scoped");
+        fs::create_dir_all(&dir).unwrap();
+        let b = broker(json!({"fs_digest": {"allowed_paths": [dir.to_str().unwrap()]}}), &t.0.join("receipts.jsonl"));
+        // t.0 exists, but is NOT under allowed_paths (scoped is).
+        let resp = b.handle_request(&digest_req(&[t.0.to_str().unwrap()]));
+        assert_eq!(resp["approved"], json!(false));
+        assert!(resp["reason"].as_str().unwrap().contains("allowed_paths"));
+    }
+
+    #[test]
+    fn category_absent_from_ceiling_denies() {
+        let t = tmpdir("absent");
+        let dir = t.0.join("scoped");
+        fs::create_dir_all(&dir).unwrap();
+        let f1 = dir.join("a.txt");
+        fs::write(&f1, b"x").unwrap();
+        let b = broker(json!({}), &t.0.join("receipts.jsonl"));
+        let resp = b.handle_request(&digest_req(&[f1.to_str().unwrap()]));
+        assert_eq!(resp["approved"], json!(false));
+    }
+
+    #[test]
+    fn child_ceiling_cannot_widen_scope() {
+        let t = tmpdir("widen");
+        let dir = t.0.join("scoped");
+        fs::create_dir_all(&dir).unwrap();
+        let (ok, _) = ceiling_is_subset(
+            &json!({"fs_digest": {"allowed_paths": [t.0.to_str().unwrap()]}}),
+            &json!({"fs_digest": {"allowed_paths": [dir.to_str().unwrap()]}}),
+        );
+        assert!(!ok);
+    }
+
+    #[test]
+    fn at_most_64_paths_per_request() {
+        let t = tmpdir("cap");
+        let dir = t.0.join("scoped");
+        fs::create_dir_all(&dir).unwrap();
+        let f1 = dir.join("a.txt");
+        fs::write(&f1, b"x").unwrap();
+        let b = broker(json!({"fs_digest": {"allowed_paths": [dir.to_str().unwrap()]}}), &t.0.join("receipts.jsonl"));
+        let many: Vec<&str> = vec![f1.to_str().unwrap(); 65];
+        let resp = b.handle_request(&digest_req(&many));
+        assert_eq!(resp["approved"], json!(false));
+        assert!(resp["reason"].as_str().unwrap().contains("at most 64"));
+    }
+
+    #[test]
+    fn known_answer_vectors_nist() {
+        // FIPS 180-2 reference digests -- external ground truth, so the suite
+        // does not merely verify sha2 against itself.
+        let t = tmpdir("nist");
+        let dir = t.0.join("scoped");
+        fs::create_dir_all(&dir).unwrap();
+        let empty = dir.join("empty.bin");
+        fs::write(&empty, b"").unwrap();
+        let abc = dir.join("abc.txt");
+        fs::write(&abc, b"abc").unwrap();
+        let b = broker(json!({"fs_digest": {"allowed_paths": [dir.to_str().unwrap()]}}), &t.0.join("receipts.jsonl"));
+        let resp = b.handle_request(&digest_req(&[empty.to_str().unwrap(), abc.to_str().unwrap()]));
+        assert_eq!(resp["approved"], json!(true), "{}", resp["reason"]);
+        let d = &resp["result"]["digests"];
+        assert_eq!(
+            d[empty.to_str().unwrap()]["sha256"],
+            json!("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        );
+        assert_eq!(
+            d[abc.to_str().unwrap()]["sha256"],
+            json!("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        );
+    }
+
+    #[test]
+    fn receipt_written_regardless_of_outcome() {
+        let t = tmpdir("receipt");
+        let receipts = t.0.join("receipts.jsonl");
+        let dir = t.0.join("scoped");
+        fs::create_dir_all(&dir).unwrap();
+        let f1 = dir.join("a.txt");
+        fs::write(&f1, b"x").unwrap();
+        let b = broker(json!({"fs_digest": {"allowed_paths": [dir.to_str().unwrap()]}}), &receipts);
+        b.handle_request(&digest_req(&[f1.to_str().unwrap()]));
+        let deny = broker(json!({}), &receipts);
+        deny.handle_request(&digest_req(&[f1.to_str().unwrap()]));
+        let text = fs::read_to_string(&receipts).unwrap();
+        let outcomes: Vec<bool> = text
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .filter(|r| r["category"] == json!("fs_digest"))
+            .map(|r| r["approved"].as_bool().unwrap())
+            .collect();
+        assert!(outcomes.contains(&true));
+        assert!(outcomes.contains(&false));
+    }
 }

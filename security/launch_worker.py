@@ -70,7 +70,11 @@ def _clone_depot(real_depot: str, clone_root: str) -> str:
     """
     dest = tempfile.mkdtemp(dir=clone_root, prefix="depot-")
     shutil.rmtree(dest)  # cp needs the destination to not exist yet
-    subprocess.run(["cp", "-a", "--reflink=auto", real_depot, dest], check=True, stdin=subprocess.DEVNULL)
+    try:
+        subprocess.run(["cp", "-a", "--reflink=auto", real_depot, dest], check=True, stdin=subprocess.DEVNULL)
+    except BaseException:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
     return dest
 
 

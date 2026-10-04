@@ -199,7 +199,7 @@ class NeuraSession:
             for name in ("PALETTE_STATE_MAX_BINDING_BYTES", "PALETTE_STATE_MAX_BYTES"):
                 if name in os.environ:
                     argv += ["--setenv", name, os.environ[name]]
-            argv += ["--", julia_bin, "--startup-file=no", SESSION_LOOP_SCRIPT]
+            argv += ["--", julia_bin, "--startup-file=no", str(Path(self.repo_dir) / "scripts/session_loop.jl")]
             self._proc = subprocess.Popen(
                 argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 # Turn output is arbitrary bytes; one invalid byte used to
@@ -225,6 +225,7 @@ class NeuraSession:
             if hello.get("kind") != "HELLO" or not isinstance(hello.get("epoch"), str):
                 raise SessionProtocolError(f"malformed HELLO: {hello_line!r}")
             self.epoch = hello["epoch"]
+            self.capabilities = hello.get("capabilities", {})
         except BaseException:
             self._teardown()
             raise

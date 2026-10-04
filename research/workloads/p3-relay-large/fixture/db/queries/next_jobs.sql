@@ -1,1 +1,0 @@
--- See SPEC.md, "db: priority".

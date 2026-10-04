@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import os
 import select
+import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -20,9 +22,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from host_adapter import session_cmd  # noqa: E402
+from host_adapter import B, session_cmd  # noqa: E402
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_session_cli import CLI, PROJECT_DIR, _skip_if_no_bwrap, _skip_if_no_project  # noqa: E402
 
 RLM_TYPES = ["rlm.run", "rlm.collect", "rlm.list_subagents"]
@@ -43,8 +44,12 @@ class Host:
              "--workspace-dir", self.workspace, "--turn-timeout", str(turn_timeout)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
         )
-        hello = json.loads(self.proc.stdout.readline())
-        assert hello.get("kind") == "HELLO", hello
+        try:
+            hello = json.loads(self.proc.stdout.readline())
+            assert hello.get("kind") == "HELLO", hello
+        except BaseException:
+            self.close()
+            raise
         self.n = 0
 
     def send(self, msg: dict) -> None:
@@ -86,6 +91,11 @@ class Host:
             self.proc.wait(timeout=30)
         except subprocess.TimeoutExpired:
             self.proc.kill()
+            self.proc.wait()
+        finally:
+            self.proc.stdout.close()
+            self.proc.stderr.close()
+            shutil.rmtree(self.workspace, ignore_errors=True)
 
 
 def _rlm_host(data):
@@ -131,12 +141,15 @@ class TestHostBridge(unittest.TestCase):
         self.assertIn('"42"', r["display"])
         # A background collect whose request arrives after its call returned:
         # the host answers between calls, and the next call fetches it.
-        r, seen = h.call('job = @async (sleep(1.0); only(Neura.rlm.collect(h)).status); :started', _rlm_host)
+        r, seen = h.call('gate = Channel{Nothing}(1); job = @async (take!(gate); only(Neura.rlm.collect(h)).status); :started')
         self.assertTrue(r["success"], r)
-        msg = h.read(timeout=30)
+        h.send({"request_id": "release", "code": "put!(gate, nothing); :released"})
+        messages = [h.read(timeout=30), h.read(timeout=30)]
+        self.assertTrue(all(messages), messages)
+        msg = next(m for m in messages if m.get("event") == "host_request")
+        self.assertTrue(next(m for m in messages if m.get("request_id") == "release")["success"])
         self.assertEqual(msg.get("event"), "host_request", msg)
         h.send({"host_reply": msg["id"], "reply": _rlm_host(msg["data"])})
-        time.sleep(1.0)
         r, _ = h.call("fetch(job)")
         self.assertIn('"done"', r["display"])
 
@@ -203,16 +216,13 @@ class TestBrokerHostRequest(unittest.TestCase):
     no agent host attached, so these check the policy and the receipts."""
 
     def request(self, sock, category, params):
-        import socket
-        s = socket.socket(socket.AF_UNIX)
-        s.connect(sock)
-        s.sendall((json.dumps({"id": "rq", "category": category, "params": params}) + "\n").encode())
-        resp = json.loads(s.makefile().readline())
-        s.close()
-        return resp
+        with socket.socket(socket.AF_UNIX) as s:
+            s.connect(sock)
+            s.sendall((json.dumps({"id": "rq", "category": category, "params": params}) + "\n").encode())
+            with s.makefile() as stream:
+                return json.loads(stream.readline())
 
     def test_policy_and_receipts_without_a_host(self):
-        from host_adapter import B
         d = tempfile.mkdtemp(prefix="njl-hr-")
         sock, receipts = os.path.join(d, "broker.sock"), os.path.join(d, "receipts.jsonl")
         server, _ = B.serve(sock, {"host_request": {"allowed_types": ["rlm.run"]}}, receipts, "s1")
@@ -230,12 +240,12 @@ class TestBrokerHostRequest(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
-        rs = [json.loads(l) for l in Path(receipts).read_text().splitlines()]
+            rs = [json.loads(l) for l in Path(receipts).read_text().splitlines()]
+            shutil.rmtree(d)
         self.assertEqual(len(rs), 4, "every request is receipted")
         self.assertTrue(all(r["category"] == "host_request" and r["approved"] is False for r in rs))
 
     def test_without_the_category_nothing_is_allowed(self):
-        from host_adapter import B
         d = tempfile.mkdtemp(prefix="njl-hr-")
         sock = os.path.join(d, "broker.sock")
         server, _ = B.serve(sock, {}, os.path.join(d, "receipts.jsonl"), "s1")
@@ -245,9 +255,9 @@ class TestBrokerHostRequest(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+            shutil.rmtree(d)
 
     def test_child_types_must_be_an_explicit_subset(self):
-        from host_adapter import B
         parent = {"host_request": {"allowed_types": ["rlm.run", "rlm.collect"]}}
         self.assertTrue(B.ceiling_is_subset({"host_request": {"allowed_types": ["rlm.collect"]}}, parent)[0])
         self.assertFalse(B.ceiling_is_subset({"host_request": {"allowed_types": ["rlm.delete_subagent"]}}, parent)[0])

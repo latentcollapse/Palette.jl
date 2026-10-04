@@ -34,6 +34,7 @@ full category list and which remain NOT YET PROVEN.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import re
@@ -80,6 +81,12 @@ def ceiling_is_subset(requested: dict, parent: dict) -> tuple[bool, str]:
             for rd in req_dirs:
                 if not any(rd == pd or pd in rd.parents for pd in parent_dirs):
                     return False, f"requested external_fs_write dir {rd} is not within any parent allowed_dir {parent_dirs}"
+        elif category == "fs_digest":
+            req_paths = [Path(p).resolve() for p in req_cap.get("allowed_paths", [])]
+            parent_paths = [Path(p).resolve() for p in parent_cap.get("allowed_paths", [])]
+            for rp in req_paths:
+                if not any(rp == pp or pp in rp.parents for pp in parent_paths):
+                    return False, f"requested fs_digest allowed_path {rp} is not within any parent allowed_path {parent_paths}"
         elif category == "network_access":
             if req_cap.get("allowed") and not parent_cap.get("allowed"):
                 return False, "requested network_access=true but parent's ceiling has network_access=false"
@@ -432,12 +439,68 @@ class Broker:
             raise RuntimeError(f"host returned a malformed reply to {rtype!r}")
         return reply
 
+    def _handle_fs_digest(self, params: dict) -> Any:
+        """Digest files with host privilege — the independent eye (FM-SLICE-A2).
+
+        The sandboxed kernel can hash what it can see, but a digest computed
+        inside the sandbox is the kernel grading its own writes. This handler
+        reads the requested paths OUTSIDE the sandbox, on the host, and the
+        request is receipted regardless of outcome — so a mutation claim can
+        be independently recomputed (FM-RQ-A2) and the receipt survives the
+        kernel, which kernel-side receipts do not (probe P15).
+
+        Ceiling shape: {"fs_digest": {"allowed_paths": ["/abs/dir", ...]}}.
+        A requested path must resolve to an allowed path itself or sit under
+        one, else the whole request is DENIED (policy, not a per-path error)
+        — matching external_fs_write's directory semantics. Per-path
+        filesystem conditions (missing, directory, unreadable) come back as
+        per-path error_class entries, never as request failures.
+        """
+        cap = self.ceiling.get("fs_digest")
+        if cap is None:
+            raise CapabilityDenied("fs_digest not in this session's ceiling")
+        paths = params.get("paths")
+        if not isinstance(paths, list) or not paths:
+            raise CapabilityDenied("fs_digest requires a non-empty 'paths' list")
+        if len(paths) > 64:
+            raise CapabilityDenied("fs_digest accepts at most 64 paths per request")
+        allowed = [Path(p).resolve() for p in (cap.get("allowed_paths") or [])]
+        for p in paths:
+            if not isinstance(p, str) or not p:
+                raise CapabilityDenied("fs_digest 'paths' entries must be non-empty strings")
+            rp = Path(p).resolve()
+            if not any(rp == a or a in rp.parents for a in allowed):
+                raise CapabilityDenied(f"path {p!r} is not under this session's fs_digest allowed_paths")
+        digests = {}
+        for p in paths:
+            try:
+                rp = Path(p).resolve()
+                if not rp.exists():
+                    digests[p] = {"error_class": "not_found"}
+                elif rp.is_dir():
+                    digests[p] = {"error_class": "is_directory"}
+                else:
+                    h = hashlib.sha256()
+                    size = 0
+                    with open(rp, "rb") as fh:
+                        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                            h.update(chunk)
+                            size += len(chunk)
+                    digests[p] = {"sha256": h.hexdigest(), "bytes": size,
+                                  "mtime": rp.stat().st_mtime}
+            except PermissionError:
+                digests[p] = {"error_class": "permission_denied"}
+            except OSError as e:
+                digests[p] = {"error_class": "os_error", "detail": str(e)}
+        return {"digests": digests, "observer": "host", "algorithm": "sha256"}
+
     HANDLERS = {
         "host_request": _handle_host_request,
         "external_fs_write": _handle_external_fs_write,
         "network_access": _handle_network_access,
         "package_management": _handle_package_management,
         "spawn_child_worker": _handle_spawn_child_worker,
+        "fs_digest": _handle_fs_digest,
     }
 
     # ---- request handling ------------------------------------------------

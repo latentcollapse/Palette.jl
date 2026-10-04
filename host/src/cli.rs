@@ -283,7 +283,8 @@ pub fn main(argv: &[String]) -> i32 {
         });
     }
 
-    respond(&json!({"kind": "HELLO", "epoch": session.epoch, "session_id": session.session_id, "revival": revival}));
+    respond(&json!({"kind": "HELLO", "epoch": session.epoch, "session_id": session.session_id, "revival": revival,
+                   "capabilities": session.capabilities}));
 
     loop {
         let req = match rx.recv() {
@@ -329,6 +330,10 @@ pub fn main(argv: &[String]) -> i32 {
                 "interrupted": r.get("interrupted").is_some_and(truthy),
                 "call": r.get("call").cloned().unwrap_or(Value::Null),
                 "bindings": r.get("bindings").cloned().unwrap_or(Value::Null),
+                "revival": r.get("revival").cloned().unwrap_or(Value::Null),
+                "reloads": r.get("reloads").cloned().unwrap_or(Value::Null),
+                "costs": r.get("costs").cloned().unwrap_or(Value::Null),
+                "transport_shortened": r.get("transport_shortened").cloned().unwrap_or(Value::Null),
             })),
             Err(SessionError::Dead(e)) => {
                 // `session_dead` lets the host stop sending calls now, rather

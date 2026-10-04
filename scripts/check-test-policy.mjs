@@ -5,7 +5,7 @@ import { relative, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
 const testFilePattern =
-	/(?:^|\/)(?:test|tests|__tests__)(?:\/|$)|\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)vitest\.config\.[cm]?[jt]s$|^prime-agent-runtime\/test\/.*\.py$/;
+	/(?:^|\/)(?:test|tests|__tests__)(?:\/|$)|\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)vitest\.config\.[cm]?[jt]s$|^prime-agent-runtime\/test\/.*\.py$|^security\/test_[^/]+\.py$/;
 
 function git(args, allowFailure = false) {
 	try {
@@ -290,8 +290,8 @@ function directObjectProperties(argument) {
 }
 
 function changedTestFiles(base) {
-	if (!base) return [...walkFiles(resolve(root, "packages")), ...walkFiles(resolve(root, "prime-agent-runtime", "test"))];
-	const roots = ["packages", "prime-agent-runtime/test", "scripts"];
+	if (!base) return [...walkFiles(resolve(root, "packages")), ...walkFiles(resolve(root, "prime-agent-runtime", "test")), ...walkFiles(resolve(root, "security"))];
+	const roots = ["packages", "prime-agent-runtime/test", "scripts", "security"];
 	const tracked = git(["diff", "--name-only", "--diff-filter=ACMR", base, "--", ...roots]);
 	const untracked = git(["ls-files", "--others", "--exclude-standard", "--", ...roots], true);
 	return [...new Set(`${tracked}\n${untracked}`.split("\n"))].filter(

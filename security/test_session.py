@@ -13,19 +13,14 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
-from host_adapter import HOST_BIN  # noqa: E402
-
-if HOST_BIN:
-    from host_adapter import RustSession as NeuraSession, SessionDeadError  # noqa: E402
-else:
-    from session import NeuraSession, SessionDeadError  # noqa: E402
+from host_adapter import HOST_BIN, NeuraSession, SessionDeadError  # noqa: E402
 
 REPO_DIR = str(Path(__file__).resolve().parent.parent)
 PROJECT_DIR = os.environ.get(
@@ -109,13 +104,10 @@ class TestPersistentMind(SessionTestCase):
 
 class TestSessionLifecycle(SessionTestCase):
     def test_two_sessions_get_different_epochs(self):
-        s1 = NeuraSession(project_dir=PROJECT_DIR, ceiling={})
-        s2 = NeuraSession(project_dir=PROJECT_DIR, ceiling={})
-        try:
+        with NeuraSession(project_dir=PROJECT_DIR, ceiling={}) as s1, NeuraSession(project_dir=PROJECT_DIR, ceiling={}) as s2:
             self.assertNotEqual(s1.epoch, s2.epoch)
-        finally:
-            s1.close()
-            s2.close()
+            for current in (s1, s2):
+                self.assertTrue(Path(current.turn("pwd()")["data"]).is_relative_to(tempfile.gettempdir()))
 
     def test_killed_worker_is_detected_not_hung_or_silently_respawned(self):
         s = NeuraSession(project_dir=PROJECT_DIR, ceiling={})
@@ -123,7 +115,6 @@ class TestSessionLifecycle(SessionTestCase):
             if HOST_BIN:
                 for pid in s.worker_pids():
                     os.kill(pid, 9)
-                time.sleep(1.0)
             else:
                 s._proc.kill()
                 s._proc.wait()
@@ -157,41 +148,33 @@ class TestSessionLifecycle(SessionTestCase):
             s.turn("1 + 1")
 
     def test_construction_failure_does_not_leak_the_depot_clone(self):
-        """Regression test for a real bug found by direct testing:
-        __init__ had no exception handling at all between creating a real
-        depot clone (a genuine, if cheap, reflink copy) and the worker's
-        subprocess.Popen -- a failure anywhere in that window (confirmed:
-        the broker's own serve() raising) leaked the depot clone, the
-        broker's thread/socket, and the workspace directories permanently.
-        _teardown() itself was also unsafe to call this early (it
-        unconditionally referenced self._proc, which didn't exist yet) --
-        both fixed together."""
-        depot_root = os.path.join(os.path.dirname(os.environ.get("JULIA_DEPOT_PATH", os.path.expanduser("~/.julia")).split(":")[-1]), ".palette-depot-clones")
-        before = set(os.listdir(depot_root)) if os.path.isdir(depot_root) else set()
-        if HOST_BIN:
-            # A real failure just after the depot clone: a file where the
-            # broker's directory belongs.
-            root = Path(tempfile.mkdtemp(prefix="palette-fail-"))
-            (root / "broker").write_text("not a directory")
-            with self.assertRaises(SessionDeadError):
-                NeuraSession(project_dir=PROJECT_DIR, ceiling={}, workspace_dir=str(root))
-            after = set(os.listdir(depot_root)) if os.path.isdir(depot_root) else set()
-            self.assertEqual(after - before, set(), "depot clone leaked after a construction failure")
-            self.assertFalse(root.exists(), "scratch root leaked after a construction failure")
-            return
-
-        import session as session_module
-
-        orig_serve = session_module._broker.serve
-        session_module._broker.serve = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("simulated failure"))
+        """A real startup failure must remove its own depot and scratch root."""
+        previous_depot = os.environ.get("JULIA_DEPOT_PATH")
         try:
-            with self.assertRaises(RuntimeError):
-                NeuraSession(project_dir=PROJECT_DIR, ceiling={})
+            for copy_fails in (False, True):
+                with self.subTest(copy_fails=copy_fails), tempfile.TemporaryDirectory(prefix="palette-startup-failure-") as tmp:
+                    depot = Path(tmp, "depot")
+                    depot.mkdir()
+                    blocked = depot / "unreadable"
+                    blocked.write_text("copy must fail" if copy_fails else "copy succeeds")
+                    blocked.chmod(0 if copy_fails else 0o600)
+                    root = Path(tmp, "session")
+                    root.mkdir()
+                    (root / "broker").write_text("not a directory")
+                    os.environ["JULIA_DEPOT_PATH"] = str(depot)
+                    error = SessionDeadError if HOST_BIN else subprocess.CalledProcessError if copy_fails else FileExistsError
+                    with self.assertRaises(error):
+                        NeuraSession(project_dir=PROJECT_DIR, ceiling={}, workspace_dir=str(root))
+                    clone_root = Path(tmp, ".palette-depot-clones")
+                    self.assertTrue(clone_root.is_dir(), "startup never reached depot cloning")
+                    self.assertEqual(list(clone_root.iterdir()), [], "depot clone leaked")
+                    self.assertFalse(root.exists(), "scratch root leaked")
         finally:
-            session_module._broker.serve = orig_serve
+            if previous_depot is None:
+                os.environ.pop("JULIA_DEPOT_PATH", None)
+            else:
+                os.environ["JULIA_DEPOT_PATH"] = previous_depot
 
-        after = set(os.listdir(depot_root)) if os.path.isdir(depot_root) else set()
-        self.assertEqual(after - before, set(), "depot clone leaked after a construction failure")
 
 
 class TestAuthorityUnderPersistence(SessionTestCase):

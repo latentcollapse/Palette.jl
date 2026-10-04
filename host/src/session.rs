@@ -55,6 +55,7 @@ pub struct Turn<'a> {
 pub struct NeuraSession {
     pub session_id: String,
     pub epoch: String,
+    pub capabilities: Value,
     pub broker: Arc<Broker>,
     turn_timeout: f64,
     child: Child,
@@ -240,6 +241,7 @@ impl NeuraSession {
         let mut s = NeuraSession {
             session_id: session_id.to_string(),
             epoch: String::new(),
+            capabilities: json!({}),
             broker,
             turn_timeout: o.turn_timeout,
             child,
@@ -276,6 +278,7 @@ impl NeuraSession {
                 return Err(SessionError::Protocol(format!("malformed HELLO: {:?}", hello.trim_end())));
             }
         }
+        s.capabilities = parsed.get("capabilities").cloned().unwrap_or_else(|| json!({}));
         Ok(s)
     }
 
