@@ -57,7 +57,7 @@ def main():
     manifest["mcpServers"] = "./.mcp.json"
     if args.format == "portable":
         manifest_path = plugin / "plugin.json"
-        portable = json.loads(manifest_path.read_text()) if manifest_path.exists() else json.loads((repo / "plugins/palette/plugin.json").read_text())
+        portable = json.loads(manifest_path.read_text()) if manifest_path.exists() else json.loads((repo / "runtime/plugins/palette/plugin.json").read_text())
         if portable.get("name") != "palette":
             parser.error("target must be a Palette portable plugin")
         config_path = plugin / "mcp.json"
@@ -72,7 +72,7 @@ def main():
         manifest = portable
         assets = plugin / "assets"
         assets.mkdir(parents=True, exist_ok=True)
-        icon = repo / "plugins/palette/assets/palette.svg"
+        icon = repo / "runtime/plugins/palette/assets/palette.svg"
         if icon.resolve() != (assets / "palette.svg").resolve():
             shutil.copyfile(icon, assets / "palette.svg")
     write_json(config_path, config)

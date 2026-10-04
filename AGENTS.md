@@ -1,7 +1,7 @@
 # Palette development
 
 This repository owns the Julia operator surface, Rust host, adapters, tests, and
-public documentation. Cyan's harness and deployment-specific language toolchains
+public documentation (`runtime/docs/`). Cyan's harness and deployment-specific language toolchains
 live separately. Internal research notes and run receipts belong in the gitignored `.archive/`
 or an external private archive. Preserve source revisions, hashes, original
 receipts, failed attempts, and attribution for a future research paper. Never

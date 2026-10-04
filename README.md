@@ -43,8 +43,8 @@ OS sandbox; the supervised host does.
 
 ## Documentation
 
-[Plugin installation](plugins/palette/README.md) · [Operator API](docs/operator.md) · [Installation and MCP](docs/install.md) ·
-[Workspaces and patches](docs/workspaces.md) · [Authority boundaries](docs/authority.md) · [Static analysis policy](docs/static-analysis.md)
+[Plugin installation](runtime/plugins/palette/README.md) · [Operator API](runtime/docs/operator.md) · [Installation and MCP](runtime/docs/install.md) ·
+[Workspaces and patches](runtime/docs/workspaces.md) · [Authority boundaries](runtime/docs/authority.md) · [Static analysis policy](runtime/docs/static-analysis.md)
 
 ## Optional operator briefing
 
@@ -61,10 +61,12 @@ assuming that fine-tuning on this prose improves performance.
 | Directory | Contents |
 | --- | --- |
 | `src/` | Julia package and operator helpers |
-| `runtime/` | Rust host, Python adapters, installer, worker entrypoint, and development checks |
+| `runtime/` | Host, adapters, installer, worker entrypoint, public docs, and plugin package |
 | `test/` | Julia package tests and fixtures |
-| `docs/` | Public installation, API, and authority documentation |
-| `plugins/` | Portable plugin manifests and assets |
+
+The tracked root has five folders: the three SDK directories above, `.github/`
+for CI, and `.agents/` for the plugin marketplace. Public docs and the plugin
+package live under `runtime/docs/` and `runtime/plugins/`.
 
 Rust builds Palette's host; Python supports its adapters. Additional language
 kernels and SDKs are provisioned by deployments, rather than bundled with Palette.
@@ -89,7 +91,7 @@ python3 runtime/security/verify_operator.py --project-dir /absolute/path/to/test
 
 Internal development research and run receipts belong in the gitignored
 `.archive/` directory or a private external archive. Keep revisions, hashes,
-attribution, and failed attempts for future research publication. Public `docs/`
+attribution, and failed attempts for future research publication. Public `runtime/docs/`
 contains supported product documentation.
 
 CI runs package, host, Jupyter integration, workspace/patch, and process gates.

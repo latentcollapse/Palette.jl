@@ -5,7 +5,7 @@
       "name": "palette",
       "source": {
         "source": "local",
-        "path": "./plugins/palette"
+        "path": "./runtime/plugins/palette"
       },
       "interface": {
         "displayName": "Palette",
