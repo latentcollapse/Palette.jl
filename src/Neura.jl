@@ -252,11 +252,13 @@ Returns the global kernel state singleton.
 const GLOBAL_STATE = Ref{Union{Nothing, KernelState}}(nothing)
 
 function get_kernel_state()::KernelState
-    if isnothing(GLOBAL_STATE[])
-        GLOBAL_STATE[] = KernelState()
+    state = GLOBAL_STATE[]
+    if state === nothing
+        state = KernelState()
+        GLOBAL_STATE[] = state
     end
-    GLOBAL_STATE[].last_accessed = Dates.now()
-    return GLOBAL_STATE[]
+    state.last_accessed = Dates.now()
+    return state
 end
 
 """
@@ -283,8 +285,8 @@ struct OperatorVocabulary <: OperatorType
 
     function OperatorVocabulary(name::String, description::String,
                                 ops::Vector{String},
-                                input_schema::Dict{String, Any}=Dict(),
-                                output_schema::Dict{String, Any}=Dict())
+                                input_schema::Dict{String, Any}=Dict{String, Any}(),
+                                output_schema::Dict{String, Any}=Dict{String, Any}())
         new(name, description, ops, input_schema, output_schema)
     end
 end

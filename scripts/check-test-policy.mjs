@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
 const testFilePattern =
-	/(?:^|\/)(?:test|tests|__tests__)(?:\/|$)|\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)vitest\.config\.[cm]?[jt]s$|^prime-agent-runtime\/test\/.*\.py$|^security\/test_[^/]+\.py$/;
+	/(?:^|\/)(?:test|tests|__tests__)(?:\/|$)|\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)vitest\.config\.[cm]?[jt]s$|^(?:security|scripts)\/test_[^/]+\.py$/;
 
 function git(args, allowFailure = false) {
 	try {
@@ -33,20 +33,6 @@ function resolveBase() {
 	const head = git(["rev-parse", "HEAD"]);
 	if (originMain && originMain !== head) return git(["merge-base", "HEAD", "origin/main"], true) || "origin/main";
 	return git(["rev-parse", "--verify", "HEAD^"], true) ? "HEAD^" : undefined;
-}
-
-function walkFiles(dir, out = []) {
-	for (const entry of readdirSync(dir)) {
-		if (["node_modules", ".git", "dist"].includes(entry)) continue;
-		const path = resolve(dir, entry);
-		const stat = statSync(path);
-		if (stat.isDirectory()) walkFiles(path, out);
-		else {
-			const rel = relative(root, path).replaceAll("\\", "/");
-			if (testFilePattern.test(rel)) out.push(rel);
-		}
-	}
-	return out;
 }
 
 function maskJsSyntax(content) {
@@ -290,8 +276,8 @@ function directObjectProperties(argument) {
 }
 
 function changedTestFiles(base) {
-	if (!base) return [...walkFiles(resolve(root, "packages")), ...walkFiles(resolve(root, "prime-agent-runtime", "test")), ...walkFiles(resolve(root, "security"))];
-	const roots = ["packages", "prime-agent-runtime/test", "scripts", "security"];
+	if (!base) throw new Error("No test-policy comparison history: fetch Git history or set TEST_POLICY_BASE to an available revision");
+	const roots = ["scripts", "security"];
 	const tracked = git(["diff", "--name-only", "--diff-filter=ACMR", base, "--", ...roots]);
 	const untracked = git(["ls-files", "--others", "--exclude-standard", "--", ...roots], true);
 	return [...new Set(`${tracked}\n${untracked}`.split("\n"))].filter(

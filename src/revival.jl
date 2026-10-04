@@ -858,7 +858,12 @@ function revive_state!()
     end
     done = Set{Int}(); attempted = Set{Int}()
     function replay(items)
-        waiting = Set(findfirst(p -> p === item, pending) for item in items)
+        waiting = Set{Int}()
+        for item in items
+            index = findfirst(p -> p === item, pending)
+            index === nothing && error("Reconstruction item is absent from its dependency graph")
+            push!(waiting, index)
+        end
         failures = Any[]
         while !isempty(waiting)
             ready = sort!([i for i in waiting if issubset(dependencies[i], done) && all(n -> Base.invokelatest(isdefined, mod, Symbol(n)), value_dependencies[i])])

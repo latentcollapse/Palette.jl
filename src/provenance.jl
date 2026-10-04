@@ -190,6 +190,6 @@ end
 
 function binding_sources(origin, call)
     haskey(origin, "sources") && return origin["sources"]
-    return Dict(p => Dict("path" => p, "stamp" => collect(stamp), "sha256" => nothing, "kind" => "legacy_call")
+    return Dict{String, Any}(p => Dict{String, Any}("path" => p, "stamp" => collect(stamp), "sha256" => nothing, "kind" => "legacy_call")
         for (p, stamp) in get(CALL_FILES, call, Tuple{String, Tuple{Float64, Int}}[]))
 end

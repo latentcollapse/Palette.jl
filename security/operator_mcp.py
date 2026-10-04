@@ -68,7 +68,11 @@ def send_child(msg):
 def pump(child, destination):
     try:
         for line in child.stdout:
-            destination.put(json.loads(line))
+            try:
+                frame = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"Invalid operator JSON frame ({len(line)} characters): {line[:256]!r}") from exc
+            destination.put(frame)
     except Exception as exc:
         destination.put(exc)
     finally:

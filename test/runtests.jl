@@ -236,6 +236,8 @@ end
 
     @test OPERATOR_INVOCATION_VOCAB isa OperatorVocabulary
     @test STATE_QUERY_VOCAB isa OperatorVocabulary
+    @test isempty(OperatorVocabulary("minimal", "default schemas", String[]).input_schema)
+    @test isempty(OperatorVocabulary("input", "default output", String[], Dict{String,Any}()).output_schema)
 end
 
 @testset "InvokeOperator (real registered function)" begin
@@ -322,9 +324,10 @@ end
 
     dir2 = mktempdir(); script = joinpath(dir2, "killself.sh")
     write(script, "#!/bin/sh\nkill -9 \$\$\n")
-    sig = execute(ShellEscape("sh '$script'"))
+    sig = execute(ShellEscape("exec sh '$script'"))
     @test sig.result.data["error_class"] == "signal_death"
     @test sig.result.data["exit_code"] == 137
+    @test execute(ShellEscape("exit 137")).result.data["error_class"] == "clean_failure"
 
     ok = execute(ShellEscape("printf hi"))
     @test ok.result.success

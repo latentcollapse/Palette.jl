@@ -40,6 +40,7 @@ class WorkspaceRouterIntegration(unittest.TestCase):
             "PALETTE_SCRATCH_ROOT": str(root / "scratch"),
         }
         self.env = env
+        self.router_stderr = (root / "router-stderr.log").open("w+")
         self.start_router()
 
     def start_router(self):
@@ -47,7 +48,7 @@ class WorkspaceRouterIntegration(unittest.TestCase):
             [sys.executable, str(ROUTER)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=self.router_stderr,
             text=True,
             env=self.env,
         )
@@ -65,6 +66,8 @@ class WorkspaceRouterIntegration(unittest.TestCase):
                 self.proc.wait()
             if self.proc.stdout:
                 self.proc.stdout.close()
+        if getattr(self, "router_stderr", None):
+            self.router_stderr.close()
         if getattr(self, "tmp", None):
             self.tmp.cleanup()
 
@@ -85,7 +88,9 @@ class WorkspaceRouterIntegration(unittest.TestCase):
         frame = json.loads(raw)
         self.assertIn("result", frame, frame)
         reply = frame["result"]
-        self.assertEqual(bool(reply.get("isError")), error, reply)
+        self.router_stderr.flush()
+        diagnostics = Path(self.router_stderr.name).read_text(errors="replace")[-12000:]
+        self.assertEqual(bool(reply.get("isError")), error, f"{reply}\n{diagnostics}")
         return json.loads(reply["content"][0]["text"])
 
     def test_portable_and_compatibility_installation(self):
