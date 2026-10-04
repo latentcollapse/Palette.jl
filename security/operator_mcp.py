@@ -60,6 +60,16 @@ def project_result(event, *, full=False, ephemeral=False):
     return result
 
 
+def tool_failure(exc):
+    """All tool responses retain a JSON payload for routed and direct clients."""
+    event = {"success": False,
+             "error": f"{type(exc).__name__}: {exc}. Check connection status and restoration evidence; work may not have completed."}
+    if connection_failure is not None:
+        event["connection_failure"] = connection_failure
+    return {"content": [{"type": "text", "text": json.dumps(event, ensure_ascii=False)}],
+            "isError": True}
+
+
 def send_child(msg):
     proc.stdin.write(json.dumps(msg) + "\n")
     proc.stdin.flush()
@@ -267,7 +277,7 @@ def main():
                         result = {"content": [{"type": "text", "text": json.dumps(event, ensure_ascii=False)}],
                                   "isError": event.get("success") is False}
                     except Exception as exc:
-                        result = {"content": [{"type": "text", "text": f"{type(exc).__name__}: {exc}. Check connection status and restoration evidence; workspace files remain."}], "isError": True}
+                        result = tool_failure(exc)
                 else:
                     print(json.dumps({"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": "Unknown method"}}), flush=True)
                     continue

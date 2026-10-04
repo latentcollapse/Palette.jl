@@ -93,6 +93,14 @@ class WorkspaceRouterIntegration(unittest.TestCase):
         self.assertEqual(bool(reply.get("isError")), error, f"{reply}\n{diagnostics}")
         return json.loads(reply["content"][0]["text"])
 
+    def test_startup_failure_keeps_its_cause_through_router(self):
+        self.proc.stdin.close(); self.proc.wait(timeout=60); self.proc.stdout.close()
+        self.env["PALETTE_HOST"] = str(Path(self.tmp.name) / "missing-host")
+        self.start_router()
+        result = self.call("palette", {"context_id": "failed-startup", "code": "1"}, error=True)
+        self.assertIn("FileNotFoundError", result["error"])
+        self.assertTrue(result["workspace_id"])
+
     def test_portable_and_compatibility_installation(self):
         for fmt in ("portable", "codex"):
             with self.subTest(format=fmt):

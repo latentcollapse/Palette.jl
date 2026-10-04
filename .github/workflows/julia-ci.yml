@@ -128,8 +128,8 @@ jobs:
     - name: Setup Rust
       uses: dtolnay/rust-toolchain@stable
 
-    - name: Install bubblewrap
-      run: sudo apt-get update && sudo apt-get install -y bubblewrap
+    - name: Configure runner Bubblewrap namespaces
+      run: bash scripts/setup-ci-bubblewrap.sh
 
     - name: Instantiate the operator and its test environment
       run: |
@@ -160,8 +160,8 @@ jobs:
       with:
         python-version: '3.12'
     - uses: dtolnay/rust-toolchain@stable
-    - name: Install bubblewrap
-      run: sudo apt-get update && sudo apt-get install -y bubblewrap
+    - name: Configure runner Bubblewrap namespaces
+      run: bash scripts/setup-ci-bubblewrap.sh
     - name: Prepare real operator dependencies and host
       run: |
         julia --project=@. -e 'using Pkg; Pkg.instantiate()'
