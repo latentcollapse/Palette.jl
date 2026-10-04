@@ -10,11 +10,16 @@ From the Palette repository root, after installing the runtime prerequisites:
 ```sh
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
 cargo build --manifest-path host/Cargo.toml --release --locked
+python3 security/prewarm_depot.py --project-dir "$PWD" \
+  --host-bin "$PWD/host/target/release/palette-host"
 python3 security/install_operator_plugin.py --format portable \
   --plugin-dir "$HOME/.local/share/palette-plugin" \
   --workspace-dir /absolute/path/to/workspace \
   --bin-dir "$HOME/.local/bin"
 ```
+
+Cold preparation can take several minutes. Complete it before connecting an
+interactive client; see [preparation and updates](../../docs/install.md).
 
 Import that generated directory in an Agent Plugins-compatible client. For the
 Codex compatibility format, omit `--format portable` and choose a separate plugin

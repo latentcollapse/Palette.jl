@@ -22,6 +22,7 @@ bubblewrap, and a Rust build toolchain, then build the host:
 
 ```sh
 cargo build --manifest-path host/Cargo.toml --release --locked
+python3 security/prewarm_depot.py --project-dir "$PWD" --host-bin "$PWD/host/target/release/palette-host"
 host/target/release/palette-host session --repo-dir "$PWD" --project-dir "$PWD" --workspace-dir /absolute/path/to/workspace --state-dir /absolute/path/to/state --ceiling '{}'
 ```
 
@@ -43,7 +44,7 @@ OS sandbox; the supervised host does.
 ## Documentation
 
 [Plugin installation](plugins/palette/README.md) · [Operator API](docs/operator.md) · [Installation and MCP](docs/install.md) ·
-[Workspaces and patches](docs/workspaces.md) · [Authority boundaries](docs/authority.md)
+[Workspaces and patches](docs/workspaces.md) · [Authority boundaries](docs/authority.md) · [Static analysis policy](docs/static-analysis.md)
 
 ## Repository layout
 
