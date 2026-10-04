@@ -158,7 +158,8 @@ pub fn build_bwrap_argv(s: &SandboxSpec) -> Result<Vec<String>, String> {
     }
     push(&["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--dir", "/run/palette", "--tmpfs", "/run/palette",
            "--dir", "/run/palette/home", "--clearenv", "--die-with-parent", "--new-session", "--cap-drop", "ALL",
-           "--ro-bind", "/usr", "/usr", "--symlink", "usr/lib", "/lib", "--symlink", "usr/lib", "/lib64",
+           // Preserve the host ELF loader layout (Ubuntu differs from Arch).
+           "--ro-bind", "/usr", "/usr", "--symlink", "usr/lib", "/lib", "--ro-bind", "/lib64", "/lib64",
            "--symlink", "usr/bin", "/bin", "--ro-bind", "/etc/ld.so.cache", "/etc/ld.so.cache",
            "--ro-bind", &toolchain, &toolchain,
            // The depot, writable at its own real path; the source is this

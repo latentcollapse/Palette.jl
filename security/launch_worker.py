@@ -199,7 +199,9 @@ def build_bwrap_argv(
         # base OS -- read-only
         "--ro-bind", "/usr", "/usr",
         "--symlink", "usr/lib", "/lib",
-        "--symlink", "usr/lib", "/lib64",
+        # Ubuntu and Arch place the ELF loader in different library layouts.
+        # Bind the host directory instead of assuming /lib64 -> /usr/lib.
+        "--ro-bind", "/lib64", "/lib64",
         "--symlink", "usr/bin", "/bin",
         "--ro-bind", "/etc/ld.so.cache", "/etc/ld.so.cache",
         # julia toolchain -- read-only
