@@ -1,0 +1,17 @@
+[package]
+name = "palette-host"
+version = "0.1.0"
+edition = "2021"
+description = "Palette host: the sandbox launcher, persistent session, and capability broker for the Palette kernel"
+
+[dependencies]
+serde_json = "1"
+libc = "0.2"
+ureq = { version = "2", default-features = false, features = ["tls"] }
+# Pure Rust, zero transitive dependencies (RustCrypto): the broker computes
+# fs_digest itself, outside the sandbox, rather than delegating the
+# independent eye to the agent host (FM-SLICE-A2b).
+sha2 = "0.10"
+
+[profile.release]
+opt-level = 3

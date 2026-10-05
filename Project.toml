@@ -1,7 +1,7 @@
 name = "Neura"
 uuid = "9bc630f3-7552-4c63-bf52-3e59549be914"
 version = "0.0.1"
-authors = ["Experiment 001 lab"]
+authors = ["Matt C"]
 
 [deps]
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"

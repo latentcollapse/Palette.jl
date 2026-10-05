@@ -69,17 +69,31 @@ if ccall(:jl_generating_output, Cint, ()) == 1
         isempty(STATE_DIR[]) || rm(STATE_DIR[]; recursive=true, force=true)
         STATE_DIR[] = ""
         REVIVAL_REPORT[] = ""
+        revival_observation!()
         LAST_SAVED_CALL[] = 0
         LAST_SNAPSHOT_SECONDS[] = 0.0
         GLOBAL_STATE[] = nothing
         empty!(OUTPUTS)
         empty!(WORKSPACE_PACKAGES)
+        empty!(WORKSPACE_DECLARATIONS)
+        empty!(RELOAD_REPORTS)
+        RELOAD_SEQUENCE[] = 0
         empty!(USED_FILES)
         empty!(DEFINITION_LOG)
         empty!(CALL_FILES)
         foreach(f -> rm(f[1]; force=true), LATE_FILES)
         empty!(LATE_FILES)
         empty!(BINDING_SEEN)
+        empty!(BINDING_ORIGINS)
+        empty!(BINDING_IDENTITIES)
+        OBSERVATION_ACK[] = nothing
+        empty!(TURN_COSTS)
+        empty!(LAST_RUNNING[])
+        empty!(REPORTED_TASKS)
+        empty!(FINISH_REPORTED)
+        empty!(TASK_OBSERVATIONS)
+        TASK_SEQUENCE[] = 0
+        TASK_EPOCH[] = ""
     end
     precompile(Base.open, (Base.RawFD,))
 end
