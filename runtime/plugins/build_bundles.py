@@ -81,7 +81,7 @@ def main():
     claude.update({'LICENSE':license_text,'NOTICE':source['NOTICE'],'MIT-INHERITED.txt':inherited})
     mcpb=zip_bytes({**shared,**claude})
     portable={n.removeprefix('runtime/plugins/palette/'):d for n,d in source.items() if n.startswith('runtime/plugins/palette/')}
-    portable['README.md']=portable['README.md'].replace(b'(../../docs/', b'(sdk/runtime/docs/')
+    portable['README.md']=source['runtime/plugins/DISTRIBUTION.md']
     portable_manifest=json.loads(portable['plugin.json'])
     claude_plugin_manifest={key:portable_manifest[key] for key in
                             ('name','version','description','author','license','repository')}
