@@ -64,6 +64,13 @@ class PatchTests(unittest.TestCase):
         finally:
             os.close(fd)
 
+    def test_D02_patch_roots_cannot_cover_private_grants(self):
+        alias = Path(self.tmp.name) / "grants-alias"
+        alias.symlink_to(self.store, target_is_directory=True)
+        for root in (self.store, self.store.parent, alias):
+            with self.subTest(root=root), self.assertRaises(PermissionError):
+                PatchBroker(self.store, {"unsafe":str(root)})
+
     def test_conflict_consumes_without_overwrite(self):
         request = self.prepare()
         self.approve(request)

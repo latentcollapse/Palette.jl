@@ -17,7 +17,7 @@ def run(command, env):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--project-dir", required=True, help="Test environment with Neura, JSON, CSV, DataFrames, EzXML and IJulia")
+    parser.add_argument("--project-dir", required=True, help="Test environment with Palette, JSON, CSV, DataFrames, EzXML and IJulia")
     parser.add_argument("--implementation", choices=("both", "rust", "python"), default="both")
     args = parser.parse_args()
     project = Path(args.project_dir).absolute()
@@ -30,9 +30,9 @@ def main():
     env.pop("PALETTE_HOST_BIN", None)
     # This is a test dependency check, not an automatic operator installation.
     run(["julia", "--startup-file=no", f"--project={project}", "-e",
-         'using Neura, JSON, CSV, DataFrames, EzXML, IJulia; '
-         'realpath(dirname(dirname(pathof(Neura)))) == realpath(ARGS[1]) || '
-         'error("Test environment points to a different Neura source tree")', ROOT], env)
+         'using Palette, JSON, CSV, DataFrames, EzXML, IJulia; '
+         'realpath(dirname(dirname(pathof(Palette)))) == realpath(ARGS[1]) || '
+         'error("Test environment points to a different Palette source tree")', ROOT], env)
     run(["git", "diff", "--check"], env)
     run(["node", ROOT / "runtime/scripts/check-test-policy.mjs"], env)
     run(["julia", "--startup-file=no", f"--project={ROOT}", ROOT / "test/runtests.jl"], env)

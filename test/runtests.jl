@@ -1,5 +1,5 @@
 using Test
-using Neura
+using Palette
 using JSON
 using Sockets
 using SHA
@@ -29,7 +29,7 @@ end
 ok(result) = Dict("approved" => true, "result" => Dict("status" => "ok", "result" => result))
 
 @testset "RLM from Julia" begin
-    R = Neura.Api.rlm
+    R = Palette.Api.rlm
     child = Dict("rlm_child_id" => "c1", "name" => "w", "session_dir" => "/s/c1", "model" => "openai/luna")
     with_fake_broker((t, p) -> t == "rlm.run" ? ok(child) :
                                 t == "rlm.collect" ? ok(Dict("results" => [Dict("rlm_child_id" => "c1", "status" => "done",
@@ -82,14 +82,14 @@ ok(result) = Dict("approved" => true, "result" => Dict("status" => "ok", "result
 end
 
 @testset "Stress runner" begin
-    r = Neura.stress("[ \$((STRESS_RUN % 13)) -ne 0 ] || { echo boom at \$STRESS_RUN; exit 3; }"; n=100, jobs=8)
+    r = Palette.stress("[ \$((STRESS_RUN % 13)) -ne 0 ] || { echo boom at \$STRESS_RUN; exit 3; }"; n=100, jobs=8)
     @test r.runs == 100 && r.outcomes == Dict(0 => 93, 3 => 7)
     @test r.first_failure[1] == 13 && occursin("boom at 13", r.first_failure[3])
     text = sprint(show, MIME"text/plain"(), r)
     @test occursin("100 runs in", text) && occursin("7 failed (exit codes: 0×93, 3×7)", text) && occursin("STRESS_RUN=13", text)
-    ok = Neura.stress("true"; n=10, jobs=2)
+    ok = Palette.stress("true"; n=10, jobs=2)
     @test ok.first_failure === nothing && occursin("0 failed", sprint(show, MIME"text/plain"(), ok))
-    slow = Neura.stress("sleep 1"; n=100, jobs=2, seconds=2)
+    slow = Palette.stress("sleep 1"; n=100, jobs=2, seconds=2)
     @test 0 < slow.runs < 100 && occursin("of 100 runs", sprint(show, MIME"text/plain"(), slow))
 end
 
@@ -98,7 +98,7 @@ end
     fx(name) = read(joinpath(@__DIR__, "fixtures", "digest", name), String)
     # Real tool output, captured from each toolchain, after a long build log.
     noise = join(["   Compiling dep-$i v0.1.$i (registry)" for i in 1:150], "\n") * "\n"
-    head(name) = first(split(Neura.with_digest(noise * fx(name)), "\n\n"))
+    head(name) = first(split(Palette.with_digest(noise * fx(name)), "\n\n"))
     @test startswith(head("cargo_build.txt"), "[digest of 185 lines of output: 3 errors]")
     @test occursin("src/main.rs:3:18  error[E0308]: mismatched types", head("cargo_build.txt"))
     @test occursin("2 failing tests", head("cargo_test.txt"))
@@ -111,19 +111,19 @@ end
     @test occursin("test_x.py:3  test test_x.T.test_a: AssertionError: 2 != 3", head("py_unittest.txt"))
     @test occursin("1 failing test]", head("node_test.txt"))
     # The whole output still follows the digest.
-    @test endswith(Neura.with_digest(noise * fx("cargo_build.txt")), fx("cargo_build.txt"))
+    @test endswith(Palette.with_digest(noise * fx("cargo_build.txt")), fx("cargo_build.txt"))
     # Short output, and long output with nothing failing, are left as they are.
-    @test Neura.with_digest(fx("tsc.txt")) == fx("tsc.txt")
-    @test Neura.with_digest(noise) == noise
-    @test Neura.with_digest("\e[31mred\e[0m plain") == "red plain"
+    @test Palette.with_digest(fx("tsc.txt")) == fx("tsc.txt")
+    @test Palette.with_digest(noise) == noise
+    @test Palette.with_digest("\e[31mred\e[0m plain") == "red plain"
     # A flood of failures is capped.
     flood = noise * join(["test t$i ... FAILED" for i in 1:40], "\n")
-    @test occursin("… and 28 more", Neura.with_digest(flood))
+    @test occursin("… and 28 more", Palette.with_digest(flood))
 end
 
 @testset "Workspace map" begin
     root = mktempdir()
-    @test occursin("the workspace is empty", Neura.workspace_map(root))
+    @test occursin("the workspace is empty", Palette.workspace_map(root))
     mkpath(joinpath(root, "core", "src")); mkpath(joinpath(root, "api", "src")); mkpath(joinpath(root, "node_modules", "x"))
     write(joinpath(root, "Cargo.toml"), "[workspace]\nmembers = [\"core\"]\n")
     write(joinpath(root, "core", "src", "lib.rs"), "pub fn f() {}\n")
@@ -131,13 +131,13 @@ end
     write(joinpath(root, "api", "src", "index.ts"), "export const x = 1\n")
     write(joinpath(root, "node_modules", "x", "a.js"), "")
     write(joinpath(root, "Makefile"), "build:\n\tcargo build\ntest: build\n\tcargo test\n.PHONY: build test\n")
-    m = Neura.workspace_map(root)
+    m = Palette.workspace_map(root)
     @test startswith(m, "[workspace map] 5 files")          # node_modules left out
     @test occursin("Rust 1", m) && occursin("TypeScript 1", m) && !occursin("JavaScript", m)
     @test occursin("cargo: Cargo.toml (workspace)", m)
     @test occursin("npm: api/package.json scripts: build, test", m) || occursin("npm: api/package.json scripts: test, build", m)
     @test occursin("Makefile: Makefile targets: build, test", m)
-    @test length(m) <= Neura.MAP_MAX_CHARS + 2
+    @test length(m) <= Palette.MAP_MAX_CHARS + 2
 end
 
 @testset "KernelState" begin
@@ -152,14 +152,14 @@ end
 end
 
 @testset "Bounded nested results (field B03)" begin
-    @test Neura.bounded_data((method_list=methods(Neura.Api.output),)) isa AbstractString
+    @test Palette.bounded_data((method_list=methods(Palette.Api.output),)) isa AbstractString
     normal = (values=[[1, 2], [3, 4]], label="λ")
-    @test Neura.bounded_data(normal) === normal
+    @test Palette.bounded_data(normal) === normal
     cycle = Any[]; push!(cycle, cycle)
-    @test Neura.bounded_data(cycle) isa AbstractString
-    for scalar in (Symbol(repeat("q", 2_000_000)), repeat("\0", Neura.MAX_DATA_JSON_BYTES))
-        projected = Neura.bounded_data(scalar)
-        @test projected isa AbstractString && projected !== scalar && ncodeunits(projected) <= Neura.MAX_OUTPUT_BYTES + 64
+    @test Palette.bounded_data(cycle) isa AbstractString
+    for scalar in (Symbol(repeat("q", 2_000_000)), repeat("\0", Palette.MAX_DATA_JSON_BYTES))
+        projected = Palette.bounded_data(scalar)
+        @test projected isa AbstractString && projected !== scalar && ncodeunits(projected) <= Palette.MAX_OUTPUT_BYTES + 64
     end
 end
 
@@ -292,12 +292,12 @@ end
     old = get(ENV, "PALETTE_BROKER_SOCKET", nothing)
     ENV["PALETTE_BROKER_SOCKET"] = joinpath(dir, "b.sock")
     try
-        result = Neura.fs_digest([path])
+        result = Palette.fs_digest([path])
         @test result["observer"] == "host"
         @test result["digests"][path]["sha256"] == "ff"^32
         @test seen[1]["category"] == "fs_digest"
         @test seen[1]["params"]["paths"] == [path]
-        @test_throws ErrorException Neura.fs_digest([joinpath(dir, "other.txt")])
+        @test_throws ErrorException Palette.fs_digest([joinpath(dir, "other.txt")])
     finally
         old === nothing ? delete!(ENV, "PALETTE_BROKER_SOCKET") : (ENV["PALETTE_BROKER_SOCKET"] = old)
         close(server)
@@ -532,7 +532,7 @@ end
     # bash returns the whole result, not only the exit code
     r = run("r = bash(\"echo out; echo err >&2; exit 4\")")
     @test r.success
-    @test r.data isa Neura.ShellResult
+    @test r.data isa Palette.ShellResult
     @test (r.data.exitcode, r.data.stdout, r.data.stderr) == (4, "out\n", "err\n")
     @test !success(r.data)
     @test run("sh\"x=2; echo \$((x+1))\"").data.stdout == "3\n"
@@ -544,11 +544,11 @@ end
     # varinfo lists the session's own bindings and none of the kernel's
     rows = run("varinfo()").data.rows
     @test "r" in first.(rows)
-    @test isempty(intersect(first.(rows), string.(collect(Neura.KERNEL_BINDINGS))))
+    @test isempty(intersect(first.(rows), string.(collect(Palette.KERNEL_BINDINGS))))
 
-    # turn code reaches authority through Neura, and nothing else of the package
-    @test run("Neura.request_capability isa Function").data
-    @test !run("Neura.reset_kernel_state()").success
+    # turn code reaches authority through Palette, and nothing else of the package
+    @test run("Palette.request_capability isa Function").data
+    @test !run("Palette.reset_kernel_state()").success
 
     # the receipt log keeps outcomes, not values
     run("zeros(10^6)")

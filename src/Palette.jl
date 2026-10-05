@@ -1,5 +1,5 @@
 """
-Neura — Experiment 001: Palette operator surface, built on IJulia
+Palette — persistent Julia operator core
 
 This module implements a persistent Julia/IJulia kernel operator surface that:
 - Maintains state across executions (Phase 1)
@@ -19,7 +19,7 @@ comments for navigation.
 
 See the repository README for the full brief.
 """
-module Neura
+module Palette
 
 using Dates
 using UUIDs
@@ -197,14 +197,13 @@ mutable struct KernelState
         # precompilation refuses evaluation into any other module.
         state.eval_module = something(eval_module, Module(Symbol("KernelScope_$(replace(string(state.id), '-' => '_'))")))
         # `Core.eval`'d code lands in this fresh module, not Main -- `using
-        # Neura` at Main scope (e.g. in runtime/scripts/session_loop.jl) does not
-        # make `Neura` visible here (confirmed by direct testing: a real
-        # UndefVarError for `Neura` from inside eval_module otherwise).
+        # Palette` at Main scope (e.g. in runtime/scripts/session_loop.jl) does not
+        # make `Palette` visible here (confirmed by direct testing: a real
+        # UndefVarError for `Palette` from inside eval_module otherwise).
         # Bound once here so turn code can call
-        # `Neura.request_capability(...)` without re-importing it on every
+        # `Palette.request_capability(...)` without re-importing it on every
         # single turn just to reach the one function that's the entire
         # point of the authority fence.
-        Core.eval(state.eval_module, :(const Neura = $(Api)))
         Core.eval(state.eval_module, :(const Palette = $(Api)))
         Core.eval(state.eval_module, :(const Main = $(state.eval_module)))
         # A bare `Module(...)` never gets `include` for free (confirmed by
@@ -707,56 +706,56 @@ end
 """
     Api
 
-What turn code sees as `Neura`: the one entry point to broker-mediated
+What turn code sees as `Palette`: the one entry point to broker-mediated
 authority. The whole package used to be bound there, so a model exploring it
 found `reset_kernel_state()`, which silently discarded every binding, and
 `discover()`, which listed operators that do not exist.
 """
 module Api
-import ..Neura
-host_request(rtype::AbstractString, payload::AbstractDict=Dict{String,Any}()) = Neura.host_request(rtype, payload)
-const rlm = Neura.rlm
+import ..Palette
+host_request(rtype::AbstractString, payload::AbstractDict=Dict{String,Any}()) = Palette.host_request(rtype, payload)
+const rlm = Palette.rlm
 request_capability(category::String, params::Dict=Dict{String,Any}(); kwargs...) =
-    Neura.request_capability(category, params; kwargs...)
-reloads() = deepcopy(Neura.RELOAD_REPORTS)
-revival() = deepcopy(Neura.REVIVAL_OBSERVATION[])
-jobs() = Neura.task_observations()
-taskinfo(t::Task) = Neura.task_observation(t)
-environment(name::AbstractString) = Neura.package_environment(name)
-provenance(name::Symbol; strong::Bool=false) = Neura.binding_provenance(name; strong)
-world() = Neura.get_kernel_state().eval_module
-worldinfo() = Dict("module" => string(nameof(world())), "epoch" => Neura.TASK_EPOCH[], "main_is_world" => getglobal(world(), :Main) === world(), "host_main_is_world" => world() === Main)
-read_artifact(path::AbstractString; kwargs...) = Neura.read_artifact(path; kwargs...)
-changes(; acknowledge::Bool=false) = Neura.changes_since_ack(; acknowledge)
-costs() = deepcopy(Neura.TURN_COSTS)
+    Palette.request_capability(category, params; kwargs...)
+reloads() = deepcopy(Palette.RELOAD_REPORTS)
+revival() = deepcopy(Palette.REVIVAL_OBSERVATION[])
+jobs() = Palette.task_observations()
+taskinfo(t::Task) = Palette.task_observation(t)
+environment(name::AbstractString) = Palette.package_environment(name)
+provenance(name::Symbol; strong::Bool=false) = Palette.binding_provenance(name; strong)
+world() = Palette.get_kernel_state().eval_module
+worldinfo() = Dict("module" => string(nameof(world())), "epoch" => Palette.TASK_EPOCH[], "main_is_world" => getglobal(world(), :Main) === world(), "host_main_is_world" => world() === Main)
+read_artifact(path::AbstractString; kwargs...) = Palette.read_artifact(path; kwargs...)
+changes(; acknowledge::Bool=false) = Palette.changes_since_ack(; acknowledge)
+costs() = deepcopy(Palette.TURN_COSTS)
 function costs(n::Integer)
-    haskey(Neura.TURN_COSTS, n) || error("no phase observations retained for call $n")
-    return deepcopy(Neura.TURN_COSTS[n])
+    haskey(Palette.TURN_COSTS, n) || error("no phase observations retained for call $n")
+    return deepcopy(Palette.TURN_COSTS[n])
 end
 
 """
-    Neura.output(n) -> String
+    Palette.output(n) -> String
 
-Everything call `n` printed, in full, for the last $(Neura.KEEP_OUTPUTS) calls.
+Everything call `n` printed, in full, for the last $(Palette.KEEP_OUTPUTS) calls.
 """
 function output(n::Integer)
-    haskey(Neura.OUTPUTS, n) && return Neura.OUTPUTS[n]
-    error("call $n printed nothing, or is older than the last $(Neura.KEEP_OUTPUTS) calls")
+    haskey(Palette.OUTPUTS, n) && return Palette.OUTPUTS[n]
+    error("call $n printed nothing, or is older than the last $(Palette.KEEP_OUTPUTS) calls")
 end
 
 """
-    Neura.stress(cmd; n = 200, jobs = 8, seconds = 45)
+    Palette.stress(cmd; n = 200, jobs = 8, seconds = 45)
 
 Run the shell command `cmd` `n` times, `jobs` at a time, and report the exit
 codes and the first failing run; run `i` sees `STRESS_RUN=i`.
 """
-stress(cmd::AbstractString; kwargs...) = Neura.stress(cmd; kwargs...)
+stress(cmd::AbstractString; kwargs...) = Palette.stress(cmd; kwargs...)
 end
 
 # Bindings the kernel creates in every session module. They are not the
 # model's own variables, so GetState and varinfo() leave them out.
-const KERNEL_BINDINGS = (:eval, :include, :bash, Symbol("@sh_str"), :Neura, :ShellResult,
-                         :varinfo, :kernelinfo, :ans, :PAYLOAD, :Main, :Palette)
+const KERNEL_BINDINGS = (:eval, :include, :bash, Symbol("@sh_str"), :Palette, :ShellResult,
+                         :varinfo, :kernelinfo, :ans, :PAYLOAD, :Main)
 
 """
     VarInfo
@@ -818,7 +817,7 @@ the loadable and loaded packages, and the helpers turn code can use.
 function kernelinfo()
     mod = get_kernel_state().eval_module
     deps = try
-        sort!([String(k) for k in keys(get(Base.parsed_toml(Base.active_project()), "deps", Dict())) if k != "Neura"])
+        sort!([String(k) for k in keys(get(Base.parsed_toml(Base.active_project()), "deps", Dict())) if k != "Palette"])
     catch
         String[]
     end
@@ -838,7 +837,7 @@ function kernelinfo()
         helpers    bash("cmd") or sh"cmd" -> ShellResult(exitcode, stdout, stderr); sh"..." keeps \$ for the shell
                    PAYLOAD: this call's payload text, raw; write(path, PAYLOAD) writes a file with no Julia quoting
                    ans: the last call's value.  varinfo(): your bindings.  include("file.jl") loads a workspace file
-                   Neura.output(n): everything call n printed, in full, when the result you saw was elided
+                   Palette.output(n): everything call n printed, in full, when the result you saw was elided
         reloading  a package loaded from the workspace is reloaded when its source changes, before the next
                    call or include runs, so `using` it again is not needed. When the workspace is itself a
                    package, it comes first in LOAD_PATH, ahead of the kernel's own packages""")
@@ -884,7 +883,7 @@ Marks each top-level statement for soft scope, as `REPL.softscope` does for
 the REPL and IJulia: a top-level `for` or `while` loop assigns to an
 existing global instead of warning and making a new local. Without it, turn
 code behaved like a script file, not an interactive session. The same
-transform, kept here so Neura does not depend on the REPL stdlib.
+transform, kept here so Palette does not depend on the REPL stdlib.
 """
 function softscope(@nospecialize ex)
     ex isa Expr || return ex
@@ -915,7 +914,7 @@ function describe_error(e, bt, call_file::AbstractString, scope::Module)
     catch
         return msg
     end
-    boundary = findfirst(f -> f.func === :execute && endswith(string(f.file), "Neura.jl"), frames)
+    boundary = findfirst(f -> f.func === :execute && endswith(string(f.file), "Palette.jl"), frames)
     frames = boundary === nothing ? frames : frames[1:boundary-1]
     filter!(f -> !(f.func === :eval && clean(f.file) == "boot.jl"), frames)
     # No frame from the model's own code (a failed `using`, say): the rest is
@@ -1006,8 +1005,8 @@ function execute(op::ExecuteCode)::OperationReceipt
         # against the current world.
         own_name = nameof(state.eval_module)
         for sym in Base.invokelatest(names, state.eval_module; all=true)
-            # :Neura is the constant KernelState's constructor binds here so
-            # turn code can reach `Neura.request_capability` without
+            # :Palette is the constant KernelState's constructor binds here so
+            # turn code can reach `Palette.request_capability` without
             # re-importing it every turn -- not a user variable, must not
             # show up in GetState/discovery any more than :eval or :include do.
             (sym === own_name || sym in KERNEL_BINDINGS) && continue
@@ -1144,7 +1143,7 @@ two simplest deliberate bypass shapes; it does not stop a determined
 adversarial payload built to route around exactly this check.
 **Genuinely untrusted generated code that must be hard-isolated belongs
 in a disposable child worker (`spawn_child_worker`, already OS-level
-sandboxed and adversarially tested -- see docs/THREAT_MODEL.md), not
+sandboxed and adversarially tested -- see runtime/docs/authority.md), not
 same-process ephemeral tool execution.** See the repository README's
 Authority philosophy note for how this relates to (and is separate from)
 `SafetyGuard`, a different, unrelated policy layer.
@@ -1220,7 +1219,7 @@ function execute(op::EphemeralTool)::OperationReceipt
     # the SAME authority ceiling as durable code (broker-mediated, not
     # granted by which module happens to run it), so it needs the same
     # reachable path to request_capability.
-    Core.eval(tool_module, :(const Neura = $(@__MODULE__)))
+    Core.eval(tool_module, :(const Palette = $(@__MODULE__)))
     # Deliberately NOT given an `include` binding, unlike the persistent
     # eval_module: check_ephemeral_source! only inspects the source string
     # passed directly to EphemeralTool -- it cannot see inside a file that
@@ -1266,7 +1265,7 @@ sets it to the sandbox's private home, because there `pwd()` is the agent's
 task workspace and the log would show up among the task's own files.
 
 Deliberately mechanical, not model-authored: a content hash (same
-convention as NeuraBash's own Forge module -- `bytes2hex(sha256(...))`),
+convention -- `bytes2hex(sha256(...))`),
 success/failure, and the source itself, so a human or agent can
 reconstruct what ran without the now-garbage-collected ephemeral module
 still existing. Written unconditionally at zero LLM cost regardless of
@@ -1730,7 +1729,7 @@ function request_capability(category::String, params::Dict=Dict{String,Any}(); t
 end
 
 """
-    Neura.fs_digest(paths::Vector{String}) -> Dict
+    Palette.fs_digest(paths::Vector{String}) -> Dict
 
 Digest files with host privilege — the independent eye (FM-SLICE-A2). The
 request goes through the capability broker like any other: the broker reads
@@ -1775,7 +1774,7 @@ real eval-based execution, real state query, real discovery, and (if `sh`
 is available) a real shell escape.
 """
 function run_demo()
-    println("=== Neura Demo ===\n")
+    println("=== Palette Demo ===\n")
 
     state = demo_setup()
     println("1. Kernel initialized with ID: $(state.id)\n")

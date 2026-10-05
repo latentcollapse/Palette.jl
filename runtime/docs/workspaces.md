@@ -37,6 +37,6 @@ Targets should be a separate source checkout. Editing that checkout does not dep
 
 ## Deployment
 
-The installer now generates operator_workspace_router.py as the entrypoint. Existing plugin configuration and optional toolchain environment are preserved. Keep the legacy OPERATOR_WORKSPACE and PALETTE_STATE_DIR unchanged when migrating an existing desk; choose a PALETTE_WORKSPACE_STATE_ROOT outside the worker's file mounts.
+The installer generates serve_palette.py as the entrypoint, which loads the workspace router. Existing plugin configuration and optional toolchain environment are preserved. Keep the legacy OPERATOR_WORKSPACE and PALETTE_STATE_DIR when migrating an existing desk if their layout passes the canonical separation checks. OPERATOR_WORKSPACE must not overlap the runtime source, saved state, PALETTE_WORKSPACE_STATE_ROOT, or host scratch area. Patch targets must exclude registry and grant storage. Invalid layouts fail before tool discovery; a workspace covering your home directory is therefore unsuitable for the routed adapter.
 
 The MCP surface is palette, palette_control, palette_workspace, palette_patch. Client tool discovery may need refreshing after switching the entrypoint. Actual Chat confirmation availability must be established from its initialize capabilities and an interaction; local protocol tests alone do not prove the Chat UI.

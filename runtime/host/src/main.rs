@@ -90,7 +90,7 @@ fn subset(argv: &[String]) -> Result<i32, String> {
 
 /// Precompile every stdlib and project dependency into the real depot, in the
 /// worker's own sandbox so the caches record the paths a worker sees. Run once
-/// per depot, and again after Neura or the project changes.
+/// per depot, and again after Palette or the project changes.
 const PREWARM: &str = include_str!("../../security/prewarm_workload.jl");
 
 fn prewarm(argv: &[String]) -> Result<i32, String> {

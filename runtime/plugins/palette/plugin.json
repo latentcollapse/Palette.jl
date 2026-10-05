@@ -7,7 +7,7 @@
     "name": "Matt C"
   },
   "repository": "https://github.com/latentcollapse/Palette.jl",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": [
     "julia",
     "mcp",

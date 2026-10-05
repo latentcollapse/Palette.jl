@@ -20,6 +20,7 @@ import time
 import uuid
 
 from patch_broker import PatchBroker, PATCH_SCHEMA
+from filesystem_layout import require_disjoint
 
 REPO = Path(os.environ.get("PALETTE_REPO", Path(__file__).absolute().parents[2])).resolve()
 BASE = Path(os.environ["OPERATOR_WORKSPACE"]).resolve()
@@ -30,6 +31,9 @@ MAX_LIVE = int(os.environ.get("PALETTE_MAX_LIVE_WORKSPACES", "4"))
 IDLE_SECONDS = float(os.environ.get("PALETTE_WORKSPACE_IDLE_SECONDS", "900"))
 if MAX_LIVE < 1 or IDLE_SECONDS <= 0:
     raise ValueError("Workspace limits must be positive")
+require_disjoint([BASE], [REPO, ROOT, LEGACY, os.environ.get("PALETTE_SCRATCH_ROOT", str(ROOT / "scratch"))])
+require_disjoint([ROOT, LEGACY], [REPO])
+require_disjoint([LEGACY], [ROOT])
 
 
 def atomic_json(path, value):
@@ -82,6 +86,11 @@ def resolve(args):
         entry = default_entry() if identifier == "default" else reg["workspaces"].get(identifier)
         if entry is None:
             raise ValueError("Unknown workspace_id")
+        if not ID_RE.fullmatch(identifier):
+            raise ValueError("Invalid workspace_id in registry")
+        expected_state = LEGACY if identifier == "default" else ROOT / "states" / identifier
+        if entry.get("workspace_dir") != str(BASE) or Path(entry.get("state_dir", "")).resolve() != expected_state.resolve():
+            raise PermissionError("Workspace registry paths differ from the configured layout")
         if not visible(entry, context):
             raise PermissionError("Workspace is outside this context's scope")
         return dict(entry)
@@ -100,7 +109,9 @@ class Child:
         if self.proc is not None and self.proc.poll() is None:
             return
         self.stop()
-        state = Path(self.entry["state_dir"])
+        state = Path(self.entry["state_dir"]).resolve()
+        require_disjoint([self.entry["workspace_dir"]], [REPO, ROOT, LEGACY])
+        require_disjoint([state], [REPO] + [ROOT / name for name in ("patches", "registry.json", "registry.lock", "client-capabilities.json", "scratch")])
         state.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         # Outside the state mount; a worker cannot unlink its ownership lock.
         self.lease = state.with_name(state.name + ".owner.lock").open("a+")
@@ -270,7 +281,9 @@ def validate(args, schema):
 
 def main():
     capabilities = {}
-    broker = PatchBroker(ROOT / "patches", json.loads(os.environ.get("PALETTE_PATCH_ROOTS", "{}")))
+    roots = json.loads(os.environ.get("PALETTE_PATCH_ROOTS", "{}"))
+    require_disjoint(roots.values(), [ROOT, LEGACY])
+    broker = PatchBroker(ROOT / "patches", roots)
     for raw in sys.stdin:
         mid = None
         try:

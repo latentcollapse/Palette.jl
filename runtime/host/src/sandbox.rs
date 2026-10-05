@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-pub const SANDBOX_USER: &str = "neura";
+pub const SANDBOX_USER: &str = "palette";
 /// The sandbox sets these itself; a task environment cannot move them.
 const SANDBOX_OWNED_ENV: &[&str] = &[
     "PATH", "HOME", "USER", "LOGNAME", "LANG", "JULIA_DEPOT_PATH", "JULIA_PROJECT", "JULIA_LOAD_PATH",
@@ -81,20 +81,20 @@ pub fn create_session_depot(real_depot: Option<&str>) -> Result<PathBuf, String>
 pub fn read_task_env(path: Option<&str>) -> Result<BTreeMap<String, String>, String> {
     let mut env = BTreeMap::new();
     let Some(path) = path.filter(|p| !p.is_empty()) else { return Ok(env) };
-    let text = fs::read_to_string(path).map_err(|e| format!("NIRA_TASK_ENV {path}: {e}"))?;
+    let text = fs::read_to_string(path).map_err(|e| format!("PALETTE_TASK_ENV {path}: {e}"))?;
     for line in text.lines() {
         if line.trim().is_empty() || line.trim_start().starts_with('#') {
             continue;
         }
         let Some((key, value)) = line.split_once('=') else {
-            return Err(format!("NIRA_TASK_ENV: not a KEY=VALUE line: {line:?}"));
+            return Err(format!("PALETTE_TASK_ENV: not a KEY=VALUE line: {line:?}"));
         };
         let key = key.trim();
         let ident = !key.is_empty()
             && !key.starts_with(|c: char| c.is_ascii_digit())
             && key.chars().all(|c| c.is_alphanumeric() || c == '_');
         if !ident {
-            return Err(format!("NIRA_TASK_ENV: not a KEY=VALUE line: {line:?}"));
+            return Err(format!("PALETTE_TASK_ENV: not a KEY=VALUE line: {line:?}"));
         }
         if !SANDBOX_OWNED_ENV.contains(&key) {
             env.insert(key.to_string(), value.to_string());
@@ -134,16 +134,100 @@ pub struct SandboxSpec<'a> {
     pub state_dir: Option<&'a str>,
 }
 
-pub fn build_bwrap_argv(s: &SandboxSpec) -> Result<Vec<String>, String> {
-    let toolchain = Path::new(s.julia_bin).parent().and_then(Path::parent).unwrap_or(Path::new("/"));
-    let toolchain = toolchain.to_string_lossy().into_owned();
-    let task_tools = std::env::var("NIRA_TASK_TOOLS").ok().filter(|t| !t.is_empty());
-    if let Some(t) = &task_tools {
-        if !Path::new(t).join("bin").is_dir() {
-            return Err(format!("NIRA_TASK_TOOLS has no bin directory: {t}"));
+fn canonical_dir(name: &str, path: &Path) -> Result<PathBuf, String> {
+    let resolved = fs::canonicalize(path).map_err(|e| format!("resolving {name} {}: {e}", path.display()))?;
+    if !resolved.is_dir() {
+        return Err(format!("{name} is not a directory: {}", resolved.display()));
+    }
+    Ok(resolved)
+}
+
+pub(crate) fn check_writable_mounts_disjoint(
+    writable: &[(&str, &Path)],
+    protected: &[(&str, &Path)],
+) -> Result<(), String> {
+    for (writable_name, writable_path) in writable {
+        for (protected_name, protected_path) in protected {
+            if writable_path.starts_with(protected_path) || protected_path.starts_with(writable_path) {
+                return Err(format!(
+                    "writable {writable_name} mount {} overlaps protected {protected_name} mount {}",
+                    writable_path.display(), protected_path.display()
+                ));
+            }
         }
     }
-    let task_env = read_task_env(std::env::var("NIRA_TASK_ENV").ok().as_deref())?;
+    Ok(())
+}
+
+fn check_writable_roots_not_masked(
+    writable: &[(&str, &Path)],
+    required_roots: &[(&str, &Path)],
+) -> Result<(), String> {
+    for (writable_name, writable_path) in writable {
+        for (root_name, root_path) in required_roots {
+            if root_path.starts_with(writable_path) {
+                return Err(format!(
+                    "writable {writable_name} mount {} masks required {root_name} mount {}",
+                    writable_path.display(), root_path.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn build_bwrap_argv(s: &SandboxSpec) -> Result<Vec<String>, String> {
+    let toolchain = Path::new(s.julia_bin).parent().and_then(Path::parent).unwrap_or(Path::new("/"));
+    let workspace = canonical_dir("workspace", Path::new(s.workspace_dir))?;
+    let repo = canonical_dir("repository", Path::new(s.repo_dir))?;
+    let project = canonical_dir("project", Path::new(s.project_dir))?;
+    let original_depot = canonical_dir("shared Julia depot", Path::new(s.julia_depot))?;
+    let depot_clone = s.depot_clone_dir.map(|p| canonical_dir("private Julia depot clone", Path::new(p))).transpose()?;
+    let state_dir = s.state_dir.map(|p| canonical_dir("state directory", Path::new(p))).transpose()?;
+    let task_tools_input = std::env::var("PALETTE_TASK_TOOLS").ok().filter(|t| !t.is_empty());
+    if let Some(t) = &task_tools_input {
+        if !Path::new(t).join("bin").is_dir() {
+            return Err(format!("PALETTE_TASK_TOOLS has no bin directory: {t}"));
+        }
+    }
+    let task_tools = task_tools_input.as_deref();
+    let task_tools_root = task_tools.map(|p| canonical_dir("task tools", Path::new(p))).transpose()?;
+    let broker_socket_dir = s.broker_socket_dir;
+    let broker_root = broker_socket_dir.map(|p| canonical_dir("broker socket directory", Path::new(p))).transpose()?;
+    let task_env = read_task_env(std::env::var("PALETTE_TASK_ENV").ok().as_deref())?;
+
+    let toolchain_root = canonical_dir("Julia toolchain", toolchain)?;
+    let system_usr = canonical_dir("system /usr", Path::new("/usr"))?;
+    let system_lib64 = canonical_dir("system /lib64", Path::new("/lib64"))?;
+    let system_etc = canonical_dir("system /etc", Path::new("/etc"))?;
+    let system_proc = canonical_dir("system /proc", Path::new("/proc"))?;
+    let system_dev = canonical_dir("system /dev", Path::new("/dev"))?;
+    let system_tmp = canonical_dir("system /tmp", Path::new("/tmp"))?;
+    let system_run = canonical_dir("system /run", Path::new("/run"))?;
+    let mut protected = vec![
+        ("repository", repo.as_path()), ("project", project.as_path()),
+        ("Julia toolchain", toolchain_root.as_path()), ("shared Julia depot", original_depot.as_path()),
+        ("system /usr", system_usr.as_path()), ("system /lib64", system_lib64.as_path()),
+        ("system /etc", system_etc.as_path()), ("system /proc", system_proc.as_path()),
+        ("system /dev", system_dev.as_path()), ("synthetic /run/palette", Path::new("/run/palette")),
+    ];
+    if let Some(path) = depot_clone.as_deref() { protected.push(("private Julia depot clone source", path)); }
+    if let Some(path) = task_tools_root.as_deref() { protected.push(("task tools", path)); }
+    if let Some(path) = broker_root.as_deref() { protected.push(("broker socket directory", path)); }
+    let mut writable = vec![("workspace", workspace.as_path())];
+    if let Some(path) = state_dir.as_deref() { writable.push(("state directory", path)); }
+    let required_roots = [("system /tmp", system_tmp.as_path()), ("system /run", system_run.as_path())];
+    // The private depot clone is protected as a host source while its guest depot
+    // mapping remains intentional; the original shared depot is also protected.
+    check_writable_mounts_disjoint(&writable, &protected)?;
+    // /tmp/workspace-style child mounts are intentional; only an equal or
+    // ancestor workspace/state mount could hide the synthetic /tmp or /run root.
+    check_writable_roots_not_masked(&writable, &required_roots)?;
+
+    let workspace = workspace.to_str().ok_or("workspace path is not valid UTF-8")?;
+    let state_dir = state_dir.as_deref().map(|p| p.to_str().ok_or("state directory path is not valid UTF-8")).transpose()?;
+    let toolchain = toolchain.to_string_lossy().into_owned();
+    let depot_source = s.depot_clone_dir.unwrap_or(s.julia_depot);
 
     let mut a: Vec<String> = Vec::new();
     let mut push = |xs: &[&str]| a.extend(xs.iter().map(|x| x.to_string()));
@@ -164,24 +248,24 @@ pub fn build_bwrap_argv(s: &SandboxSpec) -> Result<Vec<String>, String> {
            "--ro-bind", &toolchain, &toolchain,
            // The depot, writable at its own real path; the source is this
            // worker's private clone, never the shared depot.
-           "--bind", s.depot_clone_dir.unwrap_or(s.julia_depot), s.julia_depot,
+           "--bind", depot_source, s.julia_depot,
            "--ro-bind", s.repo_dir, s.repo_dir,
            "--ro-bind", s.project_dir, s.project_dir,
-           "--bind", s.workspace_dir, s.workspace_dir]);
-    if let Some(t) = &task_tools {
+           "--bind", workspace, workspace]);
+    if let Some(t) = task_tools {
         push(&["--ro-bind", t, t]);
     }
-    if let Some(d) = s.broker_socket_dir {
+    if let Some(d) = broker_socket_dir {
         push(&["--ro-bind", d, d]);
     }
     let etc = identity_files()?;
     let (pw, gr) = (etc.join("passwd"), etc.join("group"));
     push(&["--ro-bind", &pw.to_string_lossy(), "/etc/passwd", "--ro-bind", &gr.to_string_lossy(), "/etc/group"]);
     // The persistent kernel's saved state, outside the task workspace.
-    if let Some(st) = s.state_dir {
+    if let Some(st) = state_dir {
         push(&["--bind", st, st, "--setenv", "PALETTE_STATE_DIR", st]);
     }
-    let path = match &task_tools {
+    let path = match task_tools {
         Some(t) => format!("{t}/bin:{toolchain}/bin:/usr/bin:/bin"),
         None => format!("{toolchain}/bin:/usr/bin:/bin"),
     };
@@ -192,11 +276,11 @@ pub fn build_bwrap_argv(s: &SandboxSpec) -> Result<Vec<String>, String> {
            "--setenv", "JULIA_LOAD_PATH", &load_path,
            "--setenv", "PALETTE_REPO_DIR", s.repo_dir, "--setenv", "PATH", &path,
            "--setenv", "LANG", "en_US.UTF-8", "--setenv", "USER", SANDBOX_USER, "--setenv", "LOGNAME", SANDBOX_USER,
-           "--chdir", s.workspace_dir]);
+           "--chdir", workspace]);
     for (k, v) in &task_env {
         push(&["--setenv", k, v]);
     }
-    if let Some(d) = s.broker_socket_dir {
+    if let Some(d) = broker_socket_dir {
         let sock = format!("{d}/broker.sock");
         push(&["--setenv", "PALETTE_BROKER_SOCKET", &sock]);
     }
@@ -205,6 +289,76 @@ pub fn build_bwrap_argv(s: &SandboxSpec) -> Result<Vec<String>, String> {
         push(&["--setenv", "JULIA_PKG_OFFLINE", "true"]);
     }
     Ok(a)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    fn dir(root: &Path, name: &str) -> PathBuf {
+        let path = root.join(name);
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn case_boundary_native_001_rejects_nested_and_symlink_overlaps() {
+        let root = util::mkdtemp("palette-mount-boundary-").unwrap();
+        let repo = dir(&root, "repo");
+        let workspace = dir(&repo, "workspace");
+        let project_parent = dir(&root, "project-parent");
+        let project = dir(&project_parent, "project");
+        let alias = root.join("repo-alias");
+        symlink(&repo, &alias).unwrap();
+        let repo = canonical_dir("repository", &repo).unwrap();
+        let workspace = canonical_dir("workspace", &workspace).unwrap();
+        let state = canonical_dir("state", &alias).unwrap();
+        let project_parent = canonical_dir("state parent", &project_parent).unwrap();
+        let project = canonical_dir("project", &project).unwrap();
+        assert!(check_writable_mounts_disjoint(&[("workspace", &workspace)], &[("repository", &repo)]).is_err());
+        assert!(check_writable_mounts_disjoint(&[("state", &project_parent)], &[("project", &project)]).is_err());
+        assert!(check_writable_mounts_disjoint(&[("state", &state)], &[("repository", &repo)]).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn case_boundary_native_002_allows_disjoint_mounts_and_tmp_children() {
+        let root = util::mkdtemp("palette-mount-boundary-").unwrap();
+        let workspace = canonical_dir("workspace", &dir(&root, "workspace")).unwrap();
+        let state = canonical_dir("state", &dir(&root, "state")).unwrap();
+        let repo = canonical_dir("repository", &dir(&root, "repo")).unwrap();
+        let project = canonical_dir("project", &dir(&root, "project")).unwrap();
+        let toolchain = canonical_dir("toolchain", &dir(&root, "toolchain")).unwrap();
+        let depot = canonical_dir("shared depot", &dir(&root, "depot")).unwrap();
+        let clone = canonical_dir("private clone", &dir(&root, "clone")).unwrap();
+        let broker = canonical_dir("broker", &dir(&root, "broker")).unwrap();
+        let tools = canonical_dir("task tools", &dir(&root, "tools")).unwrap();
+        let usr = canonical_dir("/usr", Path::new("/usr")).unwrap();
+        let lib64 = canonical_dir("/lib64", Path::new("/lib64")).unwrap();
+        let etc = canonical_dir("/etc", Path::new("/etc")).unwrap();
+        let proc = canonical_dir("/proc", Path::new("/proc")).unwrap();
+        let dev = canonical_dir("/dev", Path::new("/dev")).unwrap();
+        let protected = [("repo", repo.as_path()), ("project", project.as_path()), ("toolchain", toolchain.as_path()), ("shared depot", depot.as_path()),
+            ("broker", broker.as_path()), ("task tools", tools.as_path()), ("private clone", clone.as_path()),
+            ("/usr", usr.as_path()), ("/lib64", lib64.as_path()), ("/etc", etc.as_path()),
+            ("/proc", proc.as_path()), ("/dev", dev.as_path()), ("/run/palette", Path::new("/run/palette"))];
+        let writable = [("workspace", workspace.as_path()), ("state", state.as_path())];
+        let tmp = canonical_dir("/tmp", Path::new("/tmp")).unwrap();
+        let run = canonical_dir("/run", Path::new("/run")).unwrap();
+        assert!(check_writable_mounts_disjoint(&writable, &protected).is_ok());
+        for (name, path) in &protected {
+            assert!(check_writable_mounts_disjoint(&[("workspace", *path)], &[(*name, *path)]).is_err());
+        }
+        assert!(check_writable_roots_not_masked(&writable, &[("/tmp", &tmp), ("/run", &run)]).is_ok());
+        assert!(clone != depot); // The private clone remains the valid source for the depot guest mount.
+        let clone_ancestor = canonical_dir("clone ancestor", &root).unwrap();
+        assert!(check_writable_mounts_disjoint(&[("workspace", clone_ancestor.as_path())], &[("private clone", clone.as_path())]).is_err());
+        assert!(check_writable_roots_not_masked(&[("workspace", Path::new("/tmp"))], &[("/tmp", &tmp)]).is_err());
+        assert!(check_writable_roots_not_masked(&[("workspace", Path::new("/run"))], &[("/run", &run)]).is_err());
+        assert!(check_writable_roots_not_masked(&[("workspace", Path::new("/"))], &[("/tmp", &tmp), ("/run", &run)]).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
 }
 
 pub struct WorkerResult {

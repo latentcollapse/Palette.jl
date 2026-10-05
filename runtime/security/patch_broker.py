@@ -19,6 +19,7 @@ import sys
 import tempfile
 import time
 import uuid
+from filesystem_layout import require_disjoint
 
 PATCH_SCHEMA = {"type": "object", "properties": {"action": {"enum": ["read", "prepare", "status", "apply"]}, "target": {"type": "string"}, "path": {"type": "string"}, "request_id": {"type": "string"}, "changes": {"type": "array", "maxItems": 16, "items": {"type": "object", "properties": {"path": {"type": "string"}, "before_sha256": {"type": ["string", "null"]}, "content": {"type": "string"}}, "required": ["path", "before_sha256", "content"], "additionalProperties": False}}}, "required": ["action"], "additionalProperties": False}
 MAX_BYTES = 65536
@@ -160,11 +161,12 @@ def apply_files(record):
 
 class PatchBroker:
     def __init__(self, storage, roots):
-        self.storage = Path(storage)
-        self.storage.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.storage = Path(storage).resolve()
         self.roots = {key: str(Path(path).resolve(strict=True)) for key, path in roots.items()}
+        require_disjoint(self.roots.values(), [self.storage])
         if any(Path(__file__).resolve().is_relative_to(Path(root)) for root in self.roots.values()):
             raise PermissionError("A deployed patch broker cannot authorize changes to its own source tree")
+        self.storage.mkdir(parents=True, exist_ok=True, mode=0o700)
 
     @contextmanager
     def locked(self):

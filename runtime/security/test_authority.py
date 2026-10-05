@@ -6,23 +6,22 @@ These are deliberately NOT mocked. Every test launches a real bubblewrap
 sandbox around a real julia process (or, for the ceiling-subset tests,
 exercises the real broker logic directly). This is slow by design --
 several tests pay a real, currently-unsolved ~40s Julia precompilation
-cost per sandboxed launch (see docs/NEURABASH_SECURITY_PORT.md) -- and
+cost per sandboxed launch (see runtime/docs/install.md) -- and
 that slowness is itself honest evidence about the current state of the
 depot problem, not something to hide by mocking it away.
 
 Every "blocked" assertion checks REAL evidence (host filesystem state,
 process exit codes, a second process's own PID), never just the worker's
-own self-reported stdout -- see docs/THREAT_MODEL.md's note on why two
+own self-reported stdout -- see runtime/docs/authority.md's note on why two
 early manual tests were false positives until checked this way.
 
 Run:
     python3 runtime/security/test_authority.py            # full suite (slow: real sandboxes)
     python3 runtime/security/test_authority.py -k subset   # ceiling_is_subset only (fast, no sandbox)
 
-Requires: bubblewrap (bwrap) on PATH, a Julia install with this package and
-IJulia available in some project environment (see README.md's Naming
-section and docs/EXPERIMENT_002_AUTHORITY.md for how this session's own
-dev environment was built).
+Requires: bubblewrap (bwrap) on PATH and an instantiated test environment
+with Palette, JSON, CSV, DataFrames, EzXML and IJulia. Set
+PALETTE_TEST_PROJECT_DIR to that environment; see runtime/docs/install.md.
 """
 from __future__ import annotations
 
@@ -43,12 +42,12 @@ from host_adapter import B, create_session_depot, run_worker  # noqa: E402
 
 REPO_DIR = str(Path(__file__).resolve().parents[2])
 
-# A Julia project environment with `Neura` (this repo, dev-installed) and
+# A Julia project environment with `Palette` (this repo, dev-installed) and
 # `IJulia` available. Point this at your own dev environment via env var;
-# defaults to the path this session actually used.
+# defaults to the repository; full conformance requires the extra test dependencies.
 PROJECT_DIR = os.environ.get(
     "PALETTE_TEST_PROJECT_DIR",
-    "/tmp/claude-1000/-mnt-d-Code-Projects/c3c092a4-acab-472c-b26c-e9672fac8468/scratchpad/ijulia-harness-env",
+    REPO_DIR,
 )
 
 
@@ -81,7 +80,7 @@ def _skip_if_no_project():
     if not Path(PROJECT_DIR).exists():
         raise unittest.SkipTest(
             f"no Julia dev project at {PROJECT_DIR} -- set PALETTE_TEST_PROJECT_DIR "
-            "to a project with Neura (dev-installed from this repo) and IJulia"
+            "to a project with Palette (dev-installed from this repo) and IJulia"
         )
 
 
@@ -119,6 +118,14 @@ class SandboxTestCase(unittest.TestCase):
 
 
 class TestSandboxContainment(SandboxTestCase):
+    def test_D04_workspace_cannot_mask_read_only_sources(self):
+        alias = Path(self.tmp) / "source-alias"
+        alias.symlink_to(REPO_DIR, target_is_directory=True)
+        for workspace in (REPO_DIR, str(Path(REPO_DIR).parent), str(alias), PROJECT_DIR, "/tmp", "/proc", "/dev", "/run"):
+            with self.subTest(workspace=workspace), self.assertRaisesRegex((PermissionError, RuntimeError), "overlap|masks"):
+                run_worker(workspace_dir=workspace, project_dir=PROJECT_DIR,
+                    repo_dir=REPO_DIR, script='println("unreachable")', timeout=30)
+
     def test_network_blocked_via_run(self):
         r = self.run_script('run(`curl -s -m 3 http://example.com`)')
         self.assertNotEqual(r.returncode, 0, "curl should fail with no network namespace")
@@ -214,10 +221,10 @@ class TestBrokerMediatedCapabilities(SandboxTestCase):
     def _request(self, category: str, params: dict) -> str:
         # Build a Julia Dict(...) literal directly rather than round-tripping
         # through JSON.parse: JSON is only a transitive dependency of the
-        # test project (via Neura), so `using JSON` isn't available to a
+        # test project (via Palette), so `using JSON` isn't available to a
         # plain top-level script here -- same restriction Julia's Pkg
         # enforces on any transitive-only dependency.
-        return f'using Neura; r = Neura.request_capability("{category}", {_julia_dict(params)}); println(r)'
+        return f'using Palette; r = Palette.request_capability("{category}", {_julia_dict(params)}); println(r)'
 
     def test_approved_write_reaches_real_host(self):
         target = os.path.join(self.approved_dir, "from-worker.txt")
@@ -404,7 +411,7 @@ class TestNestedChildWorker(SandboxTestCase):
         stop = self._serve({"external_fs_write": {"allowed_dirs": [self.child_sub]}, "network_access": {"allowed": False}})
         try:
             script = (
-                'using Neura; r = Neura.request_capability("spawn_child_worker", Dict('
+                'using Palette; r = Palette.request_capability("spawn_child_worker", Dict('
                 '"ceiling" => Dict("network_access" => Dict("allowed" => true)), '
                 '"script" => "println(1)", '
                 f'"child_workspace" => "{self.child_workspace}", '
@@ -455,7 +462,7 @@ class TestNestedChildWorker(SandboxTestCase):
                 "end\n"
             )
             spawn_script = (
-                'using Neura; r = Neura.request_capability("spawn_child_worker", Dict('
+                'using Palette; r = Palette.request_capability("spawn_child_worker", Dict('
                 '"ceiling" => Dict("network_access" => Dict("allowed" => true, "allowed_hosts" => ["example.invalid"])), '
                 f'"script" => {json.dumps(child_script)}, '
                 f'"child_workspace" => "{self.child_workspace}", '
@@ -485,7 +492,7 @@ class TestNestedChildWorker(SandboxTestCase):
         stop = self._serve({"spawn_child_worker": {}})  # deliberately NO external_fs_write at all
         try:
             script = (
-                'using Neura; r = Neura.request_capability("spawn_child_worker", Dict('
+                'using Palette; r = Palette.request_capability("spawn_child_worker", Dict('
                 '"ceiling" => Dict(), '
                 '"script" => "write(joinpath(pwd(), \\"ESCAPED.txt\\"), \\"no external_fs_write needed\\")", '
                 f'"child_workspace" => "{attacker_chosen_dir}")); println(r)'
@@ -519,12 +526,12 @@ class TestNestedChildWorker(SandboxTestCase):
         try:
             grandchild_script = 'println("grandchild pid=", getpid())'
             child_script = (
-                'using Neura; r2 = Neura.request_capability("spawn_child_worker", Dict('
+                'using Palette; r2 = Palette.request_capability("spawn_child_worker", Dict('
                 '"ceiling" => Dict(), '
                 f'"script" => {json.dumps(grandchild_script)})); println("child got: ", r2)'
             )
             top_script = (
-                'using Neura; r1 = Neura.request_capability("spawn_child_worker", Dict('
+                'using Palette; r1 = Palette.request_capability("spawn_child_worker", Dict('
                 '"ceiling" => Dict("spawn_child_worker" => Dict()), '
                 f'"script" => {json.dumps(child_script)})); println("top got: ", r1)'
             )
@@ -570,8 +577,8 @@ class TestPackageManagement(SandboxTestCase):
         sock_dir, server = self._serve({"package_management": {"allowed_packages": ["Crayons"]}})
         try:
             script = (
-                'using Neura\n'
-                'r = Neura.request_capability("package_management", Dict("name" => "Crayons"))\n'
+                'using Palette\n'
+                'r = Palette.request_capability("package_management", Dict("name" => "Crayons"))\n'
                 'println("approved: ", r["approved"])\n'
                 'using Crayons\n'
                 'println("USABLE")\n'
@@ -593,8 +600,8 @@ class TestPackageManagement(SandboxTestCase):
         sock_dir, server = self._serve({"package_management": {"allowed_packages": ["Crayons"]}})
         try:
             script = (
-                'using Neura\n'
-                'r = Neura.request_capability("package_management", Dict("name" => "HTTP"))\n'
+                'using Palette\n'
+                'r = Palette.request_capability("package_management", Dict("name" => "HTTP"))\n'
                 'println("approved: ", r["approved"])\n'
                 'ok = try; using HTTP; true; catch; false; end\n'
                 'println("HTTP_USABLE: ", ok)\n'

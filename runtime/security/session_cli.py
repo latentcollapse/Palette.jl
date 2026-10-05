@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
 Palette session bridge -- a thin, persistent stdio wrapper around
-`NeuraSession`, for a host process in a DIFFERENT language (Node, via
+`PaletteSession`, for a host process in a DIFFERENT language (Node, via
 Prime-Agent's `baseToolsFactory`) to spawn ONCE per agent session and drive
 for that session's whole lifetime, instead of shelling out fresh per call.
 
 This is the missing piece between what Palette already proves
-(runtime/security/session.py's NeuraSession: real state persistence, real epoch
+(runtime/security/session.py's PaletteSession: real state persistence, real epoch
 handshake, real authority fence, all adversarially tested) and an actual
 chassis integration: Prime-Agent's tool boundary is TypeScript calling a
-subprocess, not a Python API. NeuraSession itself does not change here --
+subprocess, not a Python API. PaletteSession itself does not change here --
 this only exposes it over one more stdio hop, mirroring (structurally, not
 literally) the same "newline-delimited JSON, one line per turn" shape
 runtime/scripts/session_loop.jl already uses one layer down, for the same reason:
@@ -20,7 +20,7 @@ Protocol (all newline-delimited JSON):
   Request:   {"request_id": "...", "code": "...", "ephemeral": bool?, "ceiling": {...}?, "payload": str | {name: str}?}
   Response:  {"request_id": "...", "success": bool, "data": ..., "display": str?, "output": str?,
               "error": ..., "epoch": "...", "interrupted": bool, "call": int?, "bindings": [str]?, "session_dead": true?}
-             `call` numbers a persistent turn; Neura.output(call) returns everything it printed.
+             `call` numbers a persistent turn; Palette.output(call) returns everything it printed.
   HELLO:     {"kind": "HELLO", "epoch": "...", "session_id": "..."}  -- printed once, at startup
 
 Mid-call host requests (kernel -> host, while a call runs):
@@ -32,14 +32,14 @@ Mid-call host requests (kernel -> host, while a call runs):
   thread. A reply for an unknown or finished request is dropped; stdin closing
   fails every waiting request.
 
-`ephemeral`/`ceiling` map directly onto `NeuraSession.turn()`'s own
+`ephemeral`/`ceiling` map directly onto `PaletteSession.turn()`'s own
 `ephemeral`/`ephemeral_ceiling` parameters -- see runtime/security/session.py for
 what they mean and why the default ceiling is `{}` (full language power,
 zero broker-mediated authority) rather than inherited automatically.
 
 A malformed request line is answered with an error response (not a crash);
 this process exits only when stdin closes (the host process closing its
-end, e.g. on agent session dispose) or the underlying NeuraSession dies
+end, e.g. on agent session dispose) or the underlying PaletteSession dies
 (SessionDeadError from a turn is reported as an error response, not
 silently swallowed -- the caller decides whether that's fatal to ITS
 session too).
@@ -56,7 +56,7 @@ import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from session import NeuraSession, SessionDeadError  # noqa: E402
+from session import PaletteSession, SessionDeadError  # noqa: E402
 
 
 def _payload(value):
@@ -164,6 +164,7 @@ def main() -> int:
     ap.add_argument("--startup-timeout", type=float, default=180.0)
     ap.add_argument("--workspace-dir", help="Task directory the worker works in; bound writable, never deleted")
     ap.add_argument("--scratch-root", help="Session scratch root; created at startup and removed on close")
+    ap.add_argument("--receipts-dir", help="Private host broker receipts directory, outside writable worker mounts")
     ap.add_argument("--state-dir", help="Where the kernel saves its state after each completed call, and where a "
                     "new kernel revives it from; created if missing, never deleted")
     args = ap.parse_args()
@@ -185,7 +186,7 @@ def main() -> int:
     kwargs = {"project_dir": args.project_dir, "ceiling": ceiling,
               "network_enabled": args.network, "turn_timeout": args.turn_timeout,
               "startup_timeout": args.startup_timeout, "task_workspace_dir": args.workspace_dir,
-              "workspace_dir": args.scratch_root}
+              "workspace_dir": args.scratch_root, "receipts_dir": args.receipts_dir}
     if args.repo_dir:
         kwargs["repo_dir"] = args.repo_dir
 
@@ -203,9 +204,9 @@ def main() -> int:
             except (OSError, ValueError):
                 saved = {"workspace": workspace}
             revival = manifest.is_file() and workspace is not None and saved.get("workspace") == workspace
-        session = NeuraSession(**kwargs)
+        session = PaletteSession(**kwargs)
     except Exception as e:
-        _respond({"kind": "ERROR", "error": f"failed to start NeuraSession: {e}"})
+        _respond({"kind": "ERROR", "error": f"failed to start PaletteSession: {e}"})
         return 1
 
     # A host request must be answered (or given up on) before the call itself

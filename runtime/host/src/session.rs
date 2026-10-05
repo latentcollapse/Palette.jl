@@ -52,7 +52,7 @@ pub struct Turn<'a> {
     pub digest: bool,
 }
 
-pub struct NeuraSession {
+pub struct PaletteSession {
     pub session_id: String,
     pub epoch: String,
     pub capabilities: Value,
@@ -94,8 +94,8 @@ fn dead(msg: impl Into<String>) -> SessionError {
     SessionError::Dead(msg.into())
 }
 
-impl NeuraSession {
-    pub fn start(o: SessionOptions, stop: Arc<AtomicBool>) -> Result<NeuraSession, SessionError> {
+impl PaletteSession {
+    pub fn start(o: SessionOptions, stop: Arc<AtomicBool>) -> Result<PaletteSession, SessionError> {
         let session_id = format!("palette-{}", util::hex(16));
         let mut cleanup = Cleanup::default();
         match Self::start_inner(&o, &session_id, &mut cleanup, stop) {
@@ -110,23 +110,64 @@ impl NeuraSession {
     }
 
     fn start_inner(o: &SessionOptions, session_id: &str, cleanup: &mut Cleanup, stop: Arc<AtomicBool>)
-        -> Result<NeuraSession, SessionError> {
+        -> Result<PaletteSession, SessionError> {
         let err = |e: String| dead(e);
         let tmp_root = o.scratch_root.as_deref().map(PathBuf::from).unwrap_or_else(|| util::home().join(".palette-sessions").join(session_id));
-        fs::create_dir_all(&tmp_root).map_err(|e| err(e.to_string()))?;
-        cleanup.tmp_root = Some(tmp_root.clone());
-        let workspace = match &o.task_workspace_dir {
+        let task_workspace = match o.task_workspace_dir.as_deref() {
             Some(t) => {
                 let tw = fs::canonicalize(t).map_err(|e| err(format!("task workspace {t}: {e}")))?;
                 if !tw.is_dir() {
                     return Err(err(format!("task workspace is not a directory: {}", tw.display())));
                 }
-                let root = fs::canonicalize(&tmp_root).unwrap_or(tmp_root.clone());
-                if tw == root || root.starts_with(&tw) {
-                    return Err(err("the session scratch root must not be the task workspace or inside it".into()));
-                }
-                tw
+                Some(tw)
             }
+            None => None,
+        };
+        let state_dir = o.state_dir.as_deref().map(|p| fs::canonicalize(p).map_err(|e| err(e.to_string()))).transpose()?;
+        if let Some(state) = state_dir.as_deref() {
+            if !state.is_dir() {
+                return Err(err(format!("state directory is not a directory: {}", state.display())));
+            }
+        }
+        let mut protected_layout = Vec::new();
+        if let Some(tw) = task_workspace.as_deref() { protected_layout.push(("task workspace", tw)); }
+        if let Some(state) = state_dir.as_deref() { protected_layout.push(("persistent state directory", state)); }
+        // Resolve the future scratch path before creating it so rejecting a
+        // caller-owned workspace or durable state cannot transfer it to recursive cleanup.
+        let planned_root = util::resolve(&tmp_root);
+        if !protected_layout.is_empty() {
+            sandbox::check_writable_mounts_disjoint(
+                &[("session scratch root", planned_root.as_path())],
+                &protected_layout,
+            ).map_err(err)?;
+        }
+        let tmp_root_existed = fs::symlink_metadata(&tmp_root).is_ok();
+        fs::create_dir_all(&tmp_root).map_err(|e| err(e.to_string()))?;
+        if !protected_layout.is_empty() {
+            let root = match fs::canonicalize(&tmp_root) {
+                Ok(root) => root,
+                Err(e) => {
+                    if !tmp_root_existed && util::resolve(&tmp_root) == planned_root {
+                        let _ = fs::remove_dir(&planned_root);
+                    }
+                    return Err(err(e.to_string()));
+                }
+            };
+            if let Err(e) = sandbox::check_writable_mounts_disjoint(
+                &[("session scratch root", root.as_path())],
+                &protected_layout,
+            ) {
+                // Only remove a new, still-empty directory at the path we
+                // resolved before creation; never recurse into caller data.
+                if !tmp_root_existed && root == util::resolve(&tmp_root) {
+                    let _ = fs::remove_dir(&root);
+                }
+                return Err(err(e));
+            }
+        }
+        cleanup.tmp_root = Some(tmp_root.clone());
+        let workspace = match task_workspace {
+            Some(tw) => tw,
             None => {
                 let w = tmp_root.join("workspace");
                 fs::create_dir_all(&w).map_err(|e| err(e.to_string()))?;
@@ -149,7 +190,17 @@ impl NeuraSession {
         } else {
             broker_root.clone()
         };
-        let receipts = o.receipts_dir.as_deref().map(PathBuf::from).unwrap_or(broker_root).join("receipts.jsonl");
+        let receipts_root = o.receipts_dir.as_deref().map(PathBuf::from).unwrap_or(broker_root.clone());
+        fs::create_dir_all(&receipts_root).map_err(|e| err(e.to_string()))?;
+        let private_broker = fs::canonicalize(&broker_root).map_err(|e| err(e.to_string()))?;
+        let private_receipts = fs::canonicalize(&receipts_root).map_err(|e| err(e.to_string()))?;
+        let writable_workspace = fs::canonicalize(&workspace).map_err(|e| err(e.to_string()))?;
+        let writable_state = state_dir;
+        let mut writable = vec![("workspace", writable_workspace.as_path())];
+        if let Some(state) = writable_state.as_deref() { writable.push(("state directory", state)); }
+        sandbox::check_writable_mounts_disjoint(&writable,
+            &[("private broker", private_broker.as_path()), ("broker receipts", private_receipts.as_path())]).map_err(err)?;
+        let receipts = receipts_root.join("receipts.jsonl");
         let broker = Arc::new(Broker::new(BrokerConfig {
             ceiling: o.ceiling.clone(),
             receipt_log_path: receipts,
@@ -238,7 +289,7 @@ impl NeuraSession {
                 }
             });
         }
-        let mut s = NeuraSession {
+        let mut s = PaletteSession {
             session_id: session_id.to_string(),
             epoch: String::new(),
             capabilities: json!({}),
@@ -411,7 +462,7 @@ impl NeuraSession {
     }
 }
 
-impl Drop for NeuraSession {
+impl Drop for PaletteSession {
     fn drop(&mut self) {
         self.close();
     }

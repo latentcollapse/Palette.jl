@@ -6,7 +6,7 @@
 # against one host.
 
 """
-    Neura.host_request(type, payload = Dict()) -> Dict
+    Palette.host_request(type, payload = Dict()) -> Dict
 
 Ask the agent host to act, and return its result. The request goes through
 this session's broker, which allows only the request types in the session's
@@ -25,7 +25,7 @@ end
 
 module rlm
 
-using ..Neura: host_request
+using ..Palette: host_request
 
 export spawn, create_session, find_models, list_subagents, collect, progress_note, delete_subagent
 
@@ -165,13 +165,13 @@ function child_result(p)
 end
 
 """
-    Neura.rlm.spawn(prompt; name, model = nothing, thinking = nothing) -> SpawnHandle
+    Palette.rlm.spawn(prompt; name, model = nothing, thinking = nothing) -> SpawnHandle
 
 Spawn a recursive agent child and return once its task is admitted; it runs
 on in the host while this code continues. `name` is required and unique among
 siblings; `model` is an exact `provider/model` selector; `thinking` sets the
 child's reasoning level (default: the parent's). Collect its result with
-`Neura.rlm.collect`, in this call or a later one.
+`Palette.rlm.collect`, in this call or a later one.
 """
 function spawn(prompt::AbstractString; name::AbstractString, model=nothing, thinking=nothing)
     kwargs = Dict{String,Any}("name" => name)
@@ -182,7 +182,7 @@ function spawn(prompt::AbstractString; name::AbstractString, model=nothing, thin
 end
 
 """
-    Neura.rlm.create_session(prompt; name, model, thinking, cwd) -> CreateSessionHandle
+    Palette.rlm.create_session(prompt; name, model, thinking, cwd) -> CreateSessionHandle
 
 Create and prompt a resident depth-0 daemon session (daemon-backed sessions only).
 """
@@ -198,7 +198,7 @@ function create_session(prompt::AbstractString; name=nothing, model=nothing, thi
 end
 
 """
-    Neura.rlm.find_models(query = ""; limit = 8) -> Vector{Model}
+    Palette.rlm.find_models(query = ""; limit = 8) -> Vector{Model}
 
 Search a bounded list of models backed by active user credentials.
 """
@@ -210,7 +210,7 @@ function find_models(query::AbstractString=""; limit::Integer=8)
 end
 
 """
-    Neura.rlm.list_subagents() -> Vector{Subagent}
+    Palette.rlm.list_subagents() -> Vector{Subagent}
 
 List the direct children this session retains.
 """
@@ -229,7 +229,7 @@ end
 selector(t) = throw(ArgumentError("collect target must be SpawnHandle, Subagent, or non-empty string, got $(typeof(t))"))
 
 """
-    Neura.rlm.collect(targets = nothing; timeout_ms = 0) -> Vector{ChildResult}
+    Palette.rlm.collect(targets = nothing; timeout_ms = 0) -> Vector{ChildResult}
 
 Results of direct children: a spawn handle, a subagent row, a name or id, or a
 vector of them; `nothing` selects every child. `timeout_ms = 0` returns a
@@ -237,7 +237,7 @@ snapshot at once; a positive value waits up to that long (at most 50 000) for
 the selected children to settle, and a timeout returns snapshots, never an
 error. A finished child keeps its result, so a later `collect` re-reads it.
 For children that run longer than a call, spawn now and collect in a later
-call, or wait in a background task (`job = @async Neura.rlm.collect(h; timeout_ms = 50_000)`).
+call, or wait in a background task (`job = @async Palette.rlm.collect(h; timeout_ms = 50_000)`).
 """
 function collect(targets=nothing; timeout_ms::Integer=0)
     (isint(timeout_ms) && timeout_ms >= 0) || throw(ArgumentError("timeout_ms must be a non-negative int"))
@@ -254,7 +254,7 @@ function collect(targets=nothing; timeout_ms::Integer=0)
 end
 
 """
-    Neura.rlm.progress_note(message) -> ProgressNoteResult
+    Palette.rlm.progress_note(message) -> ProgressNoteResult
 
 Report brief progress to the parent orchestrator (at most 512 UTF-16 code
 units, about one per 10 seconds). A throttled note returns `accepted = false`
@@ -275,7 +275,7 @@ function progress_note(message::AbstractString)
 end
 
 """
-    Neura.rlm.delete_subagent(target) -> Subagent
+    Palette.rlm.delete_subagent(target) -> Subagent
 
 Delete one running or retained direct child: its spawn handle, its subagent
 row, or its id or session name.

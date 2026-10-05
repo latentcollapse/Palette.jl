@@ -64,7 +64,7 @@ function revival_summary()
     for key in ("stale", "lost", "uncertain")
         summary[key] = [first(s, 240) for s in first(get(report, key, String[]), 6)]
     end
-    summary["details"] = "Neura.revival()"
+    summary["details"] = "Palette.revival()"
     return summary
 end
 

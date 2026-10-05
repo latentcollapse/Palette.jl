@@ -123,8 +123,8 @@ class TestHostBridge(unittest.TestCase):
 
     def test_spawn_and_collect_in_one_call(self):
         h = self.host({"host_request": {"allowed_types": RLM_TYPES}})
-        r, seen = h.call('h = Neura.rlm.spawn("add 40 and 2"; name = "w"); '
-                         'r = only(Neura.rlm.collect(h; timeout_ms = 1000)); (h.rlm_child_id, r.status, r.answer_preview)',
+        r, seen = h.call('h = Palette.rlm.spawn("add 40 and 2"; name = "w"); '
+                         'r = only(Palette.rlm.collect(h; timeout_ms = 1000)); (h.rlm_child_id, r.status, r.answer_preview)',
                          _rlm_host)
         self.assertTrue(r["success"], r)
         self.assertIn('("c1", "done", "42")', r["display"])
@@ -135,13 +135,13 @@ class TestHostBridge(unittest.TestCase):
 
     def test_spawn_now_collect_in_a_later_call_and_from_a_background_task(self):
         h = self.host({"host_request": {"allowed_types": RLM_TYPES}})
-        r, _ = h.call('h = Neura.rlm.spawn("x"; name = "w"); h.name', _rlm_host)
+        r, _ = h.call('h = Palette.rlm.spawn("x"; name = "w"); h.name', _rlm_host)
         self.assertTrue(r["success"], r)
-        r, seen = h.call('only(Neura.rlm.collect(h)).answer_preview', _rlm_host)
+        r, seen = h.call('only(Palette.rlm.collect(h)).answer_preview', _rlm_host)
         self.assertIn('"42"', r["display"])
         # A background collect whose request arrives after its call returned:
         # the host answers between calls, and the next call fetches it.
-        r, seen = h.call('gate = Channel{Nothing}(1); job = @async (take!(gate); only(Neura.rlm.collect(h)).status); :started')
+        r, seen = h.call('gate = Channel{Nothing}(1); job = @async (take!(gate); only(Palette.rlm.collect(h)).status); :started')
         self.assertTrue(r["success"], r)
         h.send({"request_id": "release", "code": "put!(gate, nothing); :released"})
         messages = [h.read(timeout=30), h.read(timeout=30)]
@@ -155,35 +155,35 @@ class TestHostBridge(unittest.TestCase):
 
     def test_denied_without_the_permission_and_nothing_reaches_the_host(self):
         h = self.host({})
-        r, seen = h.call('Neura.rlm.spawn("x"; name = "w")', _rlm_host)
+        r, seen = h.call('Palette.rlm.spawn("x"; name = "w")', _rlm_host)
         self.assertFalse(r["success"])
         self.assertIn("host_request not in this session's ceiling", json.dumps(r))
         self.assertEqual(seen, [])
 
     def test_a_type_outside_allowed_types_is_denied(self):
         h = self.host({"host_request": {"allowed_types": ["rlm.collect"]}})
-        r, seen = h.call('Neura.rlm.spawn("x"; name = "w")', _rlm_host)
+        r, seen = h.call('Palette.rlm.spawn("x"; name = "w")', _rlm_host)
         self.assertFalse(r["success"])
         self.assertIn("'rlm.run' is not in this session's allowed_types", json.dumps(r))
         self.assertEqual(seen, [])
-        r, seen = h.call('Neura.host_request("rlm.collect", Dict("type" => "rlm.run", "targets" => []))',
+        r, seen = h.call('Palette.host_request("rlm.collect", Dict("type" => "rlm.run", "targets" => []))',
                          lambda d: _ok({"results": []}))
         self.assertTrue(r["success"], r)
         self.assertEqual(seen[0]["type"], "rlm.collect", "a payload key must not reroute the request")
 
     def test_the_hosts_error_and_a_malformed_reply_reach_julia_truthfully(self):
         h = self.host({"host_request": {"allowed_types": RLM_TYPES}})
-        r, _ = h.call('Neura.rlm.spawn("x"; name = "w")', lambda d: {"status": "error", "error": "name 'w' is taken"})
+        r, _ = h.call('Palette.rlm.spawn("x"; name = "w")', lambda d: {"status": "error", "error": "name 'w' is taken"})
         self.assertFalse(r["success"])
         self.assertIn("name 'w' is taken", json.dumps(r))
-        r, _ = h.call('Neura.rlm.spawn("x"; name = "w")', lambda d: {"surprise": True})
+        r, _ = h.call('Palette.rlm.spawn("x"; name = "w")', lambda d: {"surprise": True})
         self.assertFalse(r["success"])
         self.assertIn("malformed reply", json.dumps(r))
 
     def test_an_unanswered_request_times_out_and_a_late_reply_is_dropped(self):
         h = self.host({"host_request": {"allowed_types": RLM_TYPES}}, turn_timeout=8)
         ids = []
-        r, seen = h.call('Neura.rlm.spawn("x"; name = "w")', lambda d: ids.append(d) or None)
+        r, seen = h.call('Palette.rlm.spawn("x"; name = "w")', lambda d: ids.append(d) or None)
         self.assertFalse(r["success"])
         self.assertIn("did not answer 'rlm.run' within 3s", json.dumps(r))
         self.assertFalse(r.get("session_dead"), "the kernel must survive an unanswered request")
@@ -194,7 +194,7 @@ class TestHostBridge(unittest.TestCase):
 
     def test_the_host_closing_its_end_fails_a_waiting_request_and_the_bridge_exits(self):
         h = self.host({"host_request": {"allowed_types": RLM_TYPES}})
-        h.send({"request_id": "r1", "code": 'Neura.rlm.spawn("x"; name = "w")'})
+        h.send({"request_id": "r1", "code": 'Palette.rlm.spawn("x"; name = "w")'})
         msg = h.read()
         self.assertEqual(msg.get("event"), "host_request")
         h.proc.stdin.close()
@@ -204,7 +204,7 @@ class TestHostBridge(unittest.TestCase):
 
     def test_ephemeral_code_cannot_reach_the_host(self):
         h = self.host({"host_request": {"allowed_types": RLM_TYPES}})
-        r, seen = h.call('Neura.rlm.spawn("x"; name = "w")', _rlm_host, ephemeral=True,
+        r, seen = h.call('Palette.rlm.spawn("x"; name = "w")', _rlm_host, ephemeral=True,
                          ceiling={"host_request": {"allowed_types": ["rlm.run"]}})
         self.assertFalse(r["success"])
         self.assertIn("no agent host is attached", json.dumps(r))

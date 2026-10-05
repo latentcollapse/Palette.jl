@@ -20,12 +20,12 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
-from host_adapter import HOST_BIN, NeuraSession, SessionDeadError  # noqa: E402
+from host_adapter import HOST_BIN, PaletteSession, SessionDeadError  # noqa: E402
 
 REPO_DIR = str(Path(__file__).resolve().parents[2])
 PROJECT_DIR = os.environ.get(
     "PALETTE_TEST_PROJECT_DIR",
-    "/tmp/claude-1000/-mnt-d-Code-Projects/c3c092a4-acab-472c-b26c-e9672fac8468/scratchpad/ijulia-harness-env",
+    REPO_DIR,
 )
 
 
@@ -47,7 +47,7 @@ class SessionTestCase(unittest.TestCase):
 
 class TestPersistentMind(SessionTestCase):
     def test_state_persists_across_turns(self):
-        with NeuraSession(project_dir=PROJECT_DIR, ceiling={}) as s:
+        with PaletteSession(project_dir=PROJECT_DIR, ceiling={}) as s:
             r1 = s.turn("x = 42")
             self.assertTrue(r1["success"])
             r2 = s.turn("x + 1")
@@ -55,7 +55,7 @@ class TestPersistentMind(SessionTestCase):
             self.assertEqual(r2["data"], 43)
 
     def test_ephemeral_does_not_leak_into_persistent_mind(self):
-        with NeuraSession(project_dir=PROJECT_DIR, ceiling={}) as s:
+        with PaletteSession(project_dir=PROJECT_DIR, ceiling={}) as s:
             r1 = s.turn("helper(y) = y * 10; helper(3)", ephemeral=True)
             self.assertTrue(r1["success"])
             self.assertEqual(r1["data"], 30)
@@ -66,7 +66,7 @@ class TestPersistentMind(SessionTestCase):
     def test_ephemeral_child_self_corruption_cannot_reach_the_parent(self):
         """The regression this architecture exists to make possible.
 
-        Earlier, same-process ephemeral isolation (Neura.EphemeralTool's
+        Earlier, same-process ephemeral isolation (Palette.EphemeralTool's
         AST guard) was proven, by direct adversarial testing, insufficient:
         `Core.eval(Base, :(function show(io::IO, x::Int) ... end))` -- a
         value only assembled at runtime -- successfully extended Base.show
@@ -77,7 +77,7 @@ class TestPersistentMind(SessionTestCase):
         The fix was architectural, not a smarter checker: `EPHEMERAL`
         turns now run in a real, disposable, OS-sandboxed child process
         (spawn_child_worker, already adversarially proven -- see
-        docs/THREAT_MODEL.md rows 16-19), not in this process. The exact
+        runtime/docs/authority.md), not in this process. The exact
         same payload that broke same-process isolation is preserved here
         deliberately, per the architecture decision: it MUST still succeed
         locally (proving this is still full, unbounded Julia -- nothing
@@ -85,7 +85,7 @@ class TestPersistentMind(SessionTestCase):
         own Base.show, checked immediately after in a real subsequent
         turn on the SAME session, must be provably unaffected.
         """
-        with NeuraSession(project_dir=PROJECT_DIR, ceiling={}) as s:
+        with PaletteSession(project_dir=PROJECT_DIR, ceiling={}) as s:
             before = s.turn("sprint(show, 42)")
             self.assertEqual(before["data"], "42")
 
@@ -104,13 +104,13 @@ class TestPersistentMind(SessionTestCase):
 
 class TestSessionLifecycle(SessionTestCase):
     def test_two_sessions_get_different_epochs(self):
-        with NeuraSession(project_dir=PROJECT_DIR, ceiling={}) as s1, NeuraSession(project_dir=PROJECT_DIR, ceiling={}) as s2:
+        with PaletteSession(project_dir=PROJECT_DIR, ceiling={}) as s1, PaletteSession(project_dir=PROJECT_DIR, ceiling={}) as s2:
             self.assertNotEqual(s1.epoch, s2.epoch)
             for current in (s1, s2):
                 self.assertTrue(Path(current.turn("pwd()")["data"]).is_relative_to(tempfile.gettempdir()))
 
     def test_killed_worker_is_detected_not_hung_or_silently_respawned(self):
-        s = NeuraSession(project_dir=PROJECT_DIR, ceiling={})
+        s = PaletteSession(project_dir=PROJECT_DIR, ceiling={})
         try:
             if HOST_BIN:
                 for pid in s.worker_pids():
@@ -127,7 +127,7 @@ class TestSessionLifecycle(SessionTestCase):
         """The broker's Unix socket lived under the session root; a long HOME
         pushed its path past 108 bytes and no kernel could start."""
         deep = Path(tempfile.mkdtemp(prefix="palette-deep-")) / ("d" * 60) / ("e" * 60)
-        s = NeuraSession(project_dir=PROJECT_DIR, ceiling={}, workspace_dir=str(deep))
+        s = PaletteSession(project_dir=PROJECT_DIR, ceiling={}, workspace_dir=str(deep))
         try:
             if not HOST_BIN:
                 sock_dir = s._broker_sock_dir
@@ -142,7 +142,7 @@ class TestSessionLifecycle(SessionTestCase):
             self.assertFalse(Path(sock_dir).exists())
 
     def test_turn_after_close_raises(self):
-        s = NeuraSession(project_dir=PROJECT_DIR, ceiling={})
+        s = PaletteSession(project_dir=PROJECT_DIR, ceiling={})
         s.close()
         with self.assertRaises(SessionDeadError):
             s.turn("1 + 1")
@@ -164,7 +164,7 @@ class TestSessionLifecycle(SessionTestCase):
                     os.environ["JULIA_DEPOT_PATH"] = str(depot)
                     error = SessionDeadError if HOST_BIN else subprocess.CalledProcessError if copy_fails else FileExistsError
                     with self.assertRaises(error):
-                        NeuraSession(project_dir=PROJECT_DIR, ceiling={}, workspace_dir=str(root))
+                        PaletteSession(project_dir=PROJECT_DIR, ceiling={}, workspace_dir=str(root))
                     clone_root = Path(tmp, ".palette-depot-clones")
                     self.assertTrue(clone_root.is_dir(), "startup never reached depot cloning")
                     self.assertEqual(list(clone_root.iterdir()), [], "depot clone leaked")
@@ -193,10 +193,10 @@ class TestAuthorityUnderPersistence(SessionTestCase):
 
     def test_approved_write_from_persistent_turn_reaches_real_host(self):
         target = os.path.join(self.allowed_sub, "out.txt")
-        with NeuraSession(
+        with PaletteSession(
             project_dir=PROJECT_DIR, ceiling={"external_fs_write": {"allowed_dirs": [self.allowed_sub]}}
         ) as s:
-            r = s.turn(f'Neura.request_capability("external_fs_write", Dict("path" => "{target}", "content" => "hi"))')
+            r = s.turn(f'Palette.request_capability("external_fs_write", Dict("path" => "{target}", "content" => "hi"))')
             self.assertTrue(r["success"])
             self.assertTrue(r["data"]["approved"])
         self.assertTrue(os.path.isfile(target))
@@ -204,10 +204,10 @@ class TestAuthorityUnderPersistence(SessionTestCase):
 
     def test_denied_write_from_persistent_turn_never_reaches_real_host(self):
         denied_target = os.path.join(self.tmp, "outside.txt")  # sibling of allowed_sub, not inside it
-        with NeuraSession(
+        with PaletteSession(
             project_dir=PROJECT_DIR, ceiling={"external_fs_write": {"allowed_dirs": [self.allowed_sub]}}
         ) as s:
-            r = s.turn(f'Neura.request_capability("external_fs_write", Dict("path" => "{denied_target}", "content" => "no"))')
+            r = s.turn(f'Palette.request_capability("external_fs_write", Dict("path" => "{denied_target}", "content" => "no"))')
             self.assertTrue(r["success"])  # the REQUEST was well-formed; the CAPABILITY was denied
             self.assertFalse(r["data"]["approved"])
         self.assertFalse(os.path.isfile(denied_target))
@@ -217,11 +217,11 @@ class TestAuthorityUnderPersistence(SessionTestCase):
         mediated authority unless the caller explicitly widens it, even
         if the parent session's own ceiling would allow more."""
         target = os.path.join(self.allowed_sub, "should_not_exist.txt")
-        with NeuraSession(
+        with PaletteSession(
             project_dir=PROJECT_DIR, ceiling={"external_fs_write": {"allowed_dirs": [self.allowed_sub]}}
         ) as s:
             r = s.turn(
-                f'Neura.request_capability("external_fs_write", Dict("path" => "{target}", "content" => "eph"))',
+                f'Palette.request_capability("external_fs_write", Dict("path" => "{target}", "content" => "eph"))',
                 ephemeral=True,  # no ephemeral_ceiling given -- defaults to {}
             )
             self.assertTrue(r["success"])
@@ -231,9 +231,9 @@ class TestAuthorityUnderPersistence(SessionTestCase):
     def test_ephemeral_turn_reaches_the_broker_when_explicitly_widened(self):
         target = os.path.join(self.allowed_sub, "from_ephemeral.txt")
         ceiling = {"external_fs_write": {"allowed_dirs": [self.allowed_sub]}}
-        with NeuraSession(project_dir=PROJECT_DIR, ceiling=ceiling) as s:
+        with PaletteSession(project_dir=PROJECT_DIR, ceiling=ceiling) as s:
             r = s.turn(
-                f'Neura.request_capability("external_fs_write", Dict("path" => "{target}", "content" => "eph"))',
+                f'Palette.request_capability("external_fs_write", Dict("path" => "{target}", "content" => "eph"))',
                 ephemeral=True,
                 ephemeral_ceiling=ceiling,  # explicit: C_child == C_caller here, still validated as a real subset
             )

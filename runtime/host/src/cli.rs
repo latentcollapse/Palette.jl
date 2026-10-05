@@ -15,7 +15,7 @@
 //! every waiting request. This process exits when stdin closes, when the kernel
 //! dies, or on SIGTERM/SIGHUP (after tearing the session down).
 
-use crate::session::{NeuraSession, SessionError, SessionOptions, Turn};
+use crate::session::{PaletteSession, SessionError, SessionOptions, Turn};
 use crate::util;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -195,7 +195,7 @@ pub fn main(argv: &[String]) -> i32 {
         match serde_json::from_str(&text) {
             Ok(v) => v,
             Err(e) => {
-                respond(&json!({"kind": "ERROR", "error": format!("failed to start NeuraSession: bad ceiling: {e}")}));
+                respond(&json!({"kind": "ERROR", "error": format!("failed to start PaletteSession: bad ceiling: {e}")}));
                 return 1;
             }
         }
@@ -221,7 +221,7 @@ pub fn main(argv: &[String]) -> i32 {
     }
 
     let turn_timeout = args.turn_timeout;
-    let session = NeuraSession::start(SessionOptions {
+    let session = PaletteSession::start(SessionOptions {
         project_dir: args.project_dir.clone(),
         repo_dir: args.repo_dir.clone().unwrap_or_else(default_repo_dir),
         ceiling,
@@ -236,7 +236,7 @@ pub fn main(argv: &[String]) -> i32 {
     let mut session = match session {
         Ok(s) => s,
         Err(SessionError::Dead(e)) | Err(SessionError::Protocol(e)) => {
-            respond(&json!({"kind": "ERROR", "error": format!("failed to start NeuraSession: {e}")}));
+            respond(&json!({"kind": "ERROR", "error": format!("failed to start PaletteSession: {e}")}));
             return 1;
         }
     };
