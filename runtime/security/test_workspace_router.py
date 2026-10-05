@@ -104,6 +104,28 @@ class WorkspaceRouterIntegration(unittest.TestCase):
         self.assertIn("FileNotFoundError", result["error"])
         self.assertTrue(result["workspace_id"])
 
+    def test_D01_overlapping_workspace_is_rejected_before_tools(self):
+        root = Path(self.tmp.name)
+        alias = root / "source-alias"
+        alias.symlink_to(REPO, target_is_directory=True)
+        for workspace in (REPO, REPO.parent, alias, root, root / "registry", root / "registry/child", root / "legacy-state"):
+            with self.subTest(workspace=workspace):
+                result = subprocess.run([sys.executable, str(ROUTER)],
+                    input=json.dumps({"jsonrpc":"2.0", "id":1, "method":"tools/list"})+"\n",
+                    capture_output=True, text=True, timeout=60,
+                    env={**self.env, "OPERATOR_WORKSPACE":str(workspace)})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("overlap", result.stderr)
+
+    def test_D03_registry_cannot_redirect_a_worker_mount(self):
+        self.call("palette_workspace", {"action":"create", "workspace_id":"registry-check", "scope":"open"})
+        path = Path(self.env["PALETTE_WORKSPACE_STATE_ROOT"]) / "registry.json"
+        registry = json.loads(path.read_text())
+        registry["workspaces"]["registry-check"]["workspace_dir"] = str(Path(self.tmp.name))
+        path.write_text(json.dumps(registry))
+        result = self.call("palette", {"workspace_id":"registry-check", "code":"1"}, error=True)
+        self.assertIn("registry paths", result["error"])
+
     def test_portable_and_compatibility_installation(self):
         for fmt in ("portable", "codex"):
             with self.subTest(format=fmt):

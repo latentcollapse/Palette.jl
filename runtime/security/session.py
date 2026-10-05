@@ -38,6 +38,7 @@ import uuid
 from pathlib import Path
 
 from launch_worker import resolve_real_julia_binary, build_bwrap_argv, create_session_depot
+from filesystem_layout import require_disjoint
 
 import broker as _broker
 
@@ -134,16 +135,18 @@ class PaletteSession:
         # fix. _teardown() is hasattr-guarded specifically so it's safe to
         # call here no matter how early the failure happened.
         try:
-            self._tmp_root = Path(workspace_dir or Path.home() / ".palette-sessions" / self.session_id)
-            self._tmp_root.mkdir(parents=True, exist_ok=True)
+            scratch = Path(workspace_dir or Path.home() / ".palette-sessions" / self.session_id).resolve()
+            if state_dir:
+                require_disjoint([state_dir], [scratch])
             if task_workspace_dir is not None:
                 task_workspace = Path(task_workspace_dir).resolve(strict=True)
                 if not task_workspace.is_dir():
                     raise ValueError(f"task workspace is not a directory: {task_workspace}")
-                if task_workspace == self._tmp_root.resolve() or self._tmp_root.resolve().is_relative_to(task_workspace):
-                    raise ValueError("the session scratch root must not be the task workspace or inside it")
+                require_disjoint([task_workspace], [scratch])
                 self.workspace_dir = str(task_workspace)
-            else:
+            self._tmp_root = scratch
+            self._tmp_root.mkdir(parents=True, exist_ok=True)
+            if task_workspace_dir is None:
                 self.workspace_dir = str(self._tmp_root / "workspace")
                 Path(self.workspace_dir).mkdir(parents=True, exist_ok=True)
 
@@ -161,6 +164,8 @@ class PaletteSession:
             else:
                 self._broker_sock_dir = str(broker_root)
             receipts_path = str(Path(receipts_dir or broker_root) / "receipts.jsonl")
+            require_disjoint([self.workspace_dir] + ([state_dir] if state_dir else []),
+                [broker_root, Path(receipts_path).parent, self.depot_clone_dir])
             self._broker_server, self._broker = _broker.serve(
                 str(Path(self._broker_sock_dir) / "broker.sock"),
                 ceiling, receipts_path, self.session_id,

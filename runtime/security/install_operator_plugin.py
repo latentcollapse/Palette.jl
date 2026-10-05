@@ -8,6 +8,7 @@ import sys
 import tempfile
 import shutil
 import shlex
+from filesystem_layout import require_disjoint
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -33,6 +34,7 @@ def main():
     parser.add_argument("--bin-dir", help="Optional directory for a palette-mcp executable on PATH")
     args = parser.parse_args()
     repo, plugin = Path(args.repo_dir).resolve(), Path(args.plugin_dir).resolve()
+    require_disjoint([args.workspace_dir], [repo, plugin] + ([args.bin_dir] if args.bin_dir else []))
     host = repo / "runtime/host/target/release/palette-host"
     for path in (repo / "Project.toml", repo / "Manifest.toml", repo / "runtime/security/operator_mcp.py", repo / "runtime/security/operator_workspace_router.py", repo / "runtime/security/serve_palette.py", host):
         if not path.is_file():

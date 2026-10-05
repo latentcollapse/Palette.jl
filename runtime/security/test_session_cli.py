@@ -26,7 +26,7 @@ REPO_DIR = str(Path(__file__).resolve().parents[2])
 CLI = str(Path(__file__).resolve().parent / "session_cli.py")
 PROJECT_DIR = os.environ.get(
     "PALETTE_TEST_PROJECT_DIR",
-    "/tmp/claude-1000/-mnt-d-Code-Projects/c3c092a4-acab-472c-b26c-e9672fac8468/scratchpad/ijulia-harness-env",
+    REPO_DIR,
 )
 
 
@@ -87,6 +87,33 @@ _COUNT_INSIDE = (
 
 
 class TestSessionCli(unittest.TestCase):
+    def test_D05_private_layout_rejection_preserves_caller_files(self):
+        with tempfile.TemporaryDirectory(prefix="palette-private-layout-") as tmp:
+            base = Path(tmp)
+            for mode in ("child", "equal", "parent", "receipts", "state"):
+                with self.subTest(mode=mode):
+                    scratch = base / mode / ("long-scratch-" + "x" * 80)
+                    workspace = scratch / "broker" if mode == "child" else scratch if mode == "equal" else scratch.parent if mode == "parent" else base / mode / "workspace"
+                    workspace.mkdir(parents=True)
+                    marker = workspace / "caller-owned.txt"
+                    marker.write_text("preserve")
+                    command = [*session_cmd(str(scratch)), "--project-dir", PROJECT_DIR,
+                        "--ceiling", "{}", "--workspace-dir", str(workspace)]
+                    if mode == "receipts":
+                        command += ["--receipts-dir", str(workspace)]
+                    if mode == "state":
+                        state = scratch / "state"
+                        state.mkdir(parents=True)
+                        state_marker = state / "durable-state.txt"
+                        state_marker.write_text("preserve")
+                        command += ["--state-dir", str(state)]
+                    result = subprocess.run(command, input="", capture_output=True, text=True, timeout=60)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("overlap", result.stdout + result.stderr)
+                    self.assertEqual(marker.read_text(), "preserve")
+                    if mode == "state":
+                        self.assertEqual(state_marker.read_text(), "preserve")
+
     def setUp(self):
         _skip_if_no_bwrap()
         _skip_if_no_project()

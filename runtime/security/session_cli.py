@@ -164,6 +164,7 @@ def main() -> int:
     ap.add_argument("--startup-timeout", type=float, default=180.0)
     ap.add_argument("--workspace-dir", help="Task directory the worker works in; bound writable, never deleted")
     ap.add_argument("--scratch-root", help="Session scratch root; created at startup and removed on close")
+    ap.add_argument("--receipts-dir", help="Private host broker receipts directory, outside writable worker mounts")
     ap.add_argument("--state-dir", help="Where the kernel saves its state after each completed call, and where a "
                     "new kernel revives it from; created if missing, never deleted")
     args = ap.parse_args()
@@ -185,7 +186,7 @@ def main() -> int:
     kwargs = {"project_dir": args.project_dir, "ceiling": ceiling,
               "network_enabled": args.network, "turn_timeout": args.turn_timeout,
               "startup_timeout": args.startup_timeout, "task_workspace_dir": args.workspace_dir,
-              "workspace_dir": args.scratch_root}
+              "workspace_dir": args.scratch_root, "receipts_dir": args.receipts_dir}
     if args.repo_dir:
         kwargs["repo_dir"] = args.repo_dir
 

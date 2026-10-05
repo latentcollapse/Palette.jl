@@ -19,10 +19,9 @@ Run:
     python3 runtime/security/test_authority.py            # full suite (slow: real sandboxes)
     python3 runtime/security/test_authority.py -k subset   # ceiling_is_subset only (fast, no sandbox)
 
-Requires: bubblewrap (bwrap) on PATH, a Julia install with this package and
-IJulia available in some project environment (see README.md's Naming
-section and docs/EXPERIMENT_002_AUTHORITY.md for how this session's own
-dev environment was built).
+Requires: bubblewrap (bwrap) on PATH and an instantiated test environment
+with Palette, JSON, CSV, DataFrames, EzXML and IJulia. Set
+PALETTE_TEST_PROJECT_DIR to that environment; see runtime/docs/install.md.
 """
 from __future__ import annotations
 
@@ -45,10 +44,10 @@ REPO_DIR = str(Path(__file__).resolve().parents[2])
 
 # A Julia project environment with `Palette` (this repo, dev-installed) and
 # `IJulia` available. Point this at your own dev environment via env var;
-# defaults to the path this session actually used.
+# defaults to the repository; full conformance requires the extra test dependencies.
 PROJECT_DIR = os.environ.get(
     "PALETTE_TEST_PROJECT_DIR",
-    "/tmp/claude-1000/-mnt-d-Code-Projects/c3c092a4-acab-472c-b26c-e9672fac8468/scratchpad/ijulia-harness-env",
+    REPO_DIR,
 )
 
 
@@ -119,6 +118,14 @@ class SandboxTestCase(unittest.TestCase):
 
 
 class TestSandboxContainment(SandboxTestCase):
+    def test_D04_workspace_cannot_mask_read_only_sources(self):
+        alias = Path(self.tmp) / "source-alias"
+        alias.symlink_to(REPO_DIR, target_is_directory=True)
+        for workspace in (REPO_DIR, str(Path(REPO_DIR).parent), str(alias), PROJECT_DIR, "/tmp", "/proc", "/dev", "/run"):
+            with self.subTest(workspace=workspace), self.assertRaisesRegex((PermissionError, RuntimeError), "overlap|masks"):
+                run_worker(workspace_dir=workspace, project_dir=PROJECT_DIR,
+                    repo_dir=REPO_DIR, script='println("unreachable")', timeout=30)
+
     def test_network_blocked_via_run(self):
         r = self.run_script('run(`curl -s -m 3 http://example.com`)')
         self.assertNotEqual(r.returncode, 0, "curl should fail with no network namespace")

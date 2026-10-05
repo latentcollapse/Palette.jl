@@ -35,6 +35,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from filesystem_layout import require_disjoint, require_preserved_roots
 
 
 def _clone_depot(real_depot: str, clone_root: str) -> str:
@@ -158,11 +159,24 @@ def build_bwrap_argv(
     extra_ro_binds: list[str] | None = None,
     state_dir: str | None = None,
 ) -> list[str]:
+    workspace_dir = str(Path(workspace_dir).resolve())
+    state_dir = str(Path(state_dir).resolve()) if state_dir else None
     julia_toolchain_dir = str(Path(julia_bin).parent.parent)  # .../julia-1.12.6+0.x64.linux.gnu
     task_tools = os.environ.get("PALETTE_TASK_TOOLS")
     if task_tools and not Path(task_tools, "bin").is_dir():
         raise RuntimeError(f"PALETTE_TASK_TOOLS has no bin directory: {task_tools}")
     task_env = read_task_env(os.environ.get("PALETTE_TASK_ENV"))
+    protected = [repo_dir, project_dir, julia_depot, julia_toolchain_dir, "/usr", "/lib64", "/etc", "/proc", "/dev", "/run/palette"]
+    protected.extend(extra_ro_binds or [])
+    if task_tools:
+        protected.append(task_tools)
+    if broker_socket_dir:
+        protected.append(broker_socket_dir)
+    if depot_clone_dir:
+        protected.append(depot_clone_dir)
+    writable = [workspace_dir] + ([state_dir] if state_dir else [])
+    require_disjoint(writable, protected)
+    require_preserved_roots(writable, ("/tmp", "/run"))
 
     argv = [
         "bwrap",

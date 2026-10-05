@@ -31,6 +31,10 @@ def main():
     for private in (data, depot, output):
         if private == repo or repo in private.parents:
             parser.error('Keep data, depot, and generated configuration outside the SDK tree')
+    workspace = (data/'workspace').resolve()
+    for protected in (repo, depot, output, (data/'state').resolve(), (data/'worlds').resolve()):
+        if workspace == protected or workspace.is_relative_to(protected) or protected.is_relative_to(workspace):
+            parser.error('Workspace must not overlap source, depot, configuration, or host state')
     env = dict(os.environ, JULIA_DEPOT_PATH=str(depot))
     host = repo / 'runtime/host/target/release/palette-host'
     if not args.connect_only:

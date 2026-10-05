@@ -15,6 +15,12 @@ A network capability grants broker-mediated access, not unrestricted raw worker
 networking. Read-only runtime mounts remain read-only even when Julia can run
 arbitrary code. Credentials belong to host services rather than worker bindings.
 
+Writable workspace and saved-state mounts must be disjoint from protected
+runtime, project, toolchain, shared depot, OS and broker-socket paths. Canonical
+path checks reject parent, child, equal and symlink overlaps before launch.
+The routed workspace must also exclude the host registry, grants, ownership
+metadata and scratch area. Keep generated client configuration outside it.
+
 The routed MCP adapter can apply exact reviewed patches to trusted configured
 source roots. Approval binds a digest and world to one expiring attempt. It
 requires client confirmation or separately authorized administrator approval;

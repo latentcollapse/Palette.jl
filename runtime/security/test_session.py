@@ -25,7 +25,7 @@ from host_adapter import HOST_BIN, PaletteSession, SessionDeadError  # noqa: E40
 REPO_DIR = str(Path(__file__).resolve().parents[2])
 PROJECT_DIR = os.environ.get(
     "PALETTE_TEST_PROJECT_DIR",
-    "/tmp/claude-1000/-mnt-d-Code-Projects/c3c092a4-acab-472c-b26c-e9672fac8468/scratchpad/ijulia-harness-env",
+    REPO_DIR,
 )
 
 
