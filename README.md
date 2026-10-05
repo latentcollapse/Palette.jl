@@ -8,6 +8,14 @@ survived, changed, or was lost.
 Palette supplies the execution surface. Harnesses such as Cyan provide the
 agent loop, model inference, and orchestration.
 
+## Use Palette in your chatbot
+
+Get **Palette-ChatGPT.zip** or **Palette-Claude.zip** from the release assets
+when published. Each includes SDK source and setup instructions; Claude also
+gets a Desktop MCP extension. Read the [client installation guide](runtime/plugins/DISTRIBUTION.md).
+Linux/WSL2 preparation is required; ChatGPT Chat additionally needs your own
+tunnel or hosted connection. ZIP upload alone does not start a runtime.
+
 ## Quick start
 
 The Julia package currently uses the import name `Neura`.
@@ -99,4 +107,6 @@ The package manifest declares Julia 1.10+; supervised development and CI are tes
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Core: **AGPL-3.0-only**. Identified client/plugin packages and public docs:
+**Apache-2.0**. Inherited MIT notices remain preserved. See
+[license boundaries](runtime/licenses/README.md) and [LICENSE](LICENSE).
