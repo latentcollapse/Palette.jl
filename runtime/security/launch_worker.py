@@ -7,12 +7,11 @@ full language semantics inside (eval, ccall, run, Base, Pkg, metaprogramming
 -- nothing about the language itself is restricted), bounded by the OS
 outside it (namespace isolation, not a language-level blacklist).
 
-This reuses the same doctrine Palette's security_launcher.py already
-proved: bind only what's needed, read-only unless a path genuinely needs to
-be writable, no ambient credentials (--clearenv), no network unless
-explicitly enabled. It is a new implementation for a different substrate
-(Julia, not Bash), not a copy -- see docs/PALETTEBASH_SECURITY_PORT.md for
-exactly what was reused vs. redesigned.
+The launcher binds only what's needed, read-only unless a path needs to
+be writable, clears ambient credentials (--clearenv), and disables network
+access unless explicitly enabled. See runtime/docs/authority.md for the
+current host and worker authority contracts. Inherited source attribution
+and license grants are retained in NOTICE and runtime/licenses/.
 
 Depot handling is NOT a layered writable-over-readonly overlay (that was
 tried and, on this substrate, actively caused the cold-start problem it
@@ -25,8 +24,7 @@ Paths are bound at IDENTICAL guest paths to their host paths (no
 remapping). Julia's own package manifests and precompile cache embed
 absolute host paths; remapping them would invalidate the whole prewarmed
 depot and force full recompilation inside every sandboxed launch -- the
-exact cold-start tax this project has already hit once, on Palette, and
-is not interested in reproducing here.
+the cold-start tax that depot preparation is designed to avoid.
 """
 from __future__ import annotations
 
@@ -44,8 +42,7 @@ def _clone_depot(real_depot: str, clone_root: str) -> str:
     exclusive writable use.
 
     Root cause this works around (found by direct reproduction outside any
-    sandbox, not assumed by analogy to Palette -- see
-    docs/PALETTEBASH_SECURITY_PORT.md's update): a split `JULIA_DEPOT_PATH`
+    sandbox): a split `JULIA_DEPOT_PATH`
     ("writable:readonly") makes Julia recompute a different "desired
     build_id" for stdlib packages (observed via JULIA_DEBUG=loading) the
     moment the first entry is a fresh/empty writable directory. That

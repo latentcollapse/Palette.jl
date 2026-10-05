@@ -325,9 +325,8 @@ class PaletteSession:
                 raise SessionDeadError(f"session {self.session_id} sent a non-JSON protocol line: {line[:200]!r}") from e
             if resp.get("epoch") != self.epoch:
                 # Not expected to be reachable given one dedicated process
-                # per session and no respawning -- checked anyway, the same
-                # defensive posture Palette's own handle validation takes
-                # toward its own process_epoch field, and cheap to verify.
+                # per session and no respawning. Still verify the epoch so
+                # a response from another process cannot satisfy this turn.
                 raise SessionDeadError(
                     f"epoch mismatch: session issued for {self.epoch!r}, response carries {resp.get('epoch')!r}"
                 )
