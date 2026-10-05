@@ -8,6 +8,14 @@ survived, changed, or was lost.
 Palette supplies the execution surface. Harnesses such as Cyan provide the
 agent loop, model inference, and orchestration.
 
+## Use Palette in your chatbot
+
+Get **Palette-ChatGPT.zip** or **Palette-Claude.zip** from the release assets
+when published. Each is one uploadable plugin with SDK source and setup
+instructions. Claude Desktop extensions use the separate `.mcpb` option. Read the [client installation guide](runtime/plugins/DISTRIBUTION.md).
+Linux/WSL2 preparation is required; ChatGPT Chat additionally needs your own
+tunnel or hosted connection. ZIP upload alone does not start a runtime.
+
 ## Quick start
 
 Import the Julia package with `using Palette`.
