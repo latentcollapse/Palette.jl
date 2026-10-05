@@ -41,7 +41,7 @@ def main():
         **{'sdk/'+n:d for n,d in source.items()},
         'setup.py':source['runtime/plugins/setup.py'],
         'INSTALL.md':source['runtime/plugins/DISTRIBUTION.md'],
-        'BRAIN_BLAST.md':source['BRAIN_BLAST.md'],
+        'BRAIN_BLAST.md':source['BRAIN_BLAST.md'].replace(b'(runtime/docs/', b'(sdk/runtime/docs/'),
         'LICENSE':license_text,
         'NOTICE':source['NOTICE'],
         'licenses/AGPL-3.0-only.txt':source['LICENSE'],
