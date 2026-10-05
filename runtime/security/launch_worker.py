@@ -7,11 +7,11 @@ full language semantics inside (eval, ccall, run, Base, Pkg, metaprogramming
 -- nothing about the language itself is restricted), bounded by the OS
 outside it (namespace isolation, not a language-level blacklist).
 
-This reuses the same doctrine NeuraBash's security_launcher.py already
+This reuses the same doctrine Palette's security_launcher.py already
 proved: bind only what's needed, read-only unless a path genuinely needs to
 be writable, no ambient credentials (--clearenv), no network unless
 explicitly enabled. It is a new implementation for a different substrate
-(Julia, not Bash), not a copy -- see docs/NEURABASH_SECURITY_PORT.md for
+(Julia, not Bash), not a copy -- see docs/PALETTEBASH_SECURITY_PORT.md for
 exactly what was reused vs. redesigned.
 
 Depot handling is NOT a layered writable-over-readonly overlay (that was
@@ -25,7 +25,7 @@ Paths are bound at IDENTICAL guest paths to their host paths (no
 remapping). Julia's own package manifests and precompile cache embed
 absolute host paths; remapping them would invalidate the whole prewarmed
 depot and force full recompilation inside every sandboxed launch -- the
-exact cold-start tax this project has already hit once, on NeuraBash, and
+exact cold-start tax this project has already hit once, on Palette, and
 is not interested in reproducing here.
 """
 from __future__ import annotations
@@ -44,8 +44,8 @@ def _clone_depot(real_depot: str, clone_root: str) -> str:
     exclusive writable use.
 
     Root cause this works around (found by direct reproduction outside any
-    sandbox, not assumed by analogy to NeuraBash -- see
-    docs/NEURABASH_SECURITY_PORT.md's update): a split `JULIA_DEPOT_PATH`
+    sandbox, not assumed by analogy to Palette -- see
+    docs/PALETTEBASH_SECURITY_PORT.md's update): a split `JULIA_DEPOT_PATH`
     ("writable:readonly") makes Julia recompute a different "desired
     build_id" for stdlib packages (observed via JULIA_DEBUG=loading) the
     moment the first entry is a fresh/empty writable directory. That
@@ -110,7 +110,7 @@ def resolve_real_julia_binary() -> str:
     return str(Path(bindir) / "julia")
 
 
-SANDBOX_USER = "neura"
+SANDBOX_USER = "palette"
 # The sandbox sets these itself; a task environment cannot move them.
 SANDBOX_OWNED_ENV = {"PATH", "HOME", "USER", "LOGNAME", "LANG", "JULIA_DEPOT_PATH", "JULIA_PROJECT", "JULIA_LOAD_PATH",
                      "JULIA_PKG_OFFLINE", "PALETTE_REPO_DIR", "PALETTE_STATE_DIR", "PALETTE_BROKER_SOCKET"}
@@ -127,7 +127,7 @@ def read_task_env(path: str | None) -> dict[str, str]:
             continue
         key, sep, value = line.partition("=")
         if not sep or not key.strip().isidentifier():
-            raise RuntimeError(f"NIRA_TASK_ENV: not a KEY=VALUE line: {line!r}")
+            raise RuntimeError(f"PALETTE_TASK_ENV: not a KEY=VALUE line: {line!r}")
         if key.strip() not in SANDBOX_OWNED_ENV:
             env[key.strip()] = value
     return env
@@ -162,10 +162,10 @@ def build_bwrap_argv(
     state_dir: str | None = None,
 ) -> list[str]:
     julia_toolchain_dir = str(Path(julia_bin).parent.parent)  # .../julia-1.12.6+0.x64.linux.gnu
-    task_tools = os.environ.get("NIRA_TASK_TOOLS")
+    task_tools = os.environ.get("PALETTE_TASK_TOOLS")
     if task_tools and not Path(task_tools, "bin").is_dir():
-        raise RuntimeError(f"NIRA_TASK_TOOLS has no bin directory: {task_tools}")
-    task_env = read_task_env(os.environ.get("NIRA_TASK_ENV"))
+        raise RuntimeError(f"PALETTE_TASK_TOOLS has no bin directory: {task_tools}")
+    task_env = read_task_env(os.environ.get("PALETTE_TASK_ENV"))
 
     argv = [
         "bwrap",
@@ -214,9 +214,9 @@ def build_bwrap_argv(
         # JULIA_DEPOT_PATH build-id cascade below, without handing the
         # worker write access to every other session's cache.
         "--bind", depot_clone_dir or julia_depot, julia_depot,
-        # this repo's source (the Neura package) -- read-only, worker cannot modify it
+        # this repo's source (the Palette package) -- read-only, worker cannot modify it
         "--ro-bind", repo_dir, repo_dir,
-        # the dev project (Project.toml/Manifest.toml naming Neura + IJulia + deps) -- read-only
+        # the dev project (Project.toml/Manifest.toml naming Palette + IJulia + deps) -- read-only
         "--ro-bind", project_dir, project_dir,
         # bounded, writable workspace -- the sandbox-local effect envelope
         "--bind", workspace_dir, workspace_dir,

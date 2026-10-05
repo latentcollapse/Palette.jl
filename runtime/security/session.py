@@ -10,20 +10,15 @@ every existing authority primitive unchanged: the same bwrap argv builder,
 the same broker/ceiling model, the same depot-clone mechanism (now
 session-lifetime, via create_session_depot, instead of one-shot).
 
-Session identity is explicit, not assumed. `NeuraSession.epoch` is read
+Session identity is explicit, not assumed. `PaletteSession.epoch` is read
 from the worker process's own first line of output (a fresh UUID it
 generates itself on startup -- see session_loop.jl) -- never guessed,
 never carried over from a previous process. If the worker process dies,
-its epoch dies with it: `NeuraSession` does not silently relaunch or
+its epoch dies with it: `PaletteSession` does not silently relaunch or
 reconnect. A caller holding a dead session's handle gets `SessionDeadError`
-and has to decide what that means, the same way NeuraBash's daemon rejects
-a session handle from a previous `RUNTIME_EPOCH` (see
-`Project-LIRA-NeuraBash/julia/bin/daemon.jl`) rather than pretending
-process death didn't happen -- the lesson reused here, not the
-implementation (NeuraBash's is a multi-client daemon serving many logical
-sessions from one long-lived process with its own binary framed protocol;
-this is one dedicated sandboxed worker per session, newline-delimited JSON
-over its own stdio, no daemon, no multiplexing).
+and must explicitly choose a new session or revival. Each session owns one
+sandboxed worker with newline-delimited JSON over its own stdio.
+
 
 The authority model is completely unchanged by persistence: the broker
 still only sees Class-C requests over its own socket, exactly as for a
@@ -80,7 +75,7 @@ class SessionProtocolError(Exception):
 
 def _readline_with_timeout(pipe, timeout: float) -> str:
     """`pipe.readline()` blocks forever on a hung/slow worker with no way
-    to bound it -- confirmed: `turn_timeout` was stored on `NeuraSession`
+    to bound it -- confirmed: `turn_timeout` was stored on `PaletteSession`
     but never actually used anywhere, so a turn running `while true; end`
     (or anything just slow) hung the calling thread indefinitely, with no
     way for `close()` to interrupt it either (the call sits inside the
@@ -97,7 +92,7 @@ def _readline_with_timeout(pipe, timeout: float) -> str:
         sel.close()
 
 
-class NeuraSession:
+class PaletteSession:
     """One persistent, sandboxed Palette worker plus its own broker,
     ceiling, and depot clone -- a real Julia process kept alive across
     many `turn()` calls, not a fresh one per call."""
@@ -331,7 +326,7 @@ class NeuraSession:
             if resp.get("epoch") != self.epoch:
                 # Not expected to be reachable given one dedicated process
                 # per session and no respawning -- checked anyway, the same
-                # defensive posture NeuraBash's own handle validation takes
+                # defensive posture Palette's own handle validation takes
                 # toward its own process_epoch field, and cheap to verify.
                 raise SessionDeadError(
                     f"epoch mismatch: session issued for {self.epoch!r}, response carries {resp.get('epoch')!r}"

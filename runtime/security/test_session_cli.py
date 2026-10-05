@@ -135,7 +135,7 @@ class TestSessionCli(unittest.TestCase):
         self.assertTrue(all(self.hello["capabilities"].get(name) for name in
             ("revival_observation_v1", "reload_observation_v1", "phase_costs_v1")))
         # A required-field consumer still needs only the established result.
-        result = self._turn("legacy_value=42; (legacy_value, sort!(collect(keys(Neura.Api.costs()))))")
+        result = self._turn("legacy_value=42; (legacy_value, sort!(collect(keys(Palette.Api.costs()))))")
         self.assertEqual((result["success"], result["data"]), (True, [42, [1]]))
         self.assertEqual(self._turn("legacy_value+1")["data"], 43)
         # Run a real worker with the older wire shape, not a simulated reply.
@@ -392,7 +392,7 @@ class TestSessionCli(unittest.TestCase):
     def test_stress_runs_a_flaky_command_many_times_in_the_sandbox(self):
         """A failure that shows up one run in many needs many runs; the report
         names the first failing run, which STRESS_RUN repeats."""
-        r = self._turn('Neura.stress(PAYLOAD; n=60, jobs=6)', payload="[ $((STRESS_RUN % 20)) -ne 0 ] || { echo race at $STRESS_RUN; exit 2; }")
+        r = self._turn('Palette.stress(PAYLOAD; n=60, jobs=6)', payload="[ $((STRESS_RUN % 20)) -ne 0 ] || { echo race at $STRESS_RUN; exit 2; }")
         self.assertTrue(r["success"], r)
         self.assertIn("60 runs in", r["display"])
         self.assertIn("3 failed (exit codes: 0×57, 2×3)", r["display"])
@@ -417,7 +417,7 @@ class TestSessionCli(unittest.TestCase):
         self.assertIn("nothing is running any more", r["output"])
         r = self._turn("1", request_id="6")
         self.assertIn("[background: task `bad` failed: boom]", r["output"])
-        named = {t["name"]: t for t in self._turn('Neura.jobs()')["data"]["tasks"]}
+        named = {t["name"]: t for t in self._turn('Palette.jobs()')["data"]["tasks"]}
         self.assertEqual((named["job"]["state"], named["bad"]["state"]), ("finished", "failed"))
         self.assertEqual(named["bad"]["failure_type"], "ErrorException")
         self.assertEqual(named["job"]["first_observed_call"], 1)
@@ -431,7 +431,7 @@ class TestSessionCli(unittest.TestCase):
                    'newest=@async (put!(ready,nothing);take!(newest_gate);Base.invokelatest(callback,1)); '
                    'take!(ready);take!(ready);nothing')
         self.assertEqual(self._turn('callback(x)=x+100;put!(gate,nothing);put!(newest_gate,nothing);(fetch(old),fetch(newest))')["data"], [2, 101])
-        observed = self._turn('Neura.taskinfo(old)')["data"]
+        observed = self._turn('Palette.taskinfo(old)')["data"]
         self.assertEqual(observed["state"], "finished")
         self.assertEqual(observed["first_observed_call"], 1)
         self.assertIsInstance(observed["world_at_first_observation"], str)
@@ -441,23 +441,23 @@ class TestSessionCli(unittest.TestCase):
         file.write_text("old")
         self._turn('n=1; f(x)=x+1; input=read("observer.txt",String); ready=Channel{Nothing}(1); gate=Channel{Nothing}(0); '
                    'job=@async (put!(ready,nothing);take!(gate));take!(ready);nothing')
-        baseline = self._turn('Neura.changes(acknowledge=true)')["data"]
+        baseline = self._turn('Palette.changes(acknowledge=true)')["data"]
         self.assertEqual(baseline["baseline"], "not_acknowledged")
         self.assertEqual(baseline["observed_through_call"], 1)
         self._turn('n=2; f(x)=x+9;put!(gate,nothing);fetch(job);nothing')
         file.write_text("new contents")
-        delta = self._turn('Neura.changes()')["data"]
+        delta = self._turn('Palette.changes()')["data"]
         self.assertIn("n", delta["bindings"]["changed"])
         self.assertIn("f", delta["definitions"]["changed"])
         self.assertIn(str(file), delta["files"]["changed"])
         self.assertIn("job", delta["jobs"]["changed"])
         self.assertEqual(delta["acknowledged_through_call"], 1)
-        self._turn('Neura.changes(acknowledge=true)')
-        empty = self._turn('Neura.changes()')["data"]
+        self._turn('Palette.changes(acknowledge=true)')
+        empty = self._turn('Palette.changes()')["data"]
         for kind in ("bindings", "definitions", "files", "jobs"):
             self.assertEqual(empty[kind]["counts"], {"new": 0, "changed": 0, "removed": 0})
         self._turn('for i in 1:300; Core.eval(@__MODULE__,Expr(:(=),Symbol("Z",i),i));end;nothing')
-        grown = self._turn('Neura.changes()')["data"]["bindings"]
+        grown = self._turn('Palette.changes()')["data"]["bindings"]
         self.assertEqual(grown["counts"]["new"], 300)
         self.assertEqual(len(grown["new"]), 20)
 
@@ -509,10 +509,10 @@ class TestSessionCli(unittest.TestCase):
         self.assertEqual(r["data"], 20, r)
         self.assertIn("reload_failed_partial_change", r["output"])
 
-    def test_neura_handle_cannot_reset_the_kernel(self):
-        """Neura.reset_kernel_state() used to erase every binding silently."""
+    def test_palette_handle_cannot_reset_the_kernel(self):
+        """Palette.reset_kernel_state() used to erase every binding silently."""
         self._turn("keep = 1")
-        r = self._turn("Neura.reset_kernel_state()")
+        r = self._turn("Palette.reset_kernel_state()")
         self.assertFalse(r["success"])
         self.assertEqual(self._turn("keep")["data"], 1)
 
@@ -558,13 +558,13 @@ class TestSessionCli(unittest.TestCase):
         self.assertIn("local_not_visible", result["error"])
         self.assertIn("LOAD_PATH", result["error"])
         self.assertNotIn("Pkg.add", result["error"])
-        observed = self._turn('Neura.environment("HiddenLocal")')["data"]
+        observed = self._turn('Palette.environment("HiddenLocal")')["data"]
         self.assertEqual(observed["local_paths"], [str(pkg)])
         self.assertTrue(observed["offline"])
         self.assertTrue(self._turn('environment_before==(LOAD_PATH,read(Base.active_project(),String))')["data"])
         self.assertEqual(self._turn('pushfirst!(LOAD_PATH,pwd()); using HiddenLocal; HiddenLocal.answer()')["data"], 42)
-        self.assertEqual(self._turn('Neura.environment("HiddenLocal")')["data"]["status"], "visible")
-        dependency = self._turn('Neura.environment("JSON")')["data"]
+        self.assertEqual(self._turn('Palette.environment("HiddenLocal")')["data"]["status"], "visible")
+        dependency = self._turn('Palette.environment("JSON")')["data"]
         self.assertTrue(dependency["declared_dependency"])
         self.assertEqual(dependency["status"], "visible")
 
@@ -623,9 +623,9 @@ class TestSessionCli(unittest.TestCase):
         r1 = self._turn('for i in 1:3000; println("row ", i); end', request_id="1")
         r2 = self._turn('println("before the error"); error("boom")', request_id="2")
         self.assertEqual((r1["call"], r2["call"]), (1, 2))
-        r = self._turn('(count("\\n", Neura.output(1)), Neura.output(2))', request_id="3")
+        r = self._turn('(count("\\n", Palette.output(1)), Palette.output(2))', request_id="3")
         self.assertEqual(r["data"], [3000, "before the error\n"], r)
-        r = self._turn("Neura.output(3)", request_id="4")
+        r = self._turn("Palette.output(3)", request_id="4")
         self.assertFalse(r["success"])
         self.assertIn("call 3 printed nothing", r["error"])
 
@@ -724,7 +724,7 @@ class TestSessionCli(unittest.TestCase):
 
     def test_B03_nested_reflection_and_cycles_survive_both_workers(self):
         cases = [('PAYLOAD', dict),
-                 ('(reflection=methods(Neura.output),)', str),
+                 ('(reflection=methods(Palette.output),)', str),
                  ('a = Any[]; push!(a, a); a', str),
                  ('(a=[[1, 2], [3, 4]], label="λ")', dict),
                  ('Symbol(repeat("q", 2_000_000))', str),
@@ -750,7 +750,7 @@ class TestSessionCli(unittest.TestCase):
         self.assertEqual(result["costs"]["failed_phase"], "projection")
         self.assertIn("projection", result["error"])
         self.assertTrue(self._turn("isdefined(@__MODULE__,:retained)")["data"])
-        observed = self._turn('Neura.costs(1)')["data"]
+        observed = self._turn('Palette.costs(1)')["data"]
         self.assertGreaterEqual(observed["execution_seconds"], 0)
         self.assertIsNone(observed["projection_seconds"])
         self.assertGreaterEqual(observed["serialization_seconds"], 0)
@@ -766,36 +766,36 @@ class TestSessionCli(unittest.TestCase):
         source.write_text(prefix + 'apply(r::Rule,x)=r.weight*x\nobsolete()=:live\nend\n')
         self.assertEqual(self._turn('pushfirst!(LOAD_PATH,pwd()); using DeskKit; retained=DeskKit.Rule(3); DeskKit.apply(retained,7)')["data"], 21)
         source.write_text(prefix + 'apply(r::Rule,x)=r.weight*x+3\nobsolete()=:live\nend\n')
-        r = self._turn('(value=DeskKit.apply(retained,7),reload=last(Neura.reloads()))')["data"]
+        r = self._turn('(value=DeskKit.apply(retained,7),reload=last(Palette.reloads()))')["data"]
         self.assertEqual((r["value"], r["reload"]["status"]), (24, "reload_succeeded"))
         source.write_text(prefix + 'apply(r::Rule,x)=r.weight*x+100\nobsolete()=:live\nerror("partial")\nend\n')
-        r = self._turn('(value=DeskKit.apply(retained,7),reload=last(Neura.reloads()))')["data"]
+        r = self._turn('(value=DeskKit.apply(retained,7),reload=last(Palette.reloads()))')["data"]
         self.assertEqual((r["value"], r["reload"]["status"]), (121, "reload_failed_partial_change"))
         self.assertTrue(r["reload"]["methods_observed_changed"])
         self.assertNotEqual(r["reload"]["source_digest_before"], r["reload"]["source_digest_after"])
         source.write_text('module DeskKit\napply(r,x)=999\nfunction broken(\nend\n')
-        r = self._turn('(value=DeskKit.apply(retained,7),reload=last(Neura.reloads()))')["data"]
+        r = self._turn('(value=DeskKit.apply(retained,7),reload=last(Palette.reloads()))')["data"]
         self.assertEqual((r["value"], r["reload"]["status"]), (121, "reload_failed_no_observed_change"))
         source.write_text(prefix + 'apply(r::Rule,x)=r.weight*x+3\nend\n')
-        r = self._turn('last(Neura.reloads())')["data"]
+        r = self._turn('last(Palette.reloads())')["data"]
         self.assertIn("obsolete", r["surviving_deleted_definitions"])
         self.assertEqual(self._turn('DeskKit.obsolete()')["data"], "live")
-        origin = self._turn('Neura.provenance(:retained)')["data"]
+        origin = self._turn('Palette.provenance(:retained)')["data"]
         self.assertEqual(origin["origin_epoch"], self.hello["epoch"])
         self.assertEqual(len(origin["source_digest"]), 64)
         self.assertEqual(origin["freshness"], "definition_sources_changed")
         self.assertNotEqual(origin["definition_at_observation"]["source_digest"], origin["definition_current"]["source_digest"])
         source.write_text('module DeskKit\nstruct Rule; weight::Float64; end\napply(r::Rule,x)=r.weight*x\nend\n')
-        r = self._turn('(compatible=retained isa DeskKit.Rule,reload=last(Neura.reloads()))')["data"]
+        r = self._turn('(compatible=retained isa DeskKit.Rule,reload=last(Palette.reloads()))')["data"]
         self.assertFalse(r["compatible"])
         self.assertEqual(r["reload"]["status"], "reload_requires_clean_process")
         self.assertIn("Rule", r["reload"]["identity_risks"])
-        self.assertEqual(self._turn('Neura.provenance(:retained)')["data"]["freshness"], "earlier_type_definition")
+        self.assertEqual(self._turn('Palette.provenance(:retained)')["data"]["freshness"], "earlier_type_definition")
         self._turn('module Replaced; struct R end; f(x::R)=1; end; old_object=Replaced.R()')
         r = self._turn('module Replaced; struct R end; f(x::R)=2; end; Replaced.f(old_object)')
         self.assertFalse(r["success"])
         self.assertIn("MethodError", r["error"])
-        self.assertEqual(self._turn('Neura.provenance(:old_object)')["data"]["freshness"], "earlier_type_definition")
+        self.assertEqual(self._turn('Palette.provenance(:old_object)')["data"]["freshness"], "earlier_type_definition")
         previous = 0
         for generation in range(65):
             source.write_text('module DeskKit\nstruct Rule; weight::Float64; end\n'
@@ -804,7 +804,7 @@ class TestSessionCli(unittest.TestCase):
             sequence = event["reloads"][-1]["sequence"]
             self.assertGreater(sequence, previous)
             previous = sequence
-        history = self._turn('let r=Neura.reloads(); (length(r),last(r)["sequence"]); end')["data"]
+        history = self._turn('let r=Palette.reloads(); (length(r),last(r)["sequence"]); end')["data"]
         self.assertEqual(history, [64, previous])
 
     def test_C_preparation_is_keyed_visible_and_offline(self):
@@ -832,7 +832,7 @@ class TestSessionCli(unittest.TestCase):
             self.assertEqual(invoke("--status")[1]["state"], "failed")
             marker.write_text(json.dumps(record))
             self.assertTrue(invoke()[1]["reused"])
-            source = repo / "src/Neura.jl"
+            source = repo / "src/Palette.jl"
             source.write_text(source.read_text() + "\n# Preparation identity control\n")
             self.assertEqual(invoke("--status")[1]["state"], "stale")
             self.assertEqual(invoke()[1]["state"], "prepared")
@@ -1005,7 +1005,7 @@ class TestSessionCli(unittest.TestCase):
             [*session_cmd(), "--project-dir", PROJECT_DIR, "--ceiling", "{}",
              "--workspace-dir", self.task_workspace, "--turn-timeout", "20"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, bufsize=1, env={**os.environ, "NIRA_TASK_TOOLS": tools},
+            text=True, bufsize=1, env={**os.environ, "PALETTE_TASK_TOOLS": tools},
         )
         try:
             self.assertEqual(json.loads(proc.stdout.readline())["kind"], "HELLO")
@@ -1033,7 +1033,7 @@ class TestSessionCli(unittest.TestCase):
             [*session_cmd(), "--project-dir", PROJECT_DIR, "--ceiling", "{}",
              "--workspace-dir", self.task_workspace, "--turn-timeout", "20"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, bufsize=1, env={**os.environ, "NIRA_TASK_ENV": str(env_file)},
+            text=True, bufsize=1, env={**os.environ, "PALETTE_TASK_ENV": str(env_file)},
         )
         try:
             self.assertEqual(json.loads(proc.stdout.readline())["kind"], "HELLO")
@@ -1044,7 +1044,7 @@ class TestSessionCli(unittest.TestCase):
                 proc.stdin.flush()
                 r = json.loads(proc.stdout.readline())
                 self.assertTrue(r["success"], r)
-                self.assertEqual(r["data"], ["/opt/ocaml/lib", "a b=c", "/run/palette/home", False, "neura", "neura"],
+                self.assertEqual(r["data"], ["/opt/ocaml/lib", "a b=c", "/run/palette/home", False, "palette", "palette"],
                                  f"ephemeral={ephemeral}")
         finally:
             proc.stdin.close()

@@ -105,7 +105,7 @@ class RevivalTest(unittest.TestCase):
         Path(self.ws, "foundation.jl").write_text("module Foundation; export Token; struct Token; n::Int; end; end\n")
         self.session('path_="foundation.jl"; include(path_); using .Foundation; ' +
                      '; '.join(f'function dependent{i}(x::Foundation.Token); x.n+{i}; end' for i in range(5)))
-        out, r = self.revive('([dependent0(Foundation.Token(7)), dependent4(Foundation.Token(7))], Neura.revival()["lost"])')
+        out, r = self.revive('([dependent0(Foundation.Token(7)), dependent4(Foundation.Token(7))], Palette.revival()["lost"])')
         self.assertTrue(r["success"], r)
         self.assertEqual(r["data"][0], [7, 11])
         self.assertFalse(r["data"][1], out)
@@ -123,7 +123,7 @@ class RevivalTest(unittest.TestCase):
         Path(self.ws, "value.jl").write_text("81")
         self.session('path="value.jl"; result=include(path); unrelated=42', 'begin local x=3; scoped_value=x+1; end')
         Path(self.ws, "value.jl").write_text("82")
-        _, r = self.revive('(result, unrelated, scoped_value, Neura.provenance(:result)["freshness"], Neura.provenance(:unrelated)["freshness"])')
+        _, r = self.revive('(result, unrelated, scoped_value, Palette.provenance(:result)["freshness"], Palette.provenance(:unrelated)["freshness"])')
         self.assertEqual(r["data"], [81, 42, 4, "source_files_changed", "no_observed_staleness"])
 
     def test_MT017_world_identity_after_revival(self):
@@ -136,20 +136,20 @@ class RevivalTest(unittest.TestCase):
         source = Path(self.ws, "source.jl"); source.write_text("source_value=101\n")
         self.session('include("source.jl"); derived_value=source_value+1; unrelated_integer=9; unrelated_string="independent"')
         stamp = source.stat(); source.write_text("source_value=202\n"); os.utime(source, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
-        out, r = self.revive('[Neura.provenance(n)["freshness"] for n in (:source_value,:derived_value,:unrelated_integer,:unrelated_string)]')
+        out, r = self.revive('[Palette.provenance(n)["freshness"] for n in (:source_value,:derived_value,:unrelated_integer,:unrelated_string)]')
         self.assertTrue(r["success"], r)
         self.assertEqual(r["data"], ["source_files_changed"]*2+["no_observed_staleness"]*2)
         self.session('include("source.jl"); derived_value=source_value+1')
-        out, r = self.revive('Neura.provenance(:derived_value)["freshness"]')
+        out, r = self.revive('Palette.provenance(:derived_value)["freshness"]')
         self.assertEqual(r["data"], "no_observed_staleness")
 
     def test_MT028_tracked_artifact_authority_advances(self):
         import hashlib
         artifact=Path(self.ws,"artifact.txt"); authority=Path(self.ws,"authority.json")
         artifact.write_text("A"); authority.write_text(json.dumps({"generation":"A", "commit":"commit-A", "digest":hashlib.sha256(b"A").hexdigest()}))
-        self.session('artifact=Neura.read_artifact("artifact.txt"; authority_path="authority.json"); derived_artifact=artifact.content*"-derived"; unrelated=42')
+        self.session('artifact=Palette.read_artifact("artifact.txt"; authority_path="authority.json"); derived_artifact=artifact.content*"-derived"; unrelated=42')
         artifact.write_text("B"); authority.write_text(json.dumps({"generation":"B", "commit":"commit-B", "digest":hashlib.sha256(b"B").hexdigest()}))
-        out,r=self.revive('(derived_artifact,Neura.provenance(:derived_artifact)["freshness"],Neura.provenance(:unrelated)["freshness"])')
+        out,r=self.revive('(derived_artifact,Palette.provenance(:derived_artifact)["freshness"],Palette.provenance(:unrelated)["freshness"])')
         self.assertTrue(r["success"],r)
         self.assertEqual(r["data"],["A-derived","artifact_superseded","no_observed_staleness"])
 
@@ -241,7 +241,7 @@ class RevivalTest(unittest.TestCase):
         self.session('using CSV, DataFrames; d = CSV.read("data.csv", DataFrame); total = sum(d.a)', "unrelated = 5")
         original = next(b["origin"] for b in self.manifest()["bindings"] if b["name"] == "total")
         Path(self.ws, "data.csv").write_text("a\n10\n20\n")
-        out, r = self.revive("(value=total,provenance=Neura.provenance(:total))")
+        out, r = self.revive("(value=total,provenance=Palette.provenance(:total))")
         self.assertTrue(r["success"], r)
         provenance = r["data"]["provenance"]
         self.assertEqual(provenance["source_digest"], original["source_digest"])
@@ -276,7 +276,7 @@ class RevivalTest(unittest.TestCase):
                      'struct P; x::Int; y::Int; end\nnew = P(1, 2); '
                      'module Nested; struct R; x::Int; end; behavior(r::R)=r.x+100; end; nested_new=Nested.R(2)')
         out, r = self.revive("(@isdefined(old), new.y, @isdefined(nested_old), @isdefined(nested_type), "
-                             "Nested.behavior(nested_new), Neura.provenance(:nested_new))")
+                             "Nested.behavior(nested_new), Palette.provenance(:nested_new))")
         self.assertIn("old (P, an earlier definition, call 1): its type P is an earlier definition", section(out, "not revived"))
         self.assertIn("new (P, call 2)", section(out, "restored exactly"))
         self.assertIn("nested_old (", section(out, "not revived"))

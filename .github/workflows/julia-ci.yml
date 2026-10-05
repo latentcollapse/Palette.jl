@@ -25,7 +25,7 @@ jobs:
       run: python3 runtime/scripts/test_julia_analyzer.py
 
     - name: Run static analysis preflight
-      run: python3 runtime/scripts/julia_analyzer.py src/Neura.jl --verbose
+      run: python3 runtime/scripts/julia_analyzer.py src/Palette.jl --verbose
 
     - name: Build package
       run: julia --project=@. -e 'using Pkg; Pkg.build()'
@@ -41,8 +41,8 @@ jobs:
           Pkg.develop(path=".")
           Pkg.add("Aqua")
           using Aqua
-          using Neura
-          Aqua.test_all(Neura)
+          using Palette
+          Aqua.test_all(Palette)
         '
 
     - name: Run JET.jl type checking (optional)
@@ -52,8 +52,8 @@ jobs:
           using Pkg
           Pkg.add("JET")
           using JET
-          using Neura
-          JET.test_package(Neura)
+          using Palette
+          JET.test_package(Palette)
         '
 
   ijulia-integration:
@@ -72,7 +72,7 @@ jobs:
       with:
         python-version: '3.12'
 
-    - name: Build a Julia environment with Neura + IJulia
+    - name: Build a Julia environment with Palette + IJulia
       run: |
         julia -e '
           using Pkg

@@ -3,8 +3,8 @@
 Regression tests for julia_analyzer.py's CI-facing exit code.
 
 Found by direct testing, not inferred: deleting a Phase-required struct
-entirely (ShellEscape) from a copy of src/Neura.jl still exited 0 from
-`julia_analyzer.py src/Neura.jl --verbose` -- the exact invocation
+entirely (ShellEscape) from a copy of src/Palette.jl still exited 0 from
+`julia_analyzer.py src/Palette.jl --verbose` -- the exact invocation
 .github/workflows/julia-ci.yml's "Run static analysis preflight" step
 uses. Two independent bugs caused this: required-component issues were
 capped at Severity.WARNING (never ERROR), and validate_phases() extended
@@ -22,7 +22,7 @@ import tempfile
 from pathlib import Path
 
 REPO_DIR = Path(__file__).resolve().parents[2]
-REAL_SRC = REPO_DIR / "src" / "Neura.jl"
+REAL_SRC = REPO_DIR / "src" / "Palette.jl"
 ANALYZER = REPO_DIR / "runtime/scripts" / "julia_analyzer.py"
 
 
@@ -43,7 +43,7 @@ def test_deleted_required_struct_fails_the_gate():
     mutated = re.sub(r"struct ShellEscape.*?\nend\n", "", src, flags=re.S)
     assert "struct ShellEscape" not in mutated, "test setup itself failed to remove the struct"
     with tempfile.TemporaryDirectory() as tmp:
-        mutated_path = Path(tmp) / "Neura.jl"
+        mutated_path = Path(tmp) / "Palette.jl"
         mutated_path.write_text(mutated)
         r = _run(mutated_path, "--verbose")
         assert r.returncode == 1, f"expected the gate to fail; got exit 0.\n{r.stdout}"
@@ -54,7 +54,7 @@ def test_json_mode_reports_the_same_error():
     src = REAL_SRC.read_text()
     mutated = re.sub(r"struct ShellEscape.*?\nend\n", "", src, flags=re.S)
     with tempfile.TemporaryDirectory() as tmp:
-        mutated_path = Path(tmp) / "Neura.jl"
+        mutated_path = Path(tmp) / "Palette.jl"
         mutated_path.write_text(mutated)
         r = _run(mutated_path, "--json")
         import json

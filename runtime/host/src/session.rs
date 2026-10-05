@@ -52,7 +52,7 @@ pub struct Turn<'a> {
     pub digest: bool,
 }
 
-pub struct NeuraSession {
+pub struct PaletteSession {
     pub session_id: String,
     pub epoch: String,
     pub capabilities: Value,
@@ -94,8 +94,8 @@ fn dead(msg: impl Into<String>) -> SessionError {
     SessionError::Dead(msg.into())
 }
 
-impl NeuraSession {
-    pub fn start(o: SessionOptions, stop: Arc<AtomicBool>) -> Result<NeuraSession, SessionError> {
+impl PaletteSession {
+    pub fn start(o: SessionOptions, stop: Arc<AtomicBool>) -> Result<PaletteSession, SessionError> {
         let session_id = format!("palette-{}", util::hex(16));
         let mut cleanup = Cleanup::default();
         match Self::start_inner(&o, &session_id, &mut cleanup, stop) {
@@ -110,7 +110,7 @@ impl NeuraSession {
     }
 
     fn start_inner(o: &SessionOptions, session_id: &str, cleanup: &mut Cleanup, stop: Arc<AtomicBool>)
-        -> Result<NeuraSession, SessionError> {
+        -> Result<PaletteSession, SessionError> {
         let err = |e: String| dead(e);
         let tmp_root = o.scratch_root.as_deref().map(PathBuf::from).unwrap_or_else(|| util::home().join(".palette-sessions").join(session_id));
         fs::create_dir_all(&tmp_root).map_err(|e| err(e.to_string()))?;
@@ -238,7 +238,7 @@ impl NeuraSession {
                 }
             });
         }
-        let mut s = NeuraSession {
+        let mut s = PaletteSession {
             session_id: session_id.to_string(),
             epoch: String::new(),
             capabilities: json!({}),
@@ -411,7 +411,7 @@ impl NeuraSession {
     }
 }
 
-impl Drop for NeuraSession {
+impl Drop for PaletteSession {
     fn drop(&mut self) {
         self.close();
     }

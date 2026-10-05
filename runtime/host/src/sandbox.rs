@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-pub const SANDBOX_USER: &str = "neura";
+pub const SANDBOX_USER: &str = "palette";
 /// The sandbox sets these itself; a task environment cannot move them.
 const SANDBOX_OWNED_ENV: &[&str] = &[
     "PATH", "HOME", "USER", "LOGNAME", "LANG", "JULIA_DEPOT_PATH", "JULIA_PROJECT", "JULIA_LOAD_PATH",
@@ -81,20 +81,20 @@ pub fn create_session_depot(real_depot: Option<&str>) -> Result<PathBuf, String>
 pub fn read_task_env(path: Option<&str>) -> Result<BTreeMap<String, String>, String> {
     let mut env = BTreeMap::new();
     let Some(path) = path.filter(|p| !p.is_empty()) else { return Ok(env) };
-    let text = fs::read_to_string(path).map_err(|e| format!("NIRA_TASK_ENV {path}: {e}"))?;
+    let text = fs::read_to_string(path).map_err(|e| format!("PALETTE_TASK_ENV {path}: {e}"))?;
     for line in text.lines() {
         if line.trim().is_empty() || line.trim_start().starts_with('#') {
             continue;
         }
         let Some((key, value)) = line.split_once('=') else {
-            return Err(format!("NIRA_TASK_ENV: not a KEY=VALUE line: {line:?}"));
+            return Err(format!("PALETTE_TASK_ENV: not a KEY=VALUE line: {line:?}"));
         };
         let key = key.trim();
         let ident = !key.is_empty()
             && !key.starts_with(|c: char| c.is_ascii_digit())
             && key.chars().all(|c| c.is_alphanumeric() || c == '_');
         if !ident {
-            return Err(format!("NIRA_TASK_ENV: not a KEY=VALUE line: {line:?}"));
+            return Err(format!("PALETTE_TASK_ENV: not a KEY=VALUE line: {line:?}"));
         }
         if !SANDBOX_OWNED_ENV.contains(&key) {
             env.insert(key.to_string(), value.to_string());
@@ -137,13 +137,13 @@ pub struct SandboxSpec<'a> {
 pub fn build_bwrap_argv(s: &SandboxSpec) -> Result<Vec<String>, String> {
     let toolchain = Path::new(s.julia_bin).parent().and_then(Path::parent).unwrap_or(Path::new("/"));
     let toolchain = toolchain.to_string_lossy().into_owned();
-    let task_tools = std::env::var("NIRA_TASK_TOOLS").ok().filter(|t| !t.is_empty());
+    let task_tools = std::env::var("PALETTE_TASK_TOOLS").ok().filter(|t| !t.is_empty());
     if let Some(t) = &task_tools {
         if !Path::new(t).join("bin").is_dir() {
-            return Err(format!("NIRA_TASK_TOOLS has no bin directory: {t}"));
+            return Err(format!("PALETTE_TASK_TOOLS has no bin directory: {t}"));
         }
     }
-    let task_env = read_task_env(std::env::var("NIRA_TASK_ENV").ok().as_deref())?;
+    let task_env = read_task_env(std::env::var("PALETTE_TASK_ENV").ok().as_deref())?;
 
     let mut a: Vec<String> = Vec::new();
     let mut push = |xs: &[&str]| a.extend(xs.iter().map(|x| x.to_string()));

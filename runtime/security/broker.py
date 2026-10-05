@@ -182,14 +182,8 @@ class Broker:
         # session's, which nothing before package_management ever needed.
         self.depot_dir = depot_dir
         self._log_lock = threading.Lock()
-        # NeuraBash's daemon (Project-LIRA-NeuraBash/julia/bin/daemon.jl)
-        # rejects a concurrent mutating request on a busy session
-        # (SessionBusyError) rather than letting two Pkg-style mutations
-        # race on shared environment state. This broker has the same
-        # exposure -- two concurrent package_management requests hitting
-        # this depot clone's single Pkg.add invocation -- serialized here
-        # rather than left to whatever Pkg's own on-disk locking happens
-        # to do under concurrent writers.
+        # Serialize package mutations in this session's cloned depot so
+        # concurrent requests cannot race on shared package state.
         self._depot_lock = threading.Lock()
         # The host process that owns this session (session_cli) sets this to
         # its own bridge: a callable (type, payload) -> reply dict that asks

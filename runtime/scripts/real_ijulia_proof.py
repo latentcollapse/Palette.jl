@@ -5,7 +5,7 @@ actual IJulia kernel process via ZMQ execute_request messages -- not a
 direct in-process function call. Verified working 2026-09-22: a real
 IJulia kernel process, real ZMQ connection, two separate execute_request
 messages (x = 41, then x + 1), correct 42 back over the wire, plus
-Neura itself loading and persisting state correctly when run
+Palette itself loading and persisting state correctly when run
 inside a real kernel (not just a plain `julia` process).
 
 Setup (one-time):
@@ -84,14 +84,14 @@ def main():
     results["req2_is_42"] = got_42
     print(f"  Phase 1 core claim (x=41 then x+1==42, over the real wire protocol): {'PASS' if got_42 else 'FAIL'}")
 
-    ok, out = run_cell(kc, 'using Neura; Neura.reset_kernel_state(); Neura.execute(Neura.ExecuteCode("y = 10"))')
-    print(f"[req 3] load Neura, execute via it -> ok={ok}")
+    ok, out = run_cell(kc, 'using Palette; Palette.reset_kernel_state(); Palette.execute(Palette.ExecuteCode("y = 10"))')
+    print(f"[req 3] load Palette, execute via it -> ok={ok}")
     results["req3_package_loads_in_real_kernel"] = ok
 
-    ok, out = run_cell(kc, 'Neura.execute(Neura.ExecuteCode("y + 5")).result.data')
+    ok, out = run_cell(kc, 'Palette.execute(Palette.ExecuteCode("y + 5")).result.data')
     got_15 = any(v == "15" for (t, v) in out if t == "execute_result")
-    print(f"[req 4] Neura's own persistence, inside a real kernel -> {out} -> {'PASS' if got_15 else 'FAIL'}")
-    results["req4_neura_persistence_in_real_kernel"] = got_15
+    print(f"[req 4] Palette's own persistence, inside a real kernel -> {out} -> {'PASS' if got_15 else 'FAIL'}")
+    results["req4_palette_persistence_in_real_kernel"] = got_15
 
     kc.stop_channels()
     km.shutdown_kernel(now=True)

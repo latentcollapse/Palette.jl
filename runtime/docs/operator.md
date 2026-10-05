@@ -5,8 +5,8 @@ them across calls; `ans` holds the last successful result. Whole-call parse erro
 produce no effects. Runtime errors can leave effects from earlier statements.
 
 Inside the session, `Main` is the execution world. `Palette.world()` returns that
-module and `Palette.worldinfo()` reports its identity and epoch. `Neura` remains
-an alias for the same restricted helper API; it is not the complete package.
+module and `Palette.worldinfo()` reports its identity and epoch. The session
+helper binding exposes the restricted operator API, not the complete package.
 
 | Helper | Purpose |
 | --- | --- |

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Precompile every Julia stdlib and project dependency into the real depot,
-compatible with Neura.
+compatible with Palette.
 
-A worker loads Neura before any turn runs, and Neura's cache pins the
+A worker loads Palette before any turn runs, and Palette's cache pins the
 stdlib caches it was built against (Logging, Dates, ...) from the depot
 itself rather than the ones Julia ships. Every shipped stdlib cache that
 depends on a different copy is then rejected, and so is a project package
@@ -18,7 +18,7 @@ that could see paths the worker cannot built caches every worker rejected.
 Run it where sessions will run, with the same mounts; a harness that places
 the Julia runtime or this repo at other paths must run it there.
 
-Run once per depot, and again after Neura or the project changes:
+Run once per depot, and again after Palette or the project changes:
     python3 runtime/security/prewarm_depot.py --project-dir <project>
 """
 from __future__ import annotations
@@ -52,8 +52,8 @@ def preparation_identity(project_dir: str, repo_dir: str, julia_bin: str) -> dic
     return {"project": str(project), "repo": str(repo), "source": files,
             "workload": hashlib.sha256(PREWARM.encode()).hexdigest(),
             "runtime": {"binary": julia_bin, "version": version, "machine": os.uname().machine},
-            "task_environment": (hashlib.sha256(Path(os.environ["NIRA_TASK_ENV"]).read_bytes()).hexdigest()
-                                 if os.environ.get("NIRA_TASK_ENV") else None),
+            "task_environment": (hashlib.sha256(Path(os.environ["PALETTE_TASK_ENV"]).read_bytes()).hexdigest()
+                                 if os.environ.get("PALETTE_TASK_ENV") else None),
             "depot": default_depot()}
 
 

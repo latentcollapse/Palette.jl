@@ -10,9 +10,7 @@ this process, not handed in by the orchestrator -- so a caller holding a
 handle from a previous process (this one crashed and got relaunched) gets
 a real, unambiguous mismatch instead of silently talking to a different
 Julia world that happens to share a session_id. See
-`runtime/security/session.py`'s `NeuraSession` for the orchestrator side and why
-this mirrors (not copies) NeuraBash's own `RUNTIME_EPOCH` lesson
-(`Project-LIRA-NeuraBash/julia/bin/daemon.jl`).
+`runtime/security/session.py`'s `PaletteSession` for the orchestrator side.
 
 Request:  {"request_id": "...", "kind": "EXECUTE" | "EPHEMERAL", "code": "...", "ceiling": {...}?,
            "payload": "..."?, "timeout_s": number?}
@@ -31,7 +29,7 @@ compiled methods, kept for the life of this process.
 
 `kind == "EPHEMERAL"` does NOT run in this process at all. An earlier
 version of this file ran ephemeral code in a fresh, throwaway `Module`
-in-process (see `Neura.EphemeralTool`/`check_ephemeral_source!`, which
+in-process (see `Palette.EphemeralTool`/`check_ephemeral_source!`, which
 still exist and are still real, tested, and honestly documented as a
 namespace-HYGIENE measure). That was proven, by direct adversarial
 testing, not sufficient as an authority boundary: `Core.eval(Base,
@@ -44,33 +42,33 @@ inside the sandbox" thesis. The fix is not a smarter checker; it's
 putting the boundary underneath the language instead of inside it:
 `EPHEMERAL` spawns a real, disposable, OS-sandboxed CHILD process via the
 already-adversarially-proven `spawn_child_worker` capability (see
-`runtime/security/broker.py`, `docs/THREAT_MODEL.md` rows 16-19). If the child's
+`runtime/security/broker.py` and `runtime/docs/authority.md`). If the child's
 code corrupts its own `Base.show`, that corruption dies with the child
 process -- Linux throws the whole thing away, which is a fundamentally
 stronger guarantee than trying to detect or reverse the corruption
-afterward. `Neura.request_capability("spawn_child_worker", ...)` already
+afterward. `Palette.request_capability("spawn_child_worker", ...)` already
 enforces `C_child ⊆ C_caller`; an ephemeral turn's optional `"ceiling"`
 field (default `{}`, i.e. full language power, zero broker-mediated
 authority) is validated against THIS session's own ceiling exactly like
 any other spawn_child_worker request.
 =#
-using Neura
+using Palette
 
-# Qualified access to Neura's OWN already-declared dependencies, not a
+# Qualified access to Palette's OWN already-declared dependencies, not a
 # separate `using JSON`/`using UUIDs` here -- confirmed by direct testing
-# that a script run under a project whose Project.toml lists only `Neura`
-# (not JSON/UUIDs directly) cannot `using JSON` itself even though Neura
+# that a script run under a project whose Project.toml lists only `Palette`
+# (not JSON/UUIDs directly) cannot `using JSON` itself even though Palette
 # depends on it internally: a package's dependencies aren't visible by
 # name to code outside that package just because the package is loadable.
-# `Neura.JSON`/`Neura.UUIDs` work because `using JSON` inside Neura.jl's
+# `Palette.JSON`/`Palette.UUIDs` work because `using JSON` inside Palette.jl's
 # own source creates that exact binding, and this script never needs a
-# project of its own beyond whatever already makes `using Neura` work.
-const JSON = Neura.JSON
-const UUIDs = Neura.UUIDs
-using Neura: safe_json, capture_output, run_turn, execute_turn, bounded_data, text_display, scrub, INTERRUPT_GRACE_S
+# project of its own beyond whatever already makes `using Palette` work.
+const JSON = Palette.JSON
+const UUIDs = Palette.UUIDs
+using Palette: safe_json, capture_output, run_turn, execute_turn, bounded_data, text_display, scrub, INTERRUPT_GRACE_S
 
 const EPOCH = string(UUIDs.uuid4())
-Neura.TASK_EPOCH[] = EPOCH
+Palette.TASK_EPOCH[] = EPOCH
 
 # The protocol gets its own duplicate of fd 1, and fd 1/fd 2 are then pointed
 # at a sink file. Turn code prints, `run` children inherit fd 1, and tasks
@@ -103,10 +101,10 @@ redirect_stdin(open("/dev/null"))
 const SINK = open(joinpath(tempdir(), "palette-background-output.log"), "a")
 redirect_stdout(SINK)
 redirect_stderr(SINK)
-# Read back at the start of each call (Neura.report_background).
-Neura.SINK[] = SINK
-Neura.SINK_PATH[] = joinpath(tempdir(), "palette-background-output.log")
-Neura.SINK_READ[] = filesize(Neura.SINK_PATH[])
+# Read back at the start of each call (Palette.report_background).
+Palette.SINK[] = SINK
+Palette.SINK_PATH[] = joinpath(tempdir(), "palette-background-output.log")
+Palette.SINK_READ[] = filesize(Palette.SINK_PATH[])
 
 # `display(x)` goes through the display stack, whose TextDisplay was built at
 # startup around the original stdout, which is the protocol pipe: one
@@ -133,8 +131,8 @@ function respond(resp::Dict{String,Any})
     flush(PROTO)
     finished = time_ns()
     call = get(resp, "call", nothing)
-    if call isa Int && haskey(Neura.TURN_COSTS, call)
-        costs = Neura.TURN_COSTS[call]
+    if call isa Int && haskey(Palette.TURN_COSTS, call)
+        costs = Palette.TURN_COSTS[call]
         costs["serialization_seconds"] = (encoded - started) / 1e9
         costs["worker_pipe_seconds"] = (finished - encoded) / 1e9
         costs["worker_response_bytes"] = sizeof(line) + 1
@@ -146,7 +144,7 @@ end
 # times, a model request each; the hint names what works instead.
 const PKG_OFFLINE = get(ENV, "JULIA_PKG_OFFLINE", "") == "true"
 const LOADABLE = let deps = get(Base.parsed_toml(Base.active_project()), "deps", Dict())
-    join(["the Julia standard library"; sort!([String(k) for k in keys(deps) if k != "Neura"])], ", ")
+    join(["the Julia standard library"; sort!([String(k) for k in keys(deps) if k != "Palette"])], ", ")
 end
 
 # A reserved word where a name belongs: an argument (`quote::UInt8`), an
@@ -199,7 +197,7 @@ function with_hint(err, code)
     err isa AbstractString || return err
     missing = match(r"Package ([A-Za-z][A-Za-z0-9_]*) (?:not found in current path|\[[^\]]+\] is required but does not seem to be installed)", err)
     if missing !== nothing
-        observed = Neura.package_environment(missing[1])
+        observed = Palette.package_environment(missing[1])
         message = "Package $(missing[1]): $(observed["status"]). $(observed["action"])"
         isempty(observed["local_paths"]) || (message *= " Local paths: " * join(observed["local_paths"], ", ") * ".")
         PKG_OFFLINE && (message *= " This kernel has no network. Loadable: $LOADABLE.")
@@ -235,16 +233,16 @@ function with_hint(err, code)
 end
 
 
-Neura.WORKSPACE_ROOT[] = pwd()
-Neura.workspace_package_first!(pwd())
+Palette.WORKSPACE_ROOT[] = pwd()
+Palette.workspace_package_first!(pwd())
 # The host's state directory, where each completed call's state is saved for
 # a kernel that replaces this one. A revived kernel takes the old eval
 # module's name: values of kernel-defined types deserialize only into it.
-Neura.STATE_DIR[] = get(ENV, "PALETTE_STATE_DIR", "")
-Neura.INITIAL_ENV[] = Dict{String,String}(ENV)
-let name = Neura.revival_module_name()
-    name === nothing || (Neura.GLOBAL_STATE[] = Neura.KernelState(Module(Symbol(name))))
-    mod = Neura.get_kernel_state().eval_module
+Palette.STATE_DIR[] = get(ENV, "PALETTE_STATE_DIR", "")
+Palette.INITIAL_ENV[] = Dict{String,String}(ENV)
+let name = Palette.revival_module_name()
+    name === nothing || (Palette.GLOBAL_STATE[] = Palette.KernelState(Module(Symbol(name))))
+    mod = Palette.get_kernel_state().eval_module
     Core.eval(Main, Expr(:(=), nameof(mod), mod))
 end
 revival_pending = true
@@ -252,7 +250,7 @@ revival_pending = true
 # Finish runtime compilation and revival before advertising readiness.
 # Otherwise the host charges this preparation against the first turn's limit.
 # Warm-up calls leave no user history, receipt, binding or phase observations.
-let state = Neura.get_kernel_state()
+let state = Palette.get_kernel_state()
     Core.eval(state.eval_module, Expr(:global, Expr(:(=), :PAYLOAD, nothing)))
     (r, _, _), out = execute_turn("print(\"\"); [1 2]", 60.0)
     # An undefined name is the error models make most, and its message runs
@@ -263,14 +261,14 @@ let state = Neura.get_kernel_state()
     scrub(out); with_hint("x", "y"); safe_json(Dict{String,Any}("a" => 1))
     empty!(state.execution_history)
     empty!(state.receipt_log)
-    empty!(Neura.TURN_COSTS)
-    empty!(Neura.DEFINITION_LOG); empty!(Neura.CALL_FILES); empty!(Neura.USED_FILES); empty!(Neura.BINDING_SEEN)
-    empty!(Neura.BINDING_ORIGINS); empty!(Neura.BINDING_IDENTITIES)
+    empty!(Palette.TURN_COSTS)
+    empty!(Palette.DEFINITION_LOG); empty!(Palette.CALL_FILES); empty!(Palette.USED_FILES); empty!(Palette.BINDING_SEEN)
+    empty!(Palette.BINDING_ORIGINS); empty!(Palette.BINDING_IDENTITIES)
     Core.eval(state.eval_module, Expr(:global, Expr(:(=), :ans, nothing)))
-    Neura.REVIVAL_REPORT[] = try
-        Base.invokelatest(Neura.revive_state!)
+    Palette.REVIVAL_REPORT[] = try
+        Base.invokelatest(Palette.revive_state!)
     catch e
-        Neura.revival_observation!(; uncertain=["revival failed after possible partial reconstruction"],
+        Palette.revival_observation!(; uncertain=["revival failed after possible partial reconstruction"],
             text="[revival] The previous kernel stopped, and reviving its state failed ($(first(sprint(showerror, e), 200))). " *
                  "Partial reconstructed state may remain; inspect bindings. Files in the workspace remain.")
     end
@@ -296,7 +294,7 @@ for line in eachline(PROTO_IN)
     timeout_s = get(req, "timeout_s", nothing)
     resp = Dict{String,Any}("kind" => "RESULT", "epoch" => EPOCH, "request_id" => request_id)
     snapshot_call = nothing
-    previous_reload_sequence = Neura.RELOAD_SEQUENCE[]
+    previous_reload_sequence = Palette.RELOAD_SEQUENCE[]
 
     try
         code isa String || error("request 'code' must be a string")
@@ -320,7 +318,7 @@ for line in eachline(PROTO_IN)
             # (that's what `repr` is for); this is textual generation of
             # trusted host-side code embedding untrusted content as DATA,
             # not string-building a shell command.
-            child_script = string("__palette_child_started__=time_ns(); using Neura; Neura.ephemeral_main(", repr(code),
+            child_script = string("__palette_child_started__=time_ns(); using Palette; Palette.ephemeral_main(", repr(code),
                 "; payload=", repr(payload), ", timeout_s=", repr(timeout_s),
                 ", startup_seconds=(time_ns()-__palette_child_started__)/1e9)")
             # `child_workspace`/`child_project`/`child_repo` are no longer
@@ -331,7 +329,7 @@ for line in eachline(PROTO_IN)
             # gets (see broker.py's _handle_spawn_child_worker docstring
             # for the exploit this closed).
             child_started = time_ns()
-            spawn_resp = Neura.request_capability("spawn_child_worker", Dict(
+            spawn_resp = Palette.request_capability("spawn_child_worker", Dict(
                 "ceiling" => requested_ceiling,
                 "script" => child_script,
             ))
@@ -368,48 +366,48 @@ for line in eachline(PROTO_IN)
                 resp["error"] = "spawn_child_worker denied: " * string(get(spawn_resp, "reason", "unknown"))
             end
         elseif kind == "EXECUTE"
-            mod = Neura.get_kernel_state().eval_module
+            mod = Palette.get_kernel_state().eval_module
             # A file's text arrives as a JSON string and is bound as it is,
             # so it needs no Julia quoting: `write("x.py", PAYLOAD)`.
             Core.eval(mod, Expr(:global, Expr(:(=), :PAYLOAD, payload)))
-            call = length(Neura.get_kernel_state().execution_history) + 1
+            call = length(Palette.get_kernel_state().execution_history) + 1
             (receipt, interrupted, stuck), output = execute_turn(code, timeout_s === nothing ? nothing : Float64(timeout_s))
-            printed = Neura.task_notice_hint(scrub(output))
+            printed = Palette.task_notice_hint(scrub(output))
             resp["call"] = call
-            resp["bindings"] = Neura.binding_list!(Neura.get_kernel_state().eval_module, call)
-            # Neura.output(call) gives back what the call printed, without what
+            resp["bindings"] = Palette.binding_list!(Palette.get_kernel_state().eval_module, call)
+            # Palette.output(call) gives back what the call printed, without what
             # the result adds in front of it below.
-            Neura.retain_output!(call, printed)
+            Palette.retain_output!(call, printed)
             # The host can turn the digest off for an A/B of its effect ("digest": false).
-            resp["output"] = get(req, "digest", true) === false ? Neura.strip_ansi(printed) : Neura.with_digest(printed)
+            resp["output"] = get(req, "digest", true) === false ? Palette.strip_ansi(printed) : Palette.with_digest(printed)
             # The host asks for the workspace map at the session's first call and
             # after a compaction; it opens the result, ahead of the call's output.
             if get(req, "map", false) === true
-                wmap = try Neura.workspace_map() catch e; "[workspace map unavailable: $(first(sprint(showerror, e), 160))]" end
+                wmap = try Palette.workspace_map() catch e; "[workspace map unavailable: $(first(sprint(showerror, e), 160))]" end
                 resp["output"] = wmap * "\n\n" * resp["output"]
             end
             if stuck
-                resp["costs"] = deepcopy(get(Neura.TURN_COSTS, call, Dict{String, Any}()))
+                resp["costs"] = deepcopy(get(Palette.TURN_COSTS, call, Dict{String, Any}()))
                 resp["success"] = false
                 resp["data"] = nothing
                 resp["error"] = "During $(get(resp["costs"], "failed_phase", "execution")), the call exceeded its $(timeout_s)s limit and kept running after being interrupted " *
                                 "for $(Int(INTERRUPT_GRACE_S))s, so the kernel stopped. " *
-                                (isempty(Neura.STATE_DIR[]) ? "Every binding is gone; files written to the workspace remain." :
+                                (isempty(Palette.STATE_DIR[]) ? "Every binding is gone; files written to the workspace remain." :
                                  "The next call starts a new kernel, which revives what it can of the last saved state (its report names the call) and says what it could not.")
                 resp["kernel_exit"] = true
                 respond(resp)
                 ccall(:_exit, Cvoid, (Cint,), 3)
             end
-            if !(receipt isa Neura.OperationReceipt)
-                receipt = Neura.OperationReceipt(UUIDs.uuid4(), Neura.Dates.now(), "ExecuteCode",
-                                                 Neura.OperationResult(nothing, false, sprint(showerror, receipt)),
-                                                 0.0, Neura.get_kernel_state().id)
+            if !(receipt isa Palette.OperationReceipt)
+                receipt = Palette.OperationReceipt(UUIDs.uuid4(), Palette.Dates.now(), "ExecuteCode",
+                                                 Palette.OperationResult(nothing, false, sprint(showerror, receipt)),
+                                                 0.0, Palette.get_kernel_state().id)
             end
             resp["success"] = receipt.result.success && !interrupted
             projection = get(receipt.metadata, "transport", Dict{String, Any}())
             resp["data"] = resp["success"] ? get(projection, "data", nothing) : nothing
             resp["display"] = resp["success"] ? get(projection, "display", nothing) : nothing
-            resp["costs"] = deepcopy(get(Neura.TURN_COSTS, call, Dict{String, Any}()))
+            resp["costs"] = deepcopy(get(Palette.TURN_COSTS, call, Dict{String, Any}()))
             resp["error"] = scrub(something(receipt.result.error, ""))
             if interrupted
                 resp["interrupted"] = true
@@ -417,7 +415,7 @@ for line in eachline(PROTO_IN)
                                 "processes this call started were stopped. Output printed before the interrupt is above.\n" * resp["error"]
             end
             isempty(resp["error"]) && (resp["error"] = nothing)
-            Neura.note_completed_call!(call)
+            Palette.note_completed_call!(call)
             interrupted || (snapshot_call = call)
         else
             # Fail closed on an unrecognized `kind` -- confirmed by direct
@@ -437,12 +435,12 @@ for line in eachline(PROTO_IN)
 
     resp["error"] = with_hint(get(resp, "error", nothing), code isa String ? code : "")
     if revival_pending
-        resp["revival"] = Neura.revival_summary()
+        resp["revival"] = Palette.revival_summary()
         global revival_pending = false
     end
-    if Neura.RELOAD_SEQUENCE[] > previous_reload_sequence
+    if Palette.RELOAD_SEQUENCE[] > previous_reload_sequence
         resp["reloads"] = [Dict(k => r[k] for k in ("module", "status", "identity_risks", "surviving_deleted_definitions",
-            "sequence", "source_digest_before", "source_digest_after", "recovery", "error")) for r in Neura.RELOAD_REPORTS if r["sequence"] > previous_reload_sequence]
+            "sequence", "source_digest_before", "source_digest_after", "recovery", "error")) for r in Palette.RELOAD_REPORTS if r["sequence"] > previous_reload_sequence]
     end
     respond(resp)
     # The model is reading the reply: save the state this call ended with.
@@ -451,7 +449,7 @@ for line in eachline(PROTO_IN)
         try
             # Latest world: turn code defined methods (show, ==, enum names) since this loop began.
             # A request that arrives meanwhile goes first, while the last saved state is recent.
-            Base.invokelatest(Neura.snapshot_state!, snapshot_call;
+            Base.invokelatest(Palette.snapshot_state!, snapshot_call;
                               waiting=request_waiting)
         catch e
             println(stderr, "[saving the state after call $snapshot_call failed: ", first(sprint(showerror, e), 300), "]")

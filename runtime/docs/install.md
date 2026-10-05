@@ -65,3 +65,13 @@ A remote MCP client needs a supported transport or tunnel to this local service.
 Palette does not provision a cloud service or bundle client credentials. Keep
 transport credentials outside workers. Runtime source updates and client
 connection registration are separate operations.
+
+## Prelaunch runtime identity change
+
+The current package is loaded with `using Palette`. Source, package identity,
+preparation records, and serialized runtime types belong to a particular
+installation. Rebuild and prewarm after updating. Keep an older runtime and its
+external saved worlds available until you have exported portable experiment
+data and verified the new world; do not assume old binary snapshots migrate
+across a package-name change. Active deployment forks can retain their original
+runtime until that migration is deliberately tested.

@@ -379,7 +379,7 @@ end
 
 function task_notice_hint(text::String)
     (occursin("failed Task notice", text) || occursin("Unhandled Task ERROR", strip_ansi(text))) || return text
-    return text * "\n[Julia reported a task failure without an established task identity. Neura.jobs() inspects named tasks; this notice alone cannot establish its origin or creation call.]\n"
+    return text * "\n[Julia reported a task failure without an established task identity. Palette.jobs() inspects named tasks; this notice alone cannot establish its origin or creation call.]\n"
 end
 
 # Each Task the session holds, once, under the model's own name before `ans`.
@@ -478,7 +478,7 @@ function report_background(mod::Module)
         observation = task_observation(t)
         err = first(split(something(observation["failure"], "unknown failure"), '\n'))
         println("[background: task `$sym` failed: $err]")
-        println("[task provenance: first observed call $(observation["first_observed_call"]); inspect Neura.jobs() for source/world observations]")
+        println("[task provenance: first observed call $(observation["first_observed_call"]); inspect Palette.jobs() for source/world observations]")
     end
     report_jobs(mod)
     return nothing
@@ -620,7 +620,7 @@ function binding_provenance(name::Symbol; strong::Bool=false)
         "freshness" => superseded ? "artifact_superseded" : changed_type ? "earlier_type_definition" : !isempty(changed_files) ? "source_files_changed" : definition_changed ? "definition_sources_changed" : "no_observed_staleness",
         "changed_files" => changed_files, "named_files" => sort!(collect(keys(sources))), "source_dependencies" => sources,
         "artifacts" => get(origin, "artifacts", Dict{String, Any}[]), "strong_check" => strong, "revival" => restoration,
-        "limits" => "Binding observation is not object creation or causal provenance. Definition recipes and workspace-source digests are source observations; partial reloads need Neura.reloads() evidence and do not establish which methods produced a value. Aliases, in-place mutations and unchanged-value assignments may be invisible. Named files use per-binding statement/RHS observations; in-place mutations and unobserved dynamic reads can be missed. Digests are checked at revival or with strong=true; legacy baselines may lack hashes. No observed staleness does not establish freshness.")
+        "limits" => "Binding observation is not object creation or causal provenance. Definition recipes and workspace-source digests are source observations; partial reloads need Palette.reloads() evidence and do not establish which methods produced a value. Aliases, in-place mutations and unchanged-value assignments may be invisible. Named files use per-binding statement/RHS observations; in-place mutations and unobserved dynamic reads can be missed. Digests are checked at revival or with strong=true; legacy baselines may lack hashes. No observed staleness does not establish freshness.")
 end
 
 function short_type(v)
@@ -731,7 +731,7 @@ function execute_turn(code::String, timeout_s::Union{Nothing, Float64})
     call = length(state.execution_history) + 1
     costs = Dict{String, Any}("call" => call, "phase" => "maintenance", "execution_seconds" => nothing,
         "projection_seconds" => nothing, "serialization_seconds" => nothing, "worker_pipe_seconds" => nothing,
-        "limits" => "Execution includes parsing, lowering, import/compilation and bookkeeping. Completed response encoding and worker-pipe write/flush are queryable via Neura.costs(call) on a subsequent call; they exclude runtime/host/MCP delivery. Wall-clock observations include concurrent work.")
+        "limits" => "Execution includes parsing, lowering, import/compilation and bookkeeping. Completed response encoding and worker-pipe write/flush are queryable via Palette.costs(call) on a subsequent call; they exclude runtime/host/MCP delivery. Wall-clock observations include concurrent work.")
     TURN_COSTS[call] = costs
     filter!(kv -> kv.first > call - KEEP_OUTPUTS, TURN_COSTS)
     return capture_output() do

@@ -25,7 +25,7 @@ sys.path.insert(0, str(HERE))
 HOST_BIN = os.environ.get("PALETTE_HOST_BIN") or None
 
 import launch_worker as _launch  # noqa: E402
-from session import NeuraSession as _PythonSession, SessionDeadError as _PythonSessionDeadError  # noqa: E402
+from session import PaletteSession as _PythonSession, SessionDeadError as _PythonSessionDeadError  # noqa: E402
 
 create_session_depot = _launch.create_session_depot
 
@@ -169,7 +169,7 @@ class SessionDeadError(Exception):
 
 
 class RustSession:
-    """A whole session through the Rust bridge, with NeuraSession's surface."""
+    """A whole session through the Rust bridge, with PaletteSession's surface."""
 
     def __init__(self, *, project_dir, ceiling, workspace_dir=None, turn_timeout=60.0, **_ignored):
         workspace_dir = workspace_dir or scratch_root()
@@ -244,7 +244,7 @@ class RustSession:
         self.close()
 
 
-def NeuraSession(**kwargs):
+def PaletteSession(**kwargs):
     if HOST_BIN:
         return RustSession(**kwargs)
     kwargs["workspace_dir"] = kwargs.get("workspace_dir") or scratch_root()

@@ -18,11 +18,11 @@ tunnel or hosted connection. ZIP upload alone does not start a runtime.
 
 ## Quick start
 
-The Julia package currently uses the import name `Neura`.
+Import the Julia package with `using Palette`.
 
 ```sh
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
-julia --project=. -e 'using Neura; execute(ExecuteCode("x = 41")); println(execute(ExecuteCode("x + 1")).result.data)'
+julia --project=. -e 'using Palette; execute(ExecuteCode("x = 41")); println(execute(ExecuteCode("x + 1")).result.data)'
 ```
 
 For supervised, sandboxed sessions on Linux, install Julia 1.12, Python 3,
