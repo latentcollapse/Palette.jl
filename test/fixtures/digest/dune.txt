@@ -1,0 +1,7 @@
+      ocamlc bin/.m.eobjs/byte/dune__exe__M.{cmi,cmti}
+    ocamlopt bin/.m.eobjs/native/dune__exe__M.{cmx,o} (exit 2)
+File "bin/m.ml", line 1, characters 28-31:
+1 | let () = print_endline (1 + "x")
+                                ^^^
+Error: This constant has type string but an expression was expected of type
+         int

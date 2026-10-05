@@ -1,0 +1,2 @@
+# g
+./m.go:2:14: declared and not used: x

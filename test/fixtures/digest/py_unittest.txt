@@ -1,0 +1,23 @@
+FE.
+======================================================================
+ERROR: test_b (test_x.T.test_b)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/work/py/test_x.py", line 4, in test_b
+    def test_b(self): {}["k"]
+                      ~~^^^^^
+KeyError: 'k'
+
+======================================================================
+FAIL: test_a (test_x.T.test_a)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/work/py/test_x.py", line 3, in test_a
+    def test_a(self): self.assertEqual(1+1, 3)
+                      ~~~~~~~~~~~~~~~~^^^^^^^^
+AssertionError: 2 != 3
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.001s
+
+FAILED (failures=1, errors=1)

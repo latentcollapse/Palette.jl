@@ -1,0 +1,5 @@
+--- FAIL: TestAdd (0.00s)
+    m_test.go:3: Add(2,2)=0
+FAIL
+FAIL	g	0.003s
+FAIL

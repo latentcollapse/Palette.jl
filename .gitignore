@@ -1,0 +1,40 @@
+# Local dependencies and build products
+.julia/
+*.ji
+*.jl.cov
+*.jl.mem
+/Manifest.toml
+/runtime/host/target/
+/deps/
+node_modules/
+
+# Runtime state and verification environments
+.palette/
+.kernel-venv/
+/security-test-env/
+/ijulia-env/
+/jupyter-data/
+*.log
+__pycache__/
+*.pyc
+coverage/
+
+# Credentials, local configuration, and editor files
+.env
+.env.local
+*.env.*
+.vscode/
+.zed/
+.idea/
+.claude/
+.cursor/
+.worktrees/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.tmp
+
+# Private development research, provenance, and future-paper material
+/.archive/
