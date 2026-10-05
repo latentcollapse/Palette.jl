@@ -52,8 +52,10 @@ def main():
     claude={n.removeprefix('runtime/plugins/claude/'):d for n,d in source.items() if n.startswith('runtime/plugins/claude/')}
     claude.update({'LICENSE':license_text,'NOTICE':source['NOTICE'],'MIT-INHERITED.txt':inherited})
     mcpb=zip_bytes(claude)
+    portable={n.removeprefix('runtime/plugins/palette/'):d for n,d in source.items() if n.startswith('runtime/plugins/palette/')}
+    portable['README.md']=portable['README.md'].replace(b'(../../docs/', b'(sdk/runtime/docs/')
     outputs={'Palette-Claude.mcpb':mcpb,'Palette-Claude.zip':zip_bytes({**shared,'Palette-Claude.mcpb':mcpb}),
-             'Palette-ChatGPT.zip':zip_bytes({**shared,**{n.removeprefix('runtime/plugins/palette/'):d for n,d in source.items() if n.startswith('runtime/plugins/palette/')}})}
+             'Palette-ChatGPT.zip':zip_bytes({**shared,**portable})}
     args.output_dir.mkdir(parents=True,exist_ok=True)
     checks=[]
     for name,data in outputs.items():
