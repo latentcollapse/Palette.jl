@@ -12,7 +12,15 @@ On Windows, use a WSL2 Linux distribution with those prerequisites; execute this
 step in that distribution. Native macOS and native Windows supervised runtimes
 are not currently supported. Cloud-only clients can connect to a Linux host.
 
-Extract the ZIP to a permanent location. From the extracted directory run:
+Download one client archive. Upload `Palette-ChatGPT.zip` through ChatGPT Plugins
+**+**, or `Palette-Claude.zip` through Claude Customize > Plugins > Upload.
+Each contains exactly one plugin, its runtime source and this setup guide.
+For runtime preparation, extract that same download to a permanent location.
+ChatGPT has a single `palette/` folder; Claude's files are at the archive root.
+Claude Desktop's separate Extensions installer uses `Palette-Claude.mcpb`,
+which also includes its runtime source; it is not a second required download.
+The `.mcpb` is itself ZIP format: extract a copy and run setup from its root.
+From the directory containing `setup.py`, run:
 
 ```sh
 python3 setup.py \
@@ -34,25 +42,27 @@ For an existing, already built and prewarmed installation, use
 `--repo-dir /absolute/path/to/Palette --connect-only` with its existing depot.
 This option checks required files but intentionally does not rebuild or prewarm.
 
-## 2a. Claude Desktop
+## 2a. Claude
 
-Extract `Palette-Claude.zip`, prepare the runtime above, then install the
-included **Palette-Claude.mcpb** through Claude Desktop's extension installation
-UI. This is a ZIP-format MCP bundle with the extension-specific suffix.
-When asked for **Palette launch configuration**, select the generated
-`palette-launch.json`. On Windows it must be accessible to the Windows app
-(for example through `\\wsl.localhost\YOUR_DISTRO\home\YOUR_USER\...`).
-Its command targets the explicitly selected WSL distribution.
+Upload **Palette-Claude.zip** through Customize > Plugins > Upload. Its
+`.claude-plugin/plugin.json` manifest, setup skill and `.mcp.json` are at the
+plugin root. Prepare the runtime from the same ZIP as described above.
+Local clients need the generated `palette-mcp` executable on PATH, or the
+absolute command from `generic-mcp.json`. Cloud Claude needs a supported remote
+MCP connection to your Linux host; the upload does not host the runtime.
 
-The extension uses Claude's Node runtime and forwards MCP stdio to the prepared
-Linux service. It does not run Julia inside Node or make the SDK cross-platform.
-For another local MCP client, merge the Palette entry from `generic-mcp.json`
-into that client's configuration. Do not replace unrelated server entries.
+For Claude Desktop's **Extensions** installer, instead download and install
+**Palette-Claude.mcpb**. Prepare its included source and select the generated
+`palette-launch.json` when prompted. On Windows use `--wsl-distribution` during
+setup and make the configuration accessible to the Windows app. This Node
+bridge forwards MCP stdio to the selected Linux/WSL2 runtime.
 
-Cloud Claude conversations require a separately reachable supported MCP
-connector; this local Desktop extension does not deploy an HTTPS endpoint.
+These are alternative client formats. Neither ZIP contains a nested extension
+that must be separately downloaded or uploaded.
 
-Official extension format: https://github.com/modelcontextprotocol/mcpb
+Official formats:
+- https://code.claude.com/docs/en/plugins-reference
+- https://github.com/modelcontextprotocol/mcpb
 
 ## 2b. ChatGPT Chat
 
@@ -75,7 +85,10 @@ Follow the current official instructions rather than guessing account permission
 - https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
 - https://developers.openai.com/plugins/deploy/connect-chatgpt
 
-The ZIP also has a root `plugin.json` and `mcp.json` for Agent Plugins-compatible
+Upload the original `Palette-ChatGPT.zip` through Plugins **+**. It contains
+one `palette/` plugin folder, including the SDK and setup instructions, with no
+nested plugin declarations. The package has `plugin.json` and `mcp.json` at its
+plugin root for Agent Plugins-compatible
 local clients. That template expects `palette-mcp` on PATH. Prefer importing the
 **generated** `palette-local-plugin` directory, whose configuration has absolute
 paths. Directory submission for public ChatGPT distribution requires the remote
@@ -99,6 +112,8 @@ cannot grant that approval simply by evaluating Julia.
 ## Updates and license
 
 Keep the SDK at a stable path and retain the external data/depot directories.
+Setup preserves an existing generated plugin manifest; use a fresh output
+directory to adopt updated listing metadata without overwriting local edits.
 Stop the adapter, replace the SDK with the new source bundle, rebuild/prewarm,
 restart, and refresh client tool discovery if schemas changed. Do not copy an
 old Manifest blindly into a new source release. Keep a prior source bundle for
@@ -107,4 +122,6 @@ rollback; do not overwrite live runtime files during an active call.
 Core is AGPL-3.0-only; these client packages/installers and identified public
 docs are Apache-2.0. Inherited MIT grants/notices remain intact. The included
 `sdk/runtime/licenses/README.md` gives the exact source boundaries. SHA256SUMS.txt
-accompanies the artifacts; SOURCE.json records the precise source revision.
+accompanies the artifacts; SOURCE.json records the precise source revision and
+the repository-only authoring manifests omitted from the embedded SDK. Their
+portable template is retained under `templates/` and installed outside the SDK.

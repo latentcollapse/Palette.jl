@@ -49,8 +49,14 @@ def main():
     (data/'workspace').mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
     plugin = output/'palette-local-plugin'
-    subprocess.run([sys.executable,str(repo/'runtime/security/install_operator_plugin.py'),'--format','portable','--plugin-dir',str(plugin),'--workspace-dir',str(data/'workspace'),'--repo-dir',str(repo)],check=True)
+    # The self-contained upload omits nested plugin declarations from its SDK.
+    # Materialize the client template only in the external installation folder.
     package = Path(__file__).resolve().parent
+    template = package/'templates/palette-plugin.json'
+    plugin.mkdir(parents=True, exist_ok=True)
+    if template.is_file() and not (plugin/'plugin.json').exists():
+        shutil.copyfile(template, plugin/'plugin.json')
+    subprocess.run([sys.executable,str(repo/'runtime/security/install_operator_plugin.py'),'--format','portable','--plugin-dir',str(plugin),'--workspace-dir',str(data/'workspace'),'--repo-dir',str(repo)],check=True)
     shutil.copyfile(package/'LICENSE', plugin/'LICENSE')
     (plugin/'NOTICE').write_text('Palette client integration\nCopyright (c) 2026 Matt C\nApache-2.0. Core runtime is separately licensed AGPL-3.0-only.\n')
     inherited = next(p for p in (package/'licenses/MIT-INHERITED.txt', package.parent/'licenses/MIT-INHERITED.txt') if p.is_file())
